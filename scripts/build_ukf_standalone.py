@@ -507,6 +507,7 @@ def package_standalone_archive(
         "kind": "ukf-standalone",
         "platform": target,
         "arch": spec["arch"],
+        "requires_avx2": target in {"windows-x64", "linux-x64"},
         "slicer_independent": True,
         "activation_key_included": False,
         "executable": f"bin/{exe_name}",

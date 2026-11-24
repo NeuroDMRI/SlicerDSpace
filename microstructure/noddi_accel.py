@@ -32,6 +32,8 @@ _TORCH_MOD: object = _TORCH_UNSET
 
 def _get_torch():
     """Lazily import PyTorch only when CUDA is checked or used, keeping CPU runs fork-safe."""
+    if "torch" in globals():
+        return globals()["torch"]
     global _TORCH_MOD
     if _TORCH_MOD is _TORCH_UNSET:
         try:
@@ -90,30 +92,18 @@ def save_nifti_fast(image: nib.Nifti1Image, output_path: Path, compresslevel: in
 
 
 def _try_fast_gunzip_nifti1_4d(dwi_path: Path) -> tuple[nib.Nifti1Image, np.ndarray] | None:
-    """Fast streaming gunzip or mmap cache reuse for standard little-endian NIfTI-1 .nii.gz files."""
+    """Fast streaming gunzip or mmap cache reuse for 4D NIfTI .nii.gz files."""
     if not dwi_path.name.endswith(".nii.gz"):
         return None
-    try:
-        from shared.diffusion_io import ensure_cached_uncompressed_nifti
+    from shared.diffusion_io import ensure_cached_uncompressed_nifti, nifti_data_offset
 
+    try:
         cached_nii = ensure_cached_uncompressed_nifti(dwi_path)
         if cached_nii is not None and cached_nii.is_file():
             hdr_img = nib.load(str(cached_nii), mmap="r", keep_file_open=False)
-            if isinstance(hdr_img, nib.Nifti1Image) and hdr_img.header.endianness == "<" and len(hdr_img.shape) == 4:
-                vox_offset = int(hdr_img.header.get_data_offset()) or 352
-                dtype = np.dtype(hdr_img.header.get_data_dtype()).newbyteorder("<")
-                expected_voxels = int(np.prod(hdr_img.shape, dtype=np.int64))
-                expected_bytes = vox_offset + expected_voxels * dtype.itemsize
-                if vox_offset >= 352 and cached_nii.stat().st_size >= expected_bytes:
-                    raw_arr = np.memmap(
-                        cached_nii,
-                        dtype=dtype,
-                        mode="r",
-                        offset=vox_offset,
-                        shape=hdr_img.shape,
-                        order="F",
-                    )
-                    return hdr_img, raw_arr
+            if isinstance(hdr_img, (nib.Nifti1Image, nib.Nifti2Image)) and len(hdr_img.shape) == 4:
+                raw_arr = hdr_img.dataobj.get_unscaled()
+                return hdr_img, raw_arr
     except Exception:
         pass
     decompressor = shutil.which("pigz") or (shutil.which("gzip") if sys.platform != "win32" else None)
@@ -121,15 +111,14 @@ def _try_fast_gunzip_nifti1_4d(dwi_path: Path) -> tuple[nib.Nifti1Image, np.ndar
         return None
     try:
         hdr_img = nib.load(str(dwi_path))
-        if not isinstance(hdr_img, nib.Nifti1Image):
+        if not isinstance(hdr_img, (nib.Nifti1Image, nib.Nifti2Image)) or len(hdr_img.shape) != 4:
             return None
-        hdr = hdr_img.header
-        if hdr.endianness != "<" or len(hdr_img.shape) != 4:
+        vox_offset = nifti_data_offset(hdr_img)
+        min_offset = 544 if isinstance(hdr_img, nib.Nifti2Image) else 352
+        if vox_offset < min_offset:
             return None
-        vox_offset = int(hdr.get_data_offset()) or 352
-        if vox_offset < 352:
-            return None
-        dtype = np.dtype(hdr.get_data_dtype()).newbyteorder("<")
+        proxy = hdr_img.dataobj
+        dtype = np.dtype(getattr(proxy, "dtype", hdr_img.header.get_data_dtype()))
         expected_voxels = int(np.prod(hdr_img.shape, dtype=np.int64))
         expected_bytes = vox_offset + expected_voxels * dtype.itemsize
         from shared.external_process import external_python_environment, subprocess_no_window_kwargs
@@ -164,6 +153,8 @@ def _load_masked_normalized_dwi(
     scheme,
 ) -> tuple[nib.Nifti1Image, nib.Nifti1Image, np.ndarray, np.ndarray]:
     """Load DWI + mask and reproduce AMICO Evaluation.load_data normalization on masked voxels."""
+    from shared.diffusion_io import nifti_scaling_params
+
     mask_img = nib.load(str(mask_path))
     if mask_img.ndim != 3:
         raise ValueError("MASK file is not a 3D image")
@@ -176,10 +167,7 @@ def _load_masked_normalized_dwi(
         try:
             if dwi_img.shape[:3] != mask_img.shape[:3]:
                 raise ValueError("MASK geometry does not match with DWI data")
-            hdr = dwi_img.header
-            slope = float(hdr["scl_slope"]) if np.isfinite(hdr["scl_slope"]) else 0.0
-            inter = float(hdr["scl_inter"]) if np.isfinite(hdr["scl_inter"]) else 0.0
-            need_scale = slope != 0.0 and (slope != 1.0 or inter != 0.0)
+            slope, inter, need_scale = nifti_scaling_params(dwi_img)
             n_vols = int(raw_4d.shape[3])
             n_masked = int(np.count_nonzero(mask_bool))
             y_f32 = np.empty((n_masked, n_vols), dtype=np.float32)
@@ -188,9 +176,11 @@ def _load_masked_normalized_dwi(
                 vol_3d = raw_4d[..., vol_i]
                 if check_finite and not np.isfinite(vol_3d).all():
                     raise ValueError("NaN or Inf values detected in raw DWI signal.")
-                y_f32[:, vol_i] = vol_3d[mask_bool]
-            if need_scale:
-                y_f32 = y_f32 * np.float32(slope) + np.float32(inter)
+                masked_vals = np.asarray(vol_3d[mask_bool])
+                if need_scale:
+                    y_f32[:, vol_i] = (masked_vals.astype(np.float64, copy=False) * slope + inter).astype(np.float32)
+                else:
+                    y_f32[:, vol_i] = masked_vals.astype(np.float32, copy=False)
         finally:
             if isinstance(raw_4d, np.memmap) and getattr(raw_4d, "_mmap", None) is not None:
                 raw_4d._mmap.close()

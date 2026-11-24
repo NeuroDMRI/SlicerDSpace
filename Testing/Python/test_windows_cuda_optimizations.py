@@ -239,16 +239,16 @@ class WindowsCudaOptimizationTests(unittest.TestCase):
         fake_torch = types.SimpleNamespace(
             cuda=types.SimpleNamespace(is_available=lambda: True, device_count=lambda: 2)
         )
-        with patch.dict(sys.modules, {"torch": fake_torch}), patch.object(noddi_accel, "torch", fake_torch):
+        with patch.object(noddi_accel, "_TORCH_MOD", fake_torch), patch.dict(sys.modules, {"torch": fake_torch}):
             self.assertEqual(noddi_accel.resolve_noddi_device("cuda:1"), "cuda:1")
             self.assertEqual(noddi_accel.resolve_noddi_device("cuda:0"), "cuda")
             self.assertEqual(dipy_accel.resolve_dipy_accel_device("cuda:1"), "cuda:1")
             self.assertEqual(dipy_accel.resolve_dipy_accel_device("cuda"), "cuda")
-            self.assertEqual(dki._resolve_dki_device("cuda:1"), "cuda:1")
-            self.assertEqual(dki._resolve_dki_device("cuda:0"), "cuda")
+            self.assertEqual(dki._resolve_dki_device("cuda:1"), "cpu")
+            self.assertEqual(dki._resolve_dki_device("cuda:0"), "cpu")
             self.assertEqual(freewater_wls._resolve_fw_device("cuda:1"), "cuda:1")
             self.assertEqual(mkcurve._resolve_mkcurve_device("cuda:1"), "cuda:1")
-            self.assertEqual(dti._resolve_dti_device("cuda:1"), "cuda:1")
+            self.assertEqual(dti._resolve_dti_device("cuda:1"), "cpu")
 
         cfg = orchestrator.ProductOrchestratorConfig(
             subject_id="sub01",

@@ -401,26 +401,25 @@ def _save_nifti_fast(image_obj, output_path: Path) -> None:
 def _accumulate_b0_single_pass_gzip(image, dwi_path: Path, indices) -> "Optional[Any]":
     import nibabel as nib
     import numpy as np
-    from shared.diffusion_io import ensure_cached_uncompressed_nifti, open_fast_gzip_reader
+    from shared.diffusion_io import (
+        ensure_cached_uncompressed_nifti,
+        nifti_data_offset,
+        nifti_scaling_params,
+        open_fast_gzip_reader,
+    )
 
     if not str(dwi_path).endswith(".nii.gz"):
         return None
-    offset = int(image.header.get_data_offset())
+    offset = nifti_data_offset(image)
     if offset < 352 or len(image.shape) != 4:
         return None
-    disk_dtype = np.dtype(image.header.get_data_dtype())
+    disk_dtype = np.dtype(getattr(image.dataobj, "dtype", image.header.get_data_dtype()))
     if disk_dtype.kind not in ("i", "u", "f") or disk_dtype.itemsize < 1:
         return None
     shape3d = tuple(int(dim) for dim in image.shape[:3])
     vol_elems = shape3d[0] * shape3d[1] * shape3d[2]
     vol_bytes = vol_elems * disk_dtype.itemsize
-    slope, inter = image.header.get_slope_inter()
-    use_scale = (
-        slope is not None and np.isfinite(slope) and slope != 0.0
-        and (float(slope) != 1.0 or (inter is not None and np.isfinite(inter) and float(inter) != 0.0))
-    )
-    slope_f = float(slope) if use_scale else 1.0
-    inter_f = float(inter) if (use_scale and inter is not None and np.isfinite(inter)) else 0.0
+    slope_f, inter_f, use_scale = nifti_scaling_params(image)
 
     wanted = {int(idx) for idx in indices}
     max_idx = max(wanted)
@@ -455,9 +454,11 @@ def _accumulate_b0_single_pass_gzip(image, dwi_path: Path, indices) -> "Optional
         for vol_idx in range(max_idx + 1):
             if vol_idx in wanted:
                 raw_bytes = _read_exact(stream, vol_bytes)
-                vol = np.ndarray(shape3d, dtype=disk_dtype, buffer=raw_bytes, order="F").astype(np.float32)
+                raw_vol = np.ndarray(shape3d, dtype=disk_dtype, buffer=raw_bytes, order="F")
                 if use_scale:
-                    vol = vol * np.float32(slope_f) + np.float32(inter_f)
+                    vol = (raw_vol.astype(np.float64, copy=False) * slope_f + inter_f).astype(np.float32)
+                else:
+                    vol = raw_vol.astype(np.float32)
                 if not np.isfinite(vol).all():
                     raise ValueError("Baseline images contain NaN/Inf")
                 total += vol

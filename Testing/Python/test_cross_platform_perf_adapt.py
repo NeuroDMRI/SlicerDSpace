@@ -885,6 +885,8 @@ class MppcaAndAuditAdaptationTests(unittest.TestCase):
             ):
                 self.assertEqual(da._resolve_dipy_cpu_workers(None, avail_ram_bytes=32 * 1024**3), 8)
             with mock.patch("os.process_cpu_count", return_value=144, create=True):
+                self.assertEqual(preproc_pipeline._default_eddy_threads(), 32)
+            with mock.patch("os.process_cpu_count", return_value=36, create=True):
                 self.assertEqual(preproc_pipeline._default_eddy_threads(), 16)
             with mock.patch("os.process_cpu_count", return_value=24, create=True):
                 self.assertEqual(preproc_pipeline._default_eddy_threads(), 8)

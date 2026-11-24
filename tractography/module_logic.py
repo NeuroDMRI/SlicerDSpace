@@ -233,7 +233,7 @@ class TractographyLogicMixin:
         tractcloud_root: Optional[Path] = None,
         python_executable: Optional[Path] = None,
         include_other: bool = False,
-        device: str = "auto",
+        device: str = "cpu",
         batch_size: int = 2048,
         data_dir: Optional[Path] = None,
         create_mrb: bool = False,

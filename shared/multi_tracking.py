@@ -109,8 +109,18 @@ def run(config, *, log=None):
                                      _archive_existing_run_records, _normalize_bundle_backends, _with_closure)
     config = _with_closure(config)
     from shared.io_layout import subject_layout, normalize_run_name
+    from shared.workspace_lock import WorkspaceLockError, workspace_lock
     layout = subject_layout(config.subject_root, output_root=config.output_root)
     name = normalize_run_name(config.run_name)
+    with workspace_lock(layout.run_metadata, subject_id=config.subject_id, run_name=name):
+        return _run_locked(config, layout=layout, name=name, log=log)
+
+
+def _run_locked(config, *, layout, name, log=None):
+    from shared.bundle_sources import explicit_sources
+    from shared.orchestrator import (ProductOrchestratorResult, ProductTaskRecord, run_subject_products,
+                                     _archive_existing_run_records, _normalize_bundle_backends)
+    from shared.workspace_lock import WorkspaceLockError
     _archive_existing_run_records(layout, name)
     planned = plan(config)
     destination = layout.run_metadata / f"{name}_orchestration_manifest.json"
@@ -151,6 +161,8 @@ def run(config, *, log=None):
                 shared = task["name"].split('.', 1)[0] in SHARED or task["name"].startswith(("microstructure.", "surface."))
                 tasks.append(dict(task, name=task["name"] + ("" if shared else "@" + child.tractography_backend),
                                   product=task["name"], tracking_backend=child.tractography_backend))
+        except WorkspaceLockError:
+            raise
         except Exception as exc:
             entry['status'] = 'failed'
             try:

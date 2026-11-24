@@ -39,7 +39,7 @@ class DTITrackingConfig:
     min_fa: float = 0.2
     min_length_mm: float = 10.0
     max_length_mm: float = 250.0
-    device: str = "auto"
+    device: str = "cpu"
     force_recompute: bool = False
     execute: bool = False
 
@@ -174,25 +174,19 @@ def _validate_config(config: DTITrackingConfig) -> None:
 
 
 def _resolve_dti_device(requested: str) -> str:
+    """Resolve device for deterministic DTI tracking (CPU-only).
+
+    Vectorized multi-threaded CPU tensor fitting and peak projection finish in <1 s,
+    whereas PyTorch/CUDA startup and PCIe transfer overhead make end-to-end EuDX
+    tracking slower on GPU.
+    """
     import os
 
     env_override = os.environ.get("SLICERDSPACE_DTI_TRACKING_DEVICE")
     mode = str(env_override if env_override else requested).strip().lower()
     if mode not in {"auto", "cpu", "cuda", "mps"} and not mode.startswith("cuda:"):
         raise ValueError(f"Unsupported DTI tracking device {mode!r}.")
-    if mode in {"cpu", "mps"}:
-        return "cpu"
-    try:
-        import torch
-
-        cuda_ok = bool(torch.cuda.is_available())
-    except Exception:
-        cuda_ok = False
-    if (mode == "cuda" or mode.startswith("cuda:")) and not cuda_ok:
-        raise RuntimeError("DTI tracking CUDA device requested, but PyTorch CUDA is unavailable.")
-    if cuda_ok and mode.startswith("cuda:") and mode != "cuda:0":
-        return mode
-    return "cuda" if cuda_ok else "cpu"
+    return "cpu"
 
 
 def _streamline_lengths(streamlines: list[object]) -> list[float]:
@@ -351,9 +345,9 @@ def _fit_dti_fa_and_peaks(
     fit_method: str,
     min_fa: float,
     max_angle_deg: float,
-    device: str = "auto",
+    device: str = "cpu",
 ):
-    """Hardware-adaptive vectorized CPU / PyTorch FP64 CUDA WLS & OLS DTI fitter + peak projector.
+    """Vectorized multi-threaded CPU WLS & OLS DTI fitter + peak projector.
 
     Replaces DIPY's per-voxel ``(G, 7)`` SVD ``pinv`` with batched ``7 x 7`` normal
     equations (with exact ``pinv`` fallback on rank-deficient voxels), giving >50x
@@ -367,15 +361,8 @@ def _fit_dti_fa_and_peaks(
         fractional_anisotropy,
         from_lower_triangular,
     )
-    from shared.hardware_adapt import (
-        adaptive_cuda_scaled_batch,
-        empty_cuda_cache_safely,
-        run_cuda_chunked_with_oom_fallback,
-    )
 
     resolved_device = _resolve_dti_device(device)
-    req_dev = str(device).strip().lower()
-    explicit_cuda = req_dev == "cuda" or req_dev.startswith("cuda:")
     w_mat = np.asarray(design_matrix(gtab), dtype=np.float64)
     w_pinv_t = np.linalg.pinv(w_mat).T
     w_outer = (w_mat[:, :, None] * w_mat[:, None, :]).reshape(w_mat.shape[0], 49)
@@ -420,126 +407,28 @@ def _fit_dti_fa_and_peaks(
             closest[valid_dir] = np.argmax(np.abs(normed @ sphere_verts.T), axis=1).astype(np.int32)
         return fa_chunk, closest
 
-    if resolved_device.startswith("cuda") and n_vox > 0:
-        import os as _os
-        import torch
-        from shared.hardware_adapt import is_consumer_fp64_cuda_gpu, is_cuda_oom
-
-        dev = torch.device(resolved_device)
-        w_t = w_pinv_t_gpu = w_outer_t = lo_idx_t = sphere_t = None
-        try:
-            w_t = torch.as_tensor(w_mat, device=dev, dtype=torch.float64)
-            w_pinv_t_gpu = torch.as_tensor(w_pinv_t, device=dev, dtype=torch.float64)
-            w_outer_t = torch.as_tensor(w_outer, device=dev, dtype=torch.float64)
-            lo_idx_t = torch.as_tensor(lo_tri_idx, device=dev, dtype=torch.long)
-            sphere_t = torch.as_tensor(sphere_verts.T, device=dev, dtype=torch.float64)
-            per_vox_bytes = max(2048, int(w_mat.shape[0]) * 8 * 8)
-            init_chunk = adaptive_cuda_scaled_batch(
-                per_item_bytes=per_vox_bytes,
-                default_batch=16384,
-                min_batch=2048,
-                max_batch=16384,
-                device=dev,
-                windows_tdr_cap=16384,
-                fp64=True,
-                consumer_fp64_tdr_cap=4096,
-            )
-            eigh_sub = 2048 if (_os.name == "nt" and is_consumer_fp64_cuda_gpu(dev)) else 8192
-
-            def _cuda_chunk(start: int, end: int):
-                sig_np = np.ascontiguousarray(data_in_mask[start:end], dtype=np.float64)
-                sig_t = torch.clamp(torch.from_numpy(sig_np).to(dev), min=float(MIN_POSITIVE_SIGNAL))
-                log_s = torch.log(sig_t)
-                beta_ols = log_s @ w_pinv_t_gpu
-                if is_wls:
-                    w = torch.exp(torch.clamp(beta_ols @ w_t.T, min=-50.0, max=50.0))
-                    w2 = w * w
-                    lhs = (w2 @ w_outer_t).view(-1, 7, 7)
-                    rhs = ((w2 * log_s) @ w_t).unsqueeze(-1)
-                    beta, info = torch.linalg.solve_ex(lhs, rhs)
-                    beta = beta.squeeze(-1)
-                    bad = (info != 0) | (~torch.all(torch.isfinite(beta), dim=1))
-                    if bool(torch.any(bad)):
-                        bad_idx = torch.nonzero(bad, as_tuple=False).squeeze(1)
-                        wb = w.index_select(0, bad_idx)
-                        lsb = log_s.index_select(0, bad_idx)
-                        pinv_b = torch.linalg.pinv(w_t.unsqueeze(0) * wb.unsqueeze(-1))
-                        beta_bad = torch.matmul(pinv_b, (wb * lsb).unsqueeze(-1)).squeeze(-1)
-                        beta = beta.clone()
-                        beta.index_copy_(0, bad_idx, beta_bad)
-                else:
-                    beta = beta_ols
-                tensors = beta[:, lo_idx_t]
-                n_t = tensors.shape[0]
-                if n_t <= eigh_sub:
-                    evals_asc, evecs_asc = torch.linalg.eigh(tensors)
-                else:
-                    ev_list = []
-                    ec_list = []
-                    for sub_s in range(0, n_t, eigh_sub):
-                        ev_s, ec_s = torch.linalg.eigh(tensors[sub_s : sub_s + eigh_sub])
-                        ev_list.append(ev_s)
-                        ec_list.append(ec_s)
-                    evals_asc = torch.cat(ev_list, dim=0)
-                    evecs_asc = torch.cat(ec_list, dim=0)
-                evals = torch.clamp(torch.flip(evals_asc, dims=[1]), min=min_diff)
-                ev1, ev2, ev3 = evals[:, 0], evals[:, 1], evals[:, 2]
-                denom = ev1 * ev1 + ev2 * ev2 + ev3 * ev3
-                num = 0.5 * ((ev1 - ev2) ** 2 + (ev2 - ev3) ** 2 + (ev3 - ev1) ** 2)
-                fa_t = torch.where(denom > 0, torch.sqrt(num / torch.where(denom > 0, denom, torch.ones_like(denom))), torch.zeros_like(denom))
-                fa_t = torch.nan_to_num(fa_t, nan=0.0, posinf=0.0, neginf=0.0)
-                principal = torch.nan_to_num(evecs_asc[:, :, 2], nan=0.0, posinf=0.0, neginf=0.0)
-                norms = torch.linalg.norm(principal, dim=1)
-                closest_t = torch.full((end - start,), -1, device=dev, dtype=torch.int32)
-                valid_dir = (fa_t >= float(min_fa)) & (norms > 0)
-                if bool(torch.any(valid_dir)):
-                    v_idx = torch.nonzero(valid_dir, as_tuple=False).squeeze(1)
-                    normed = principal.index_select(0, v_idx) / norms.index_select(0, v_idx).unsqueeze(1)
-                    proj = torch.abs(normed @ sphere_t)
-                    closest_t.index_copy_(0, v_idx, torch.argmax(proj, dim=1).to(torch.int32))
-                return fa_t.detach().cpu().numpy(), closest_t.detach().cpu().numpy()
-
-            results = run_cuda_chunked_with_oom_fallback(
-                n_vox,
-                initial_chunk_size=init_chunk,
-                min_cuda_chunk_size=1024,
-                cuda_fn=_cuda_chunk,
-                cpu_fallback_fn=None if explicit_cuda else _cpu_chunk,
-            )
-        except BaseException as exc:
-            if explicit_cuda or not is_cuda_oom(exc):
-                raise
-            del w_t, w_pinv_t_gpu, w_outer_t, lo_idx_t, sphere_t
-            w_t = w_pinv_t_gpu = w_outer_t = lo_idx_t = sphere_t = None
-            empty_cuda_cache_safely()
-            results = [_cpu_chunk(0, n_vox)]
-            resolved_device = "cpu"
-        finally:
-            del w_t, w_pinv_t_gpu, w_outer_t, lo_idx_t, sphere_t
-            empty_cuda_cache_safely()
+    if n_vox <= 0:
+        results = []
     else:
-        if n_vox <= 0:
-            results = []
+        from concurrent.futures import ThreadPoolExecutor
+        from contextlib import nullcontext
+        import os as _os
+        from shared.numeric_threads import reserved_stage_cpus
+
+        cpus = reserved_stage_cpus() or max(1, int(_os.cpu_count() or 1))
+        workers = max(1, min(16, cpus))
+        chunks = [(s, min(n_vox, s + 32768)) for s in range(0, n_vox, 32768)]
+        if workers > 1 and len(chunks) >= 2 and n_vox >= 65536:
+            try:
+                from threadpoolctl import threadpool_limits
+
+                blas_ctx = threadpool_limits(limits=1)
+            except Exception:
+                blas_ctx = nullcontext()
+            with blas_ctx, ThreadPoolExecutor(max_workers=min(workers, len(chunks))) as pool:
+                results = list(pool.map(lambda b: _cpu_chunk(b[0], b[1]), chunks))
         else:
-            from concurrent.futures import ThreadPoolExecutor
-            from contextlib import nullcontext
-            import os as _os
-            from shared.numeric_threads import reserved_stage_cpus
-
-            cpus = reserved_stage_cpus() or max(1, int(_os.cpu_count() or 1))
-            workers = max(1, min(16, cpus))
-            chunks = [(s, min(n_vox, s + 32768)) for s in range(0, n_vox, 32768)]
-            if workers > 1 and len(chunks) >= 2 and n_vox >= 65536:
-                try:
-                    from threadpoolctl import threadpool_limits
-
-                    blas_ctx = threadpool_limits(limits=1)
-                except Exception:
-                    blas_ctx = nullcontext()
-                with blas_ctx, ThreadPoolExecutor(max_workers=min(workers, len(chunks))) as pool:
-                    results = list(pool.map(lambda b: _cpu_chunk(b[0], b[1]), chunks))
-            else:
-                results = [_cpu_chunk(s, e) for s, e in chunks]
+            results = [_cpu_chunk(s, e) for s, e in chunks]
 
     fa_vol = np.zeros(mask.shape, dtype=np.float64)
     peak_indices = np.full(mask.shape + (1,), -1, dtype=np.int32)
@@ -608,7 +497,12 @@ def _run_dipy_dti_tracking(
     # Extract masked voxels in exact C-order (`dwi_full[mask]`): use fast single-pass
     # in-memory decode when ample host RAM is available, or bounded-RAM mmap z-slabs
     # on modest 8-16 GiB machines / heavily loaded cohort nodes.
-    from shared.diffusion_io import diffusion_image, ensure_cached_uncompressed_nifti
+    from shared.diffusion_io import (
+        diffusion_image,
+        ensure_cached_uncompressed_nifti,
+        nifti_data_offset,
+        nifti_scaling_params,
+    )
     from shared.hardware_adapt import GIB, adaptive_cpu_slab_z, query_host_available_ram_bytes
 
     n_mask_vox = int(mask.sum())
@@ -621,17 +515,18 @@ def _run_dipy_dti_tracking(
             except Exception:
                 cached_nii = None
             if cached_nii is not None and cached_nii.is_file():
-                cached_img = nib.load(cached_nii.as_posix(), mmap="r")
+                cached_img = nib.load(cached_nii.as_posix(), mmap="r", keep_file_open=False)
+                c_unscaled = None
                 try:
                     c_proxy = cached_img.dataobj
                     c_unscaled = c_proxy.get_unscaled()
-                    c_slope = float(c_proxy.slope) if np.isfinite(c_proxy.slope) else 1.0
-                    c_inter = float(c_proxy.inter) if np.isfinite(c_proxy.inter) else 0.0
-                    need_scale = (c_slope != 1.0) or (c_inter != 0.0)
+                    c_slope, c_inter, need_scale = nifti_scaling_params(cached_img)
                     for vol_i in range(dwi_shape[3]):
-                        vol_3d = np.asarray(c_unscaled[..., vol_i])[mask].astype(np.float32, copy=False)
+                        vol_masked = np.asarray(c_unscaled[..., vol_i])[mask]
                         if need_scale:
-                            vol_3d = vol_3d * np.float32(c_slope) + np.float32(c_inter)
+                            vol_3d = (vol_masked.astype(np.float64, copy=False) * c_slope + c_inter).astype(np.float32)
+                        else:
+                            vol_3d = vol_masked.astype(np.float32, copy=False)
                         data_in_mask[:, vol_i] = vol_3d
                     loaded_fast = True
                 finally:
@@ -643,12 +538,13 @@ def _run_dipy_dti_tracking(
             import sys as _sys
 
             decompressor = _shutil.which("pigz") or (_shutil.which("gzip") if _sys.platform != "win32" else None)
-            if decompressor and isinstance(dwi_img, nib.Nifti1Image) and dwi_img.header.endianness == "<":
+            if decompressor and isinstance(dwi_img, (nib.Nifti1Image, nib.Nifti2Image)):
                 try:
-                    vox_off = int(dwi_img.header.get_data_offset()) or 352
-                    dtype = np.dtype(dwi_img.header.get_data_dtype()).newbyteorder("<")
+                    vox_off = nifti_data_offset(dwi_img)
+                    min_off = 544 if isinstance(dwi_img, nib.Nifti2Image) else 352
+                    dtype = np.dtype(getattr(dwi_img.dataobj, "dtype", dwi_img.header.get_data_dtype()))
                     expected_bytes = vox_off + int(np.prod(dwi_shape, dtype=np.int64)) * dtype.itemsize
-                    if vox_off >= 352:
+                    if vox_off >= min_off:
                         from shared.external_process import external_python_environment, subprocess_no_window_kwargs
 
                         proc = _subprocess.run(
@@ -662,13 +558,13 @@ def _run_dipy_dti_tracking(
                         buf = proc.stdout
                         if len(buf) >= expected_bytes:
                             raw_4d = np.ndarray(shape=dwi_shape, dtype=dtype, buffer=buf, offset=vox_off, order="F")
-                            slope = float(dwi_img.header["scl_slope"]) if np.isfinite(dwi_img.header["scl_slope"]) else 0.0
-                            inter = float(dwi_img.header["scl_inter"]) if np.isfinite(dwi_img.header["scl_inter"]) else 0.0
-                            need_scale = slope != 0.0 and (slope != 1.0 or inter != 0.0)
+                            slope, inter, need_scale = nifti_scaling_params(dwi_img)
                             for vol_i in range(dwi_shape[3]):
-                                vol_3d = raw_4d[..., vol_i][mask].astype(np.float32, copy=False)
+                                vol_masked = raw_4d[..., vol_i][mask]
                                 if need_scale:
-                                    vol_3d = vol_3d * np.float32(slope) + np.float32(inter)
+                                    vol_3d = (vol_masked.astype(np.float64, copy=False) * slope + inter).astype(np.float32)
+                                else:
+                                    vol_3d = vol_masked.astype(np.float32, copy=False)
                                 data_in_mask[:, vol_i] = vol_3d
                             loaded_fast = True
                 except Exception:

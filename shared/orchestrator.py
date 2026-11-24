@@ -3479,6 +3479,59 @@ def _csd_act_complete(
         return False
 
 
+def _sift2_weights_current(
+    sift2_weights: Path,
+    tractogram: Path,
+    csd_manifest_path: Path,
+    csd_qc_path: Path,
+    *,
+    use_sift2: bool,
+) -> bool:
+    """Return True only when SIFT2 is enabled and ``sift2_weights`` matches the active tractogram."""
+    if not use_sift2 or not sift2_weights.is_file() or not tractogram.is_file():
+        return False
+    has_manifest = csd_manifest_path.is_file()
+    has_qc = csd_qc_path.is_file()
+    if not has_manifest and not has_qc:
+        try:
+            return sift2_weights.stat().st_size > 0
+        except OSError:
+            return False
+    if not has_manifest or not has_qc:
+        return False
+    try:
+        manifest = _read_json(csd_manifest_path)
+        qc = _read_json(csd_qc_path)
+    except (OSError, TypeError, ValueError):
+        return False
+    if manifest.get("status") != "completed" or qc.get("status") != "completed":
+        return False
+    params = manifest.get("parameters")
+    if isinstance(params, dict) and params.get("use_sift2", True) is False:
+        return False
+    outputs = manifest.get("outputs")
+    if isinstance(outputs, dict) and "sift2_weights" in outputs and not outputs.get("sift2_weights"):
+        return False
+    summary = qc.get("scientific_output_summary")
+    if not isinstance(summary, dict):
+        return False
+    tck = summary.get("tck")
+    sift2 = summary.get("sift2")
+    if not isinstance(tck, dict) or not isinstance(sift2, dict):
+        return False
+    tck_count = int(tck.get("streamline_count", 0) or 0)
+    weight_count = int(sift2.get("weight_count", 0) or 0)
+    if tck_count <= 0 or weight_count != tck_count:
+        return False
+    if not bool(sift2.get("all_finite")) or not bool(sift2.get("all_nonnegative")):
+        return False
+    if not _file_record_matches(tck.get("file"), tractogram):
+        return False
+    if not _file_record_matches(sift2.get("file"), sift2_weights):
+        return False
+    return True
+
+
 def _dki_config(config: ProductOrchestratorConfig, inputs: dict[str, Path]):
     from microstructure.dki import DkiConfig
     from shared.pipeline import RawInputBundle
@@ -3913,7 +3966,14 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             if config.connectome_metrics is None or not str(config.connectome_metrics).strip():
                 return fc_done
             sift2_stem = f"{config.subject_id}-connectome-sift2_weighted_streamline_count"
-            s2_done = sift2_weights.is_file() and _connectome_complete(
+            sift2_valid = _sift2_weights_current(
+                sift2_weights,
+                csd_tractogram,
+                csd_dir / "csd_act_manifest.json",
+                csd_qc,
+                use_sift2=bool(csd_opts["use_sift2"]),
+            )
+            s2_done = sift2_valid and _connectome_complete(
                 sift2_connectome_dir / f"{sift2_stem}_qc.json",
                 sift2_connectome_dir / f"{sift2_stem}.csv",
                 sift2_connectome_dir / f"{config.subject_id}-connectome-nodes.tsv",
@@ -4460,12 +4520,19 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             elif primary_tractography_backend != "csd_act" and config.connectome_backend == "mrtrix":
                 add(target, "blocked", "UKF/DTI tractography currently supports python connectome backend only", "configuration", outputs=conn_outputs, provides=False)
             else:
+                sift2_valid = primary_tractography_backend == "csd_act" and _sift2_weights_current(
+                    sift2_weights,
+                    csd_tractogram,
+                    csd_dir / "csd_act_manifest.json",
+                    csd_qc,
+                    use_sift2=bool(csd_opts["use_sift2"]),
+                )
                 add(
                     target,
                     "will_run",
                     "ready to run connectome",
                     "runnable",
-                    inputs={"tractogram": tractogram, "parcellation": parcellation, "sift2_weights": sift2_weights if primary_tractography_backend == 'csd_act' and sift2_weights.is_file() else None},
+                    inputs={"tractogram": tractogram, "parcellation": parcellation, "sift2_weights": sift2_weights if sift2_valid else None},
                     outputs=conn_outputs,
                     dependencies={"parcellation": "available" if parcellation is not None else "will_run", "tractogram": "available" if tractogram.is_file() else "will_run"},
                 )
@@ -5172,6 +5239,32 @@ def _run_subject_products_impl(
     output_root = config.output_root.expanduser().resolve() if config.output_root is not None else None
     layout = subject_layout(subject_root, output_root=output_root)
     run_name = normalize_run_name(config.run_name)
+    from shared.workspace_lock import workspace_lock
+
+    with workspace_lock(layout.run_metadata, subject_id=config.subject_id, run_name=run_name):
+        return _run_subject_products_locked(
+            config=config,
+            targets=targets,
+            subject_root=subject_root,
+            output_root=output_root,
+            layout=layout,
+            run_name=run_name,
+            bundle_backends=bundle_backends,
+            log=log,
+        )
+
+
+def _run_subject_products_locked(
+    *,
+    config: ProductOrchestratorConfig,
+    targets: tuple[str, ...],
+    subject_root: Path,
+    output_root: Optional[Path],
+    layout,
+    run_name: str,
+    bundle_backends: tuple[str, ...],
+    log: Optional[Callable[[str], None]] = None,
+) -> ProductOrchestratorResult:
     primary_tractography_backend = _primary_tractography_backend(config)
     start = time.monotonic()
     previous_run_records = _archive_existing_run_records(layout, run_name)
@@ -6207,7 +6300,18 @@ def _run_subject_products_impl(
                     "tractogram": tractogram,
                     "tractogram_trk": tractogram_trk,
                     "tractogram_vtk": current_vtk if primary_tractography_backend == 'csd_act' or current_vtk.is_file() else None,
-                    "sift2_weights": sift2_weights if primary_tractography_backend == 'csd_act' and sift2_weights.is_file() else None,
+                    "sift2_weights": (
+                        sift2_weights
+                        if primary_tractography_backend == "csd_act"
+                        and _sift2_weights_current(
+                            sift2_weights,
+                            csd_tractogram,
+                            csd_dir / "csd_act_manifest.json",
+                            csd_qc,
+                            use_sift2=bool(csd_opts["use_sift2"]),
+                        )
+                        else None
+                    ),
                 },
                 layout,
                 config.subject_id,
@@ -6858,6 +6962,16 @@ def _run_subject_products_impl(
                     log,
                 )
         weighted_connectome_handled = False
+        sift2_weights_valid = (
+            primary_tractography_backend == "csd_act"
+            and _sift2_weights_current(
+                sift2_weights,
+                csd_tractogram,
+                csd_dir / "csd_act_manifest.json",
+                csd_qc,
+                use_sift2=bool(csd_opts["use_sift2"]),
+            )
+        )
         if run_fiber_count:
             conn_qc = connectome_dir / f"{config.subject_id}-connectome-streamline_count_qc.json"
             conn_matrix = connectome_dir / f"{config.subject_id}-connectome-streamline_count.csv"
@@ -6931,7 +7045,7 @@ def _run_subject_products_impl(
                     conn_rec = replace(conn_rec, outputs=_publish_connectome_outputs(
                         "streamline_count", conn_raw_outputs, layout, config.subject_id, source=connectome_publish_source))
                 tasks.append(conn_rec)
-                if run_sift2 and primary_tractography_backend == 'csd_act' and sift2_weights.is_file():
+                if run_sift2 and primary_tractography_backend == 'csd_act' and sift2_weights_valid:
                     weighted = run_connectome(
                         ConnectomeConfig(
                             subject_id=config.subject_id,
@@ -6964,13 +7078,13 @@ def _run_subject_products_impl(
             not weighted_connectome_handled
             and run_sift2
             and primary_tractography_backend == 'csd_act'
-            and (sift2_weights.is_file() or (explicit_connectome_metrics and not run_fiber_count))
+            and (sift2_weights_valid or (explicit_connectome_metrics and not run_fiber_count))
         )
         if sift2_should_run:
             sift2_qc = sift2_connectome_dir / f"{config.subject_id}-connectome-sift2_weighted_streamline_count_qc.json"
             sift2_matrix = sift2_connectome_dir / f"{config.subject_id}-connectome-sift2_weighted_streamline_count.csv"
             sift2_nodes = sift2_connectome_dir / f"{config.subject_id}-connectome-nodes.tsv"
-            if sift2_weights.is_file() and config.resume and _connectome_complete(
+            if sift2_weights_valid and config.resume and _connectome_complete(
                 sift2_qc,
                 sift2_matrix,
                 sift2_nodes,
@@ -7009,8 +7123,14 @@ def _run_subject_products_impl(
                 tasks.append(ProductTaskRecord(name="connectome.sift2_weighted", status="blocked", reason="missing parcellation"))
             elif not tractogram.is_file():
                 tasks.append(ProductTaskRecord(name="connectome.sift2_weighted", status="blocked", reason="missing TCK tractogram"))
-            elif not sift2_weights.is_file():
-                tasks.append(ProductTaskRecord(name="connectome.sift2_weighted", status="blocked", reason="missing SIFT2 weights"))
+            elif not sift2_weights_valid:
+                if not bool(csd_opts["use_sift2"]):
+                    sift2_block_reason = "SIFT2 disabled for CSD/ACT"
+                elif not sift2_weights.is_file():
+                    sift2_block_reason = "missing SIFT2 weights"
+                else:
+                    sift2_block_reason = "SIFT2 weights do not match current tractogram"
+                tasks.append(ProductTaskRecord(name="connectome.sift2_weighted", status="blocked", reason=sift2_block_reason))
             else:
                 from connectome import ConnectomeConfig, run_connectome
 
@@ -7317,6 +7437,9 @@ def run_subject_products(
 ) -> ProductOrchestratorResult:
     """Run products while preserving a failed manifest if any stage raises."""
 
+    from contextlib import nullcontext
+    from shared.workspace_lock import WorkspaceLockError, workspace_lock
+
     _CURRENT_STAGE.set("")
     try:
         fresh_closure = not config.closure_applied  # Q1: multi-tracking children arrive already closed
@@ -7331,56 +7454,74 @@ def run_subject_products(
         if resolved_subject_root != config.subject_root:
             config = replace(config, subject_root=resolved_subject_root)
         from shared.convertible_input import find_convertible_input, prepare_convertible_root
-        target_workspace = (
-            subject_layout(config.subject_root, output_root=config.output_root).workspace_root
-            if config.output_root is not None
-            else None
+        raw_subject_root = config.subject_root.expanduser()
+        lock_base = raw_subject_root.parent if raw_subject_root.is_file() else raw_subject_root
+        lock_eligible = bool(config.execute) and (
+            raw_subject_root.exists()
+            or (config.output_root is not None and config.output_root.expanduser().exists())
         )
-        if config.execute:
-            if not config.subject_id.strip() or config.select_streamlines <= 0:
-                raise ValueError("subject_id is required and select_streamlines must be positive")
-            _normalize_targets(config)
-            from shared.dicom_input import prepare_dicom_root
-            dicom_record = prepare_dicom_root(
-                config.subject_root,
-                config.subject_id,
-                dwiconvert=config.dwiconvert_executable,
-                log=log,
-                target_root=target_workspace,
+        early_lock = (
+            workspace_lock(
+                subject_layout(lock_base.resolve(), output_root=config.output_root).run_metadata,
+                subject_id=config.subject_id,
+                run_name=normalize_run_name(config.run_name),
             )
-            if dicom_record is not None and target_workspace is not None:
-                config = replace(config, subject_root=target_workspace)
-            if find_convertible_input(config.subject_root) is not None:
-                mrconvert_exe = None
-                if config.mrtrix_bin_dir is not None:
-                    candidate = Path(config.mrtrix_bin_dir).expanduser() / (
-                        "mrconvert.exe" if os.name == "nt" else "mrconvert"
-                    )
-                    if candidate.is_file():
-                        mrconvert_exe = candidate
-                prepared_root = prepare_convertible_root(
+            if lock_eligible
+            else nullcontext()
+        )
+        with early_lock:
+            target_workspace = (
+                subject_layout(config.subject_root, output_root=config.output_root).workspace_root
+                if config.output_root is not None
+                else None
+            )
+            if config.execute:
+                if not config.subject_id.strip() or config.select_streamlines <= 0:
+                    raise ValueError("subject_id is required and select_streamlines must be positive")
+                _normalize_targets(config)
+                from shared.dicom_input import prepare_dicom_root
+                dicom_record = prepare_dicom_root(
                     config.subject_root,
                     config.subject_id,
                     dwiconvert=config.dwiconvert_executable,
-                    mrconvert=mrconvert_exe,
                     log=log,
                     target_root=target_workspace,
                 )
-                if prepared_root != config.subject_root.expanduser().resolve():
-                    config = replace(config, subject_root=prepared_root)
-        elif config.subject_root.expanduser().is_file():
-            found = find_convertible_input(config.subject_root)
-            if found is not None:
-                config = replace(config, subject_root=found[2])
-        config = _with_preprocessing_pe_decision(config)
-        from shared.diffusion_io import subject_cache_root
-        cache_root = subject_layout(config.subject_root, output_root=config.output_root).cache
-        with subject_cache_root(cache_root):
-            use_multi, config = _uses_multi_tracking_variants(config)
-            if use_multi:
-                from shared.multi_tracking import run
-                return run(config, log=log)
-            return _run_subject_products_impl(config, log=log)
+                if dicom_record is not None and target_workspace is not None:
+                    config = replace(config, subject_root=target_workspace)
+                if find_convertible_input(config.subject_root) is not None:
+                    mrconvert_exe = None
+                    if config.mrtrix_bin_dir is not None:
+                        candidate = Path(config.mrtrix_bin_dir).expanduser() / (
+                            "mrconvert.exe" if os.name == "nt" else "mrconvert"
+                        )
+                        if candidate.is_file():
+                            mrconvert_exe = candidate
+                    prepared_root = prepare_convertible_root(
+                        config.subject_root,
+                        config.subject_id,
+                        dwiconvert=config.dwiconvert_executable,
+                        mrconvert=mrconvert_exe,
+                        log=log,
+                        target_root=target_workspace,
+                    )
+                    if prepared_root != config.subject_root.expanduser().resolve():
+                        config = replace(config, subject_root=prepared_root)
+            elif config.subject_root.expanduser().is_file():
+                found = find_convertible_input(config.subject_root)
+                if found is not None:
+                    config = replace(config, subject_root=found[2])
+            config = _with_preprocessing_pe_decision(config)
+            from shared.diffusion_io import subject_cache_root
+            cache_root = subject_layout(config.subject_root, output_root=config.output_root).cache
+            with subject_cache_root(cache_root):
+                use_multi, config = _uses_multi_tracking_variants(config)
+                if use_multi:
+                    from shared.multi_tracking import run
+                    return run(config, log=log)
+                return _run_subject_products_impl(config, log=log)
+    except WorkspaceLockError:
+        raise
     except Exception as exc:
         stage = _CURRENT_STAGE.get()
         _mark_orchestration_failed(config, exc, stage)

@@ -13,7 +13,9 @@ import time
 
 UPSTREAM_URL = "https://github.com/zhangfanmark/MK-Curve"
 UPSTREAM_COMMIT = "9a213e1a5850fe50c998793f31ed852df00242f8"
-PORT_VERSION = 2
+# Bumped to 3 after fixing the multi-threaded LAPACK dormqr diagonal-mutation race
+# and updating the batched WLLS/Rodrigues solver so pre-fix cached MK-Curve outputs invalidate.
+PORT_VERSION = 3
 # The two stops that come from the signal data. Only these get the WLS hint in the DKI stage (T-N2).
 SIGNAL_SCALE_STOP = "Signal scale cannot support the author's integer synthetic-b0 grid; rescale acquisition explicitly"
 NO_VALID_VOXELS_STOP = "MK-Curve has no valid corrected quantitative voxels; inspect raw curves and acquisition"
@@ -419,8 +421,11 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                     eff_chunk = voxels_per_chunk
                 chunk_fn = _fit_chunk_cuda if is_cuda_dev else _fit_chunk
                 if worker_threads is not None:
-                    from threadpoolctl import threadpool_limits
-                    handles.enter_context(threadpool_limits(limits=worker_threads))
+                    try:
+                        from threadpoolctl import threadpool_limits
+                        handles.enter_context(threadpool_limits(limits=worker_threads))
+                    except Exception:
+                        pass
                 if eff_workers > 1:
                     import sys
                     main_file = getattr(sys.modules.get("__main__"), "__file__", None)

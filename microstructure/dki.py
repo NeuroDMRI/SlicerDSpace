@@ -734,146 +734,15 @@ def _predict_dki_chunk(model, params, s0):
 
 
 def _resolve_dki_device(device: str) -> str:
+    """Resolve device for plain DIPY DKI fitting (CPU-only; MK-Curve handles CUDA separately).
+
+    Because DIPY kurtosis metric evaluation (mk/ak/rk/mkt/kfa) and 18-map export run on CPU,
+    multi-worker CPU execution is consistently faster than CUDA + host-device transfer overhead.
+    """
     req = (device or "cpu").strip().lower()
     if req not in ("cpu", "cuda", "mps", "auto") and not req.startswith("cuda:"):
         raise ValueError("DKI device must be 'cpu', 'cuda', 'mps', or 'auto'")
-    if req in ("cpu", "mps"):
-        return "cpu"
-    try:
-        import torch
-        has_cuda = bool(torch.cuda.is_available())
-    except ImportError:
-        has_cuda = False
-    if (req == "cuda" or req.startswith("cuda:")) and not has_cuda:
-        raise RuntimeError("DKI CUDA requested, but torch.cuda.is_available() is False")
-    if has_cuda and req.startswith("cuda:") and req != "cuda:0":
-        return req
-    return "cuda" if has_cuda else "cpu"
-
-
-def _fit_dki_chunk_cuda(model, observed, fit_method_name: str, device: str = "cuda"):
-    """PyTorch CUDA fp64 WLS/OLS solver with CPU pinv fallback on ill-conditioned voxels."""
-    import numpy as np
-    import torch
-    from dipy.reconst.dki import decompose_tensor, from_lower_triangular
-
-    dev = torch.device(device)
-    A = model.design_matrix
-    inv_A = model.inverse_design_matrix
-    A_t = torch.as_tensor(np.ascontiguousarray(A), dtype=torch.float64, device=dev)
-    inv_A_t = torch.as_tensor(np.ascontiguousarray(inv_A), dtype=torch.float64, device=dev)
-    obs_t = torch.as_tensor(np.ascontiguousarray(observed), dtype=torch.float64, device=dev)
-    log_s_t = torch.log(torch.clamp(obs_t, min=float(model.min_signal)))
-
-    if fit_method_name in ("WLS", "UWLLS"):
-        col_scale = torch.linalg.norm(A_t, dim=0).clamp(min=1e-30)
-        A_eq = A_t / col_scale
-        ols_r = torch.matmul(log_s_t, inv_A_t.T)
-        w_t = torch.exp(torch.matmul(ols_r, A_t.T))
-        w_max = w_t.amax(dim=1, keepdim=True).clamp(min=1e-300)
-        w_norm = w_t / w_max
-        W_A_eq = w_norm.unsqueeze(2) * A_eq.unsqueeze(0)
-        G_eq = torch.matmul(W_A_eq.mT, W_A_eq)
-        rhs_eq = torch.matmul(W_A_eq.mT, (w_norm * log_s_t).unsqueeze(2))
-        L_eq, info_eq = torch.linalg.cholesky_ex(G_eq)
-        diag_L = torch.diagonal(L_eq, dim1=-2, dim2=-1)
-        well_cond = (
-            (info_eq == 0)
-            & torch.isfinite(w_t).all(dim=1)
-            & (w_t.amax(dim=1) > 0)
-            & (diag_L.amin(dim=-1) > 1e-6 * diag_L.amax(dim=-1))
-        )
-        res_t = torch.empty((len(observed), 22), dtype=torch.float64, device=dev)
-        if torch.any(well_cond):
-            sol_eq = torch.cholesky_solve(rhs_eq[well_cond], L_eq[well_cond]).squeeze(-1)
-            res_t[well_cond] = sol_eq / col_scale
-        res_all = res_t.cpu().numpy()
-        well_np = well_cond.cpu().numpy()
-        if not np.all(well_np):
-            log_s_np = np.log(np.maximum(observed, model.min_signal))
-            for v in np.flatnonzero(~well_np):
-                ls = log_s_np[v]
-                ols_v = np.dot(inv_A, ls)
-                wv = np.exp(np.dot(A, ols_v))
-                W_A = np.multiply(wv[:, None], A, order="C")
-                W_A[W_A == 0] = 0.0
-                inv_W_A = np.linalg.pinv(W_A)
-                inv_W_A_W = np.multiply(inv_W_A, wv[None, :], order="C")
-                inv_W_A_W[inv_W_A_W == 0] = 0.0
-                res_all[v] = np.dot(inv_W_A_W, ls)
-    else:
-        res_all = torch.matmul(log_s_t, inv_A_t.T).cpu().numpy()
-
-    DT = from_lower_triangular(res_all[:, :6])
-    evals, evecs = decompose_tensor(DT, min_diffusivity=model.min_diffusivity)
-    md_sq = evals.mean(axis=-1) ** 2
-    kt = np.where(md_sq[:, None] != 0, res_all[:, 6:21] / md_sq[:, None], 0.0 * res_all[:, 6:21])
-    s0 = np.exp(-res_all[:, 21])
-    params = np.concatenate((evals, evecs[:, 0, :], evecs[:, 1, :], evecs[:, 2, :], kt), axis=-1)
-    return params, s0
-
-
-def _predict_and_rtk_cuda(model, params, s0, observed, device: str = "cuda"):
-    """GPU fp64 signal residual (RMSE/NRMSE) and rescaled radial tensor kurtosis (RTK)."""
-    import numpy as np
-    import torch
-    from dipy.reconst.dki import (
-        _positive_evals,
-        ind_ele,
-        lower_triangular,
-        mean_diffusivity,
-        radial_diffusivity,
-        split_dki_param,
-    )
-
-    dev = torch.device(device)
-    fevals, fevecs, fkt = split_dki_param(params)
-    DT_pred = np.matmul(fevecs * fevals[:, None, :], np.swapaxes(fevecs, -1, -2))
-    dt_pred = lower_triangular(DT_pred)
-    md_pred = (dt_pred[:, 0] + dt_pred[:, 2] + dt_pred[:, 5]) / 3.0
-    X_pred = np.concatenate((dt_pred, fkt * (md_pred[:, None] * md_pred[:, None]), -np.log(s0)[:, None]), axis=1)
-
-    A_t = torch.as_tensor(np.ascontiguousarray(model.design_matrix), dtype=torch.float64, device=dev)
-    X_t = torch.as_tensor(np.ascontiguousarray(X_pred), dtype=torch.float64, device=dev)
-    obs_t = torch.as_tensor(np.ascontiguousarray(observed), dtype=torch.float64, device=dev)
-    s0_t = torch.as_tensor(np.ascontiguousarray(s0), dtype=torch.float64, device=dev)
-    pred_t = torch.exp(torch.matmul(X_t, A_t.T))
-    rmse_t = torch.sqrt(torch.mean((pred_t - obs_t) ** 2, dim=1))
-    nrmse_t = rmse_t / s0_t
-    rmse = rmse_t.cpu().numpy()
-    nrmse = nrmse_t.cpu().numpy()
-
-    rtk = np.zeros(len(params), dtype=np.float64)
-    rel_i = _positive_evals(fevals[:, 0], fevals[:, 1], fevals[:, 2])
-    if np.any(rel_i):
-        evecs_rel = torch.as_tensor(np.ascontiguousarray(fevecs[rel_i]), dtype=torch.float64, device=dev)
-        kt_rel = torch.as_tensor(np.ascontiguousarray(fkt[rel_i]), dtype=torch.float64, device=dev)
-        evals_rel = fevals[rel_i]
-        idx_tuples = [
-            (il, jl, kl, ll, ind_ele[(il + 1) * (jl + 1) * (kl + 1) * (ll + 1)])
-            for il in range(3)
-            for jl in range(3)
-            for kl in range(3)
-            for ll in range(3)
-        ]
-        il_idx = torch.tensor([t[0] for t in idx_tuples], dtype=torch.long, device=dev)
-        jl_idx = torch.tensor([t[1] for t in idx_tuples], dtype=torch.long, device=dev)
-        kl_idx = torch.tensor([t[2] for t in idx_tuples], dtype=torch.long, device=dev)
-        ll_idx = torch.tensor([t[3] for t in idx_tuples], dtype=torch.long, device=dev)
-        ke_idx = torch.tensor([t[4] for t in idx_tuples], dtype=torch.long, device=dev)
-
-        kt_81 = kt_rel[:, ke_idx]
-        u1 = evecs_rel[:, :, 1]
-        u2 = evecs_rel[:, :, 2]
-        Wyyyy = torch.sum(u1[:, il_idx] * u1[:, jl_idx] * u1[:, kl_idx] * u1[:, ll_idx] * kt_81, dim=1)
-        Wzzzz = torch.sum(u2[:, il_idx] * u2[:, jl_idx] * u2[:, kl_idx] * u2[:, ll_idx] * kt_81, dim=1)
-        Wyyzz = torch.sum(u1[:, il_idx] * u1[:, jl_idx] * u2[:, kl_idx] * u2[:, ll_idx] * kt_81, dim=1)
-        wtk = (3.0 / 8.0) * (Wyyyy + Wzzzz + 2.0 * Wyyzz).cpu().numpy()
-        md_r = mean_diffusivity(evals_rel)
-        rd_r = radial_diffusivity(evals_rel)
-        rtk[rel_i] = wtk * (md_r ** 2) / (rd_r ** 2)
-
-    return rmse, nrmse, rtk
+    return "cpu"
 
 
 _DKI_FORK_CTX: dict[str, Any] | None = None
@@ -1064,25 +933,6 @@ def _dki_fork_chunk_worker(bounds: tuple[int, int]):
     )
 
 
-def _dki_fork_metrics_worker(chunk: tuple[Any, Any]):
-    """Evaluate DIPY array-level kurtosis metrics in a pre-forked CPU worker (bit-exact)."""
-    params, s0 = chunk
-    ctx = _DKI_FORK_CTX
-    assert ctx is not None
-    import numpy as np
-    from dipy.reconst.dki import DiffusionKurtosisFit
-
-    model = ctx["model"]
-    fitted = DiffusionKurtosisFit(model, params, model_S0=s0)
-    with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
-        raw = {
-            key: np.asarray(getattr(fitted, key)(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
-            for key in ("mk", "ak", "rk", "mkt")
-        }
-        raw["kfa"] = np.asarray(fitted.kfa).reshape(-1)
-    return raw
-
-
 def _save_dki_nifti_fast(array, affine, header, staged_path: Path, final_path: Path) -> None:
     import nibabel as nib
 
@@ -1149,19 +999,9 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
             if dtype != np.uint8:
                 array.reshape((-1, 27) if key == "params" else (-1,))[flat_indices] = np.nan
             arrays[key] = array
-        cuda_metric_pool = None
         try:
             resolved_device = _resolve_dki_device(config.device)
-            req_dev_raw = str(config.device or "auto").strip().lower()
-            explicit_cuda = req_dev_raw == "cuda" or req_dev_raw.startswith("cuda:")
-            is_cuda_dev = resolved_device.startswith("cuda")
-            from shared.hardware_adapt import (
-                adaptive_cuda_scaled_batch,
-                available_ram_bytes,
-                empty_cuda_cache_safely,
-                is_cuda_oom,
-                run_cuda_chunked_with_oom_fallback,
-            )
+            from shared.hardware_adapt import available_ram_bytes
 
             use_fast_dense_global = (
                 config.dense_metrics
@@ -1169,31 +1009,7 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                 and getattr(type(model), "fit", None) is _ORIG_DKI_FIT
                 and "fit" not in model.__dict__
             )
-            if is_cuda_dev and use_fast_dense_global and len(flat_indices) >= 16384:
-                cuda_metric_workers = min(32, _resolve_dki_fork_workers(config))
-                if cuda_metric_workers >= 2:
-                    import multiprocessing as mp
-
-                    global _DKI_FORK_CTX
-                    _DKI_FORK_CTX = {"model": model}
-                    cuda_metric_pool = mp.get_context("fork").Pool(
-                        processes=cuda_metric_workers,
-                        initializer=_init_dki_fork_worker,
-                    )
-
-            if is_cuda_dev and config.dense_metrics and dense_supported:
-                per_voxel_bytes = max(8192, int(len(selected)) * 22 * 32)
-                chunk_step = adaptive_cuda_scaled_batch(
-                    per_voxel_bytes,
-                    max(config.voxels_per_chunk, 16384),
-                    min_batch=256,
-                    max_batch=65536,
-                    device=resolved_device,
-                    windows_tdr_cap=8192,
-                    fp64=True,
-                    consumer_fp64_tdr_cap=2048,
-                )
-            elif config.dense_metrics and dense_supported and len(flat_indices) > 64 and config.voxels_per_chunk == 1024:
+            if config.dense_metrics and dense_supported and len(flat_indices) > 64 and config.voxels_per_chunk == 1024:
                 chunk_step = 8192
             else:
                 chunk_step = config.voxels_per_chunk
@@ -1211,7 +1027,7 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
             last_progress_time = 0.0
             fork_workers = (
                 _resolve_dki_fork_workers(config)
-                if (use_fast_dense_global and not is_cuda_dev and masked_unscaled is not None and len(flat_indices) >= 16384)
+                if (use_fast_dense_global and masked_unscaled is not None and len(flat_indices) >= 16384)
                 else 1
             )
             spawn_workers = (
@@ -1219,7 +1035,6 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                 if (
                     fork_workers < 2
                     and use_fast_dense_global
-                    and not is_cuda_dev
                     and masked_unscaled is not None
                     and len(flat_indices) >= 16384
                 )
@@ -1370,68 +1185,7 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                         stamp = time.monotonic()
                         observed = signals[finite & positive]
                         use_fast_dense = use_fast_dense_global
-                        if use_fast_dense and resolved_device.startswith("cuda"):
-                            from dipy.reconst.dki import DiffusionKurtosisFit
-
-                            def _dki_cuda_sub(s_i: int, e_i: int):
-                                obs_sub = observed[s_i:e_i]
-                                p_sub, s0_sub = _fit_dki_chunk_cuda(model, obs_sub, fit_method_name, device=resolved_device)
-                                r_sub, nr_sub, rtk_sub = _predict_and_rtk_cuda(
-                                    model, p_sub, s0_sub, obs_sub, device=resolved_device
-                                )
-                                return p_sub, s0_sub, r_sub, nr_sub, rtk_sub
-
-                            def _dki_cpu_sub(s_i: int, e_i: int):
-                                obs_sub = observed[s_i:e_i]
-                                p_sub, s0_sub = _fit_dki_chunk(model, obs_sub, fit_method_name)
-                                pred_sub = _predict_dki_chunk(model, p_sub, s0_sub)
-                                r_sub = np.sqrt(np.mean((pred_sub - obs_sub) ** 2, axis=1))
-                                nr_sub = r_sub / s0_sub
-                                if len(p_sub) > 64:
-                                    rtk_sub = _compute_rtk_cpu(p_sub)
-                                else:
-                                    fit_sub = DiffusionKurtosisFit(model, p_sub, model_S0=s0_sub)
-                                    with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
-                                        rtk_sub = np.asarray(fit_sub.rtk(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
-                                return p_sub, s0_sub, r_sub, nr_sub, rtk_sub
-
-                            sub_parts = run_cuda_chunked_with_oom_fallback(
-                                len(observed),
-                                initial_chunk_size=len(observed),
-                                min_cuda_chunk_size=min(256, len(observed)),
-                                cuda_fn=_dki_cuda_sub,
-                                cpu_fallback_fn=None if explicit_cuda else _dki_cpu_sub,
-                            )
-                            params = np.concatenate([p[0] for p in sub_parts], axis=0)
-                            s0 = np.concatenate([p[1] for p in sub_parts], axis=0)
-                            rmse = np.concatenate([p[2] for p in sub_parts], axis=0)
-                            nrmse = np.concatenate([p[3] for p in sub_parts], axis=0)
-                            rtk_cuda = np.concatenate([p[4] for p in sub_parts], axis=0)
-                            phase_times['tensor_fit'] += time.monotonic()-stamp
-                            stamp = time.monotonic()
-                            fitted = DiffusionKurtosisFit(model, params, model_S0=s0)
-                            dense_used = True
-                            if cuda_metric_pool is not None and len(params) >= 4096:
-                                sub_step = max(1024, (len(params) + cuda_metric_workers - 1) // cuda_metric_workers)
-                                sub_chunks = [
-                                    (params[s:s + sub_step], s0[s:s + sub_step])
-                                    for s in range(0, len(params), sub_step)
-                                ]
-                                parts = cuda_metric_pool.map(_dki_fork_metrics_worker, sub_chunks)
-                                raw = {
-                                    key: np.concatenate([p[key] for p in parts], axis=0)
-                                    for key in ("mk", "ak", "rk", "mkt", "kfa")
-                                }
-                                raw["rtk"] = rtk_cuda
-                            else:
-                                with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
-                                    raw = {
-                                        key: np.asarray(getattr(fitted, key)(min_kurtosis=None, max_kurtosis=None)).reshape(-1)
-                                        for key in ("mk", "ak", "rk", "mkt")
-                                    }
-                                    raw["rtk"] = rtk_cuda
-                                    raw["kfa"] = np.asarray(fitted.kfa).reshape(-1)
-                        elif use_fast_dense:
+                        if use_fast_dense:
                             from dipy.reconst.dki import DiffusionKurtosisFit
                             params, s0 = _fit_dki_chunk(model, observed, fit_method_name)
                             phase_times['tensor_fit'] += time.monotonic()-stamp
@@ -1529,12 +1283,6 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                     _save_dki_nifti_fast(*job)
             phase_times['file_export'] = time.monotonic()-stamp
         finally:
-            if cuda_metric_pool is not None:
-                cuda_metric_pool.close()
-                cuda_metric_pool.join()
-                _DKI_FORK_CTX = None
-            if resolved_device.startswith("cuda"):
-                empty_cuda_cache_safely()
             for array in arrays.values():
                 array._mmap.close()
             if isinstance(unscaled, np.memmap):

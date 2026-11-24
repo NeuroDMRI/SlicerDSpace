@@ -160,14 +160,111 @@ def find_pythonslicer(home: Path | str) -> Optional[Path]:
     return None
 
 
-def normalize_slicer_python_launch(program: str, args: list[str]) -> tuple[str, list[str]]:
-    """Use the bundled PythonSlicer directly for macOS application workers.
+def _windows_utf8_python_trampoline_args(py_args: list[str]) -> Optional[list[str]]:
+    """Wrap Windows CTKAppLauncher Python arguments in a pure-ASCII UTF-8 trampoline.
 
-    The macOS application executable does not implement the CTK launcher's
-    ``--launch PythonSlicer`` contract: it opens another GUI instead. Keep
-    Linux/Windows CTK commands and ordinary application launches unchanged.
+    Windows ``Slicer.exe --launch PythonSlicer`` and ``PythonSlicer.exe`` are
+    CTKAppLauncher C++ wrappers that forward argv through ANSI/local8Bit APIs,
+    corrupting non-ASCII (e.g. Chinese/Japanese/accented) paths and crashing
+    under ``PYTHONUTF8=1``. Encoding non-ASCII script/module/code invocations
+    into a pure-ASCII base64 ``-c`` snippet keeps every launcher argument 7-bit
+    ASCII while restoring the exact UTF-8 ``sys.argv`` and ``__file__`` inside
+    ``python-real.exe``.
     """
-    if list(args[:2]) != ['--launch', 'PythonSlicer'] or sys.platform == 'win32':
+    import base64
+    import json
+
+    if not py_args or all(str(part).isascii() for part in py_args):
+        return None
+    flags: list[str] = []
+    idx = 0
+    count = len(py_args)
+    while idx < count:
+        tok = str(py_args[idx])
+        if tok in {"-W", "-X"} and idx + 1 < count:
+            val = str(py_args[idx + 1])
+            if not (tok.isascii() and val.isascii()):
+                return None
+            flags.extend([tok, val])
+            idx += 2
+            continue
+        if tok in {"-m", "-c"}:
+            break
+        if tok == "--":
+            idx += 1
+            break
+        if tok.startswith("-") and tok != "-":
+            if not tok.isascii():
+                return None
+            flags.append(tok)
+            idx += 1
+            continue
+        break
+    if idx >= count:
+        return None
+    head = str(py_args[idx])
+    if head == "-m":
+        if idx + 1 >= count:
+            return None
+        target = str(py_args[idx + 1])
+        argv = [target, *(str(a) for a in py_args[idx + 2 :])]
+        mode = "module"
+    elif head == "-c":
+        if idx + 1 >= count:
+            return None
+        target = str(py_args[idx + 1])
+        argv = ["-c", *(str(a) for a in py_args[idx + 2 :])]
+        mode = "code"
+    else:
+        target = head
+        argv = [target, *(str(a) for a in py_args[idx + 1 :])]
+        mode = "script"
+
+    payload_b64 = base64.b64encode(
+        json.dumps({"mode": mode, "target": target, "argv": argv}, ensure_ascii=False).encode("utf-8")
+    ).decode("ascii")
+    if mode == "script":
+        exec_stmt = (
+            "sys.path[0]=os.path.dirname(os.path.abspath(p['target']));"
+            "runpy.run_path(p['target'],run_name='__main__')"
+        )
+    elif mode == "module":
+        exec_stmt = "runpy.run_module(p['target'],run_name='__main__',alter_sys=True)"
+    else:
+        exec_stmt = "exec(compile(p['target'],'<string>','exec'),{'__name__':'__main__'})"
+    code = (
+        "import base64,json,os,runpy,sys;"
+        f"p=json.loads(base64.b64decode('{payload_b64}').decode('utf-8'));"
+        "sys.argv=p['argv'];"
+        f"{exec_stmt}"
+    )
+    if len(code) > 28000:
+        return None
+    return [*flags, "-c", code]
+
+
+def normalize_slicer_python_launch(program: str, args: list[str]) -> tuple[str, list[str]]:
+    """Normalize Slicer Python worker launches across macOS and Windows.
+
+    - macOS: the ``.app`` executable does not implement the CTK launcher's
+      ``--launch PythonSlicer`` contract (it opens another GUI instead), so
+      dispatch directly to the bundled ``PythonSlicer``.
+    - Windows: CTKAppLauncher (``Slicer.exe --launch PythonSlicer`` and
+      ``PythonSlicer.exe``) corrupts non-ASCII argv. Keep ASCII launches
+      unchanged and wrap non-ASCII invocations in a pure-ASCII UTF-8 trampoline.
+    """
+    if sys.platform == "win32":
+        if list(args[:2]) == ["--launch", "PythonSlicer"]:
+            wrapped = _windows_utf8_python_trampoline_args(list(args[2:]))
+            if wrapped is not None:
+                return program, ["--launch", "PythonSlicer", *wrapped]
+            return program, args
+        if Path(program).name.lower() == "pythonslicer.exe":
+            wrapped = _windows_utf8_python_trampoline_args(list(args))
+            if wrapped is not None:
+                return program, wrapped
+        return program, args
+    if list(args[:2]) != ['--launch', 'PythonSlicer']:
         return program, args
     app = Path(program).expanduser()
     if app.parent.name == 'MacOS' and app.parent.parent.name == 'Contents':
@@ -200,6 +297,9 @@ def startup_environment(extra_env: Optional[Mapping[str, str]] = None) -> dict[s
     except Exception:
         env = os.environ.copy()
 
+    inherited_locks = os.environ.get("SLICERDSPACE_WORKSPACE_LOCKS")
+    if inherited_locks:
+        env.setdefault("SLICERDSPACE_WORKSPACE_LOCKS", inherited_locks)
     if extra_env:
         env.update({str(key): str(value) for key, value in extra_env.items() if value is not None})
     if sys.platform == "win32" and not env.get("HOME"):

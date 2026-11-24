@@ -87,7 +87,12 @@ def _default_eddy_threads() -> int:
     else:
         count = os.cpu_count()
     n_cpus = int(count or 1)
-    cap = 16 if n_cpus >= 32 else 8
+    if n_cpus >= 64:
+        cap = 32
+    elif n_cpus >= 32:
+        cap = 16
+    else:
+        cap = 8
     return max(1, min(cap, n_cpus))
 
 
@@ -437,6 +442,47 @@ def preprocessing_cache_key_matches(recorded: object, expected: object) -> bool:
     return True
 
 
+def _reverse_phase_stem(image_path: Path) -> str:
+    name = image_path.name
+    lower = name.lower()
+    for suffix in (".nii.gz", ".mif.gz", ".nii", ".mif", ".nrrd", ".nhdr"):
+        if lower.endswith(suffix):
+            return name[: -len(suffix)]
+    return image_path.stem
+
+
+def _reverse_phase_sidecar_records(reverse_phase: Optional[Path]) -> dict[str, Any]:
+    """Return file records for sibling gradient/detached-data sidecars affecting reverse-PE b0 selection."""
+    if reverse_phase is None:
+        return {}
+    records: dict[str, Any] = {}
+    stem = _reverse_phase_stem(reverse_phase)
+    for key, suffixes in (
+        ("reverse_phase_bval", (".bval", ".bvals")),
+        ("reverse_phase_bvec", (".bvec", ".bvecs")),
+    ):
+        for suffix in suffixes:
+            candidate = reverse_phase.parent / f"{stem}{suffix}"
+            if candidate.is_file():
+                records[key] = _file_record(candidate)
+                break
+    if reverse_phase.name.lower().endswith(".nhdr") and reverse_phase.is_file():
+        try:
+            import nrrd
+
+            header = nrrd.read_header(str(reverse_phase))
+            data_file = header.get("data file") or header.get("datafile")
+            if isinstance(data_file, str) and data_file.strip():
+                candidate = Path(data_file.strip())
+                if not candidate.is_absolute():
+                    candidate = (reverse_phase.parent / candidate).resolve()
+                if candidate.is_file():
+                    records["reverse_phase_data"] = _file_record(candidate)
+        except Exception:
+            pass
+    return records
+
+
 def _preprocessing_cache_key(
     raw: RawInputBundle,
     config: DwiPreprocessingConfig,
@@ -482,6 +528,7 @@ def _preprocessing_cache_key(
             "bvec": _file_record(raw.bvec_path),
             "mask": _file_record(raw.mask_path),
             "reverse_phase_b0": _file_record(reverse_phase) if reverse_phase else None,
+            **_reverse_phase_sidecar_records(reverse_phase),
         },
         "parameters": {
             "dipy_run_gibbs": bool(config.dipy_run_gibbs),
@@ -793,14 +840,15 @@ def _build_commands(raw: RawInputBundle, config: DwiPreprocessingConfig, paths: 
                 import nrrd
 
                 header = nrrd.read_header(str(reverse_phase_b0))
-                sizes = header.get("sizes") or ()
+                raw_sizes = header.get("sizes")
+                sizes = () if raw_sizes is None else tuple(int(s) for s in raw_sizes)
                 reverse_ndim = len(sizes)
             except Exception as exc:
                 raise ValueError(f"Unable to read reverse phase-encoded b=0 NRRD image: {reverse_phase_b0}") from exc
-            if reverse_ndim not in {3, 4}:
+            if reverse_ndim not in {3, 4} or any(s <= 0 for s in sizes):
                 raise ValueError(
                     "reverse_phase_b0 must be a 3D or 4D image; "
-                    f"received shape {tuple(int(s) for s in sizes)}."
+                    f"received shape {sizes}."
                 )
             reverse_phase_commands.append(
                 [

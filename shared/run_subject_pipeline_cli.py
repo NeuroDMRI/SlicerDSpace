@@ -1216,45 +1216,67 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return 0
 
-    if args.execute:
-        plan = plan_subject_products(config, write=True)
-        _print_run_plan_summary(plan, stream=sys.stderr)
-        if reason := _phase_encoding_block(plan):
-            # W2b rule 4 (T1 D1): no phase-encoding direction, no preprocessing; stop before any stage starts.
-            print(reason, file=sys.stderr)
-            return 2
-        # If Cancel kills this process's whole process group (see
-        # shared/process_group.py), leave a terminal "cancelled" manifest
-        # instead of letting run_subject_products() vanish mid-flight with
-        # the manifest stuck at "running" (or never written at all).
-        manifest_root = config.subject_root.parent if config.subject_root.is_file() else config.subject_root
-        cancellation_manifest_path = orchestration_manifest_path(
-            manifest_root, output_root=config.output_root, run_name=config.run_name
-        )
-        signal.signal(
-            signal.SIGTERM,
-            _make_sigterm_handler(
-                cancellation_manifest_path,
-                subject_id=config.subject_id,
-                run_name=config.run_name,
-            ),
-        )
+    from contextlib import ExitStack
+    from shared.io_layout import normalize_run_name, subject_layout
+    from shared.workspace_lock import WorkspaceLockError, workspace_lock
 
-    orchestration_started = time.monotonic()
-    # H2: a silent stage must be distinguishable from a hung one; the heartbeat only prints, it never kills.
-    heartbeat = None
-    run_log = _cli_log
-    if args.execute:
-        from shared.run_heartbeat import Heartbeat
-        heartbeat_root = config.output_root or (
-            config.subject_root.parent if config.subject_root.is_file() else config.subject_root)
-        heartbeat = Heartbeat(log_root=heartbeat_root).start()
-        run_log = heartbeat.wrap_log(_cli_log)
-    try:
-        result = run_subject_products(config, log=run_log)
-    finally:
-        if heartbeat is not None:
-            heartbeat.stop()
+    with ExitStack() as cli_lock_stack:
+        if args.execute:
+            raw_subject = config.subject_root.expanduser()
+            lock_base = raw_subject.parent if raw_subject.is_file() else raw_subject
+            if raw_subject.exists() or (config.output_root is not None and config.output_root.expanduser().exists()):
+                try:
+                    cli_lock_stack.enter_context(
+                        workspace_lock(
+                            subject_layout(lock_base.resolve(), output_root=config.output_root).run_metadata,
+                            subject_id=config.subject_id,
+                            run_name=normalize_run_name(config.run_name),
+                        )
+                    )
+                except WorkspaceLockError as exc:
+                    print(str(exc), file=sys.stderr)
+                    return 2
+            plan = plan_subject_products(config, write=True)
+            _print_run_plan_summary(plan, stream=sys.stderr)
+            if reason := _phase_encoding_block(plan):
+                # W2b rule 4 (T1 D1): no phase-encoding direction, no preprocessing; stop before any stage starts.
+                print(reason, file=sys.stderr)
+                return 2
+            # If Cancel kills this process's whole process group (see
+            # shared/process_group.py), leave a terminal "cancelled" manifest
+            # instead of letting run_subject_products() vanish mid-flight with
+            # the manifest stuck at "running" (or never written at all).
+            manifest_root = config.subject_root.parent if config.subject_root.is_file() else config.subject_root
+            cancellation_manifest_path = orchestration_manifest_path(
+                manifest_root, output_root=config.output_root, run_name=config.run_name
+            )
+            signal.signal(
+                signal.SIGTERM,
+                _make_sigterm_handler(
+                    cancellation_manifest_path,
+                    subject_id=config.subject_id,
+                    run_name=config.run_name,
+                ),
+            )
+
+        orchestration_started = time.monotonic()
+        # H2: a silent stage must be distinguishable from a hung one; the heartbeat only prints, it never kills.
+        heartbeat = None
+        run_log = _cli_log
+        if args.execute:
+            from shared.run_heartbeat import Heartbeat
+            heartbeat_root = config.output_root or (
+                config.subject_root.parent if config.subject_root.is_file() else config.subject_root)
+            heartbeat = Heartbeat(log_root=heartbeat_root).start()
+            run_log = heartbeat.wrap_log(_cli_log)
+        try:
+            result = run_subject_products(config, log=run_log)
+        except WorkspaceLockError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        finally:
+            if heartbeat is not None:
+                heartbeat.stop()
     orchestration_seconds = time.monotonic() - orchestration_started
     cli_timing = dict(main_wall_seconds=time.monotonic() - cli_started,
                       environment_check_seconds=environment_seconds, orchestration_call_seconds=orchestration_seconds,

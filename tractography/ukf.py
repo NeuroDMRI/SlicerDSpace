@@ -219,6 +219,90 @@ def _ukf_vtk_error(rejected):
     return "\n".join(lines)
 
 
+def _host_supports_avx2():
+    """Return True/False when x86_64 AVX2 capability can be probed, or None on non-x86 / unknown hosts."""
+    import platform
+
+    machine = (platform.machine() or "").strip().lower()
+    if machine in {"arm64", "aarch64"}:
+        return None
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            PF_AVX2_INSTRUCTIONS_AVAILABLE = 40
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.IsProcessorFeaturePresent.argtypes = [ctypes.c_uint32]
+            kernel32.IsProcessorFeaturePresent.restype = ctypes.c_bool
+            return bool(kernel32.IsProcessorFeaturePresent(PF_AVX2_INSTRUCTIONS_AVAILABLE))
+        except Exception:
+            return None
+    if sys.platform.startswith("linux"):
+        try:
+            cpuinfo = Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="ignore")
+            for line in cpuinfo.splitlines():
+                if line.lower().startswith("flags") and ":" in line:
+                    flags = set(line.split(":", 1)[1].strip().lower().split())
+                    return "avx2" in flags
+        except OSError:
+            return None
+        return None
+    if sys.platform == "darwin":
+        try:
+            out = subprocess.run(
+                ["/usr/sbin/sysctl", "-n", "hw.optional.avx2_0"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if out.returncode == 0:
+                val = out.stdout.strip()
+                if val in {"0", "1"}:
+                    return val == "1"
+        except Exception:
+            return None
+    return None
+
+
+def _standalone_requires_avx2(executable):
+    """True when a bundled standalone UKF binary was compiled with AVX2 instructions."""
+    path = Path(executable)
+    try:
+        runtime_json = path.parent.parent / "runtime.json"
+        if runtime_json.is_file():
+            payload = json.loads(runtime_json.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                if isinstance(payload.get("requires_avx2"), bool):
+                    return payload["requires_avx2"]
+                arch = str(payload.get("arch") or "").strip().lower()
+                if arch in {"arm64", "aarch64"}:
+                    return False
+                if arch in {"x86_64", "amd64", "x64"}:
+                    return True
+    except Exception:
+        pass
+    parts = [part.lower() for part in path.parts]
+    if any(("arm64" in part or "aarch64" in part) for part in parts if part.startswith("ukf-")):
+        return False
+    if any(
+        part in {"ukf-windows-x64", "ukf-win-x64", "ukf-linux-x64", "ukf-linux", "ukf-win32"}
+        for part in parts
+    ):
+        return True
+    return False
+
+
+def _ukf_avx2_error(rejected_avx2):
+    lines = [
+        "Bundled standalone UKFTractography requires CPU AVX2 instructions, which this processor does not support. "
+        "Install the standard UKFTractography extension through Slicer Extension Manager or pass --ukf-executable "
+        "pointing to a non-AVX2 build."
+    ]
+    for path in rejected_avx2:
+        lines.append("  %s (requires AVX2)" % path)
+    return "\n".join(lines)
+
+
 def resolve_executable(explicit=None, name="UKFTractography"):
     candidate = explicit
     if not candidate and name == "UKFTractography":
@@ -231,6 +315,7 @@ def resolve_executable(explicit=None, name="UKFTractography"):
             return path
         raise FileNotFoundError(str(path))
     rejected = []
+    rejected_avx2 = []
 
     def usable(path):
         if name != "UKFTractography":
@@ -270,7 +355,12 @@ def resolve_executable(explicit=None, name="UKFTractography"):
             ):
                 for path in sorted(root.glob(pattern)):
                     if path.is_file() and path.name.lower() in standalone_names_lower:
-                        return path.resolve()
+                        resolved_standalone = path.resolve()
+                        if _standalone_requires_avx2(resolved_standalone) and _host_supports_avx2() is False:
+                            if str(resolved_standalone) not in [str(p) for p in rejected_avx2]:
+                                rejected_avx2.append(resolved_standalone)
+                            continue
+                        return resolved_standalone
     found = shutil.which(name)
     if found and usable(Path(found).resolve()):
         return Path(found).resolve()
@@ -292,6 +382,8 @@ def resolve_executable(explicit=None, name="UKFTractography"):
                     return path.resolve()
     if rejected:
         raise RuntimeError(_ukf_vtk_error(rejected))
+    if rejected_avx2:
+        raise RuntimeError(_ukf_avx2_error(rejected_avx2))
     raise RuntimeError(
         "Install UKFTractography and SlicerDMRI through Slicer Extension Manager, restart Slicer, "
         "and select UKF again. Headless users may pass --ukf-executable. Missing CLI: " + name

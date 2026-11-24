@@ -1156,6 +1156,11 @@ def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = 
                 if not fod_reused and idx == 4:
                     _write_fod_preparation_receipt(config, output_dir)
 
+            if not config.use_sift2:
+                # Never leave stale SIFT2 weights from an earlier SIFT2-enabled run beside a fresh tractogram.
+                tractogram.with_name(f"{tractogram.stem}_sift2_weights.txt").unlink(missing_ok=True)
+                sift2_mu_path(tractogram).unlink(missing_ok=True)
+
             if not disable_csd_accel and (parallel_mrtrix_commands or (config.export_trk and tractogram_trk is not None)):
                 def _run_parallel_mrtrix(cmd_tuple: tuple[str, ...]) -> int:
                     p_argv, p_env = _mrtrix_csd_invocation(cmd_tuple, command_env)

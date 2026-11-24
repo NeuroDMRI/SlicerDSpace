@@ -1063,33 +1063,14 @@ class FP64MicrostructureAndDTISimulationTests(unittest.TestCase):
 
     def test_dki_tdr_cap_and_auto_vs_cuda_oom(self) -> None:
         from microstructure import dki
-        from shared import hardware_adapt
 
-        dki_src = Path(dki.__file__).read_text(encoding="utf-8")
-        self.assertIn("fp64=True", dki_src)
-        self.assertIn("consumer_fp64_tdr_cap=2048", dki_src)
-        self.assertIn("cpu_fallback_fn=None if explicit_cuda else _dki_cpu_sub", dki_src)
-
-        # Verify real run_cuda_chunked_with_oom_fallback halving + auto fallback vs explicit raise
-        seen_chunks: list[int] = []
-
-        def flaky_dki_cuda(s: int, e: int):
-            seen_chunks.append(e - s)
-            raise RuntimeError("CUDA out of memory")
-
+        # Plain DIPY DKI is CPU-only (multi-worker CPU outperforms CUDA + transfer overhead);
+        # MK-Curve retains its separate CUDA path verified in test_mkcurve_tdr_cap_*.
         with simulated_gpu_environment(PROFILE_A_RTX4060_8G):
-            parts = hardware_adapt.run_cuda_chunked_with_oom_fallback(
-                1024, initial_chunk_size=1024, min_cuda_chunk_size=256,
-                cuda_fn=flaky_dki_cuda, cpu_fallback_fn=lambda s, e: ("cpu", s, e),
-            )
-            self.assertEqual(seen_chunks, [1024, 512, 256])
-            self.assertEqual(parts, [("cpu", 0, 1024)])
-
-            with self.assertRaisesRegex(RuntimeError, "out of memory"):
-                hardware_adapt.run_cuda_chunked_with_oom_fallback(
-                    1024, initial_chunk_size=1024, min_cuda_chunk_size=256,
-                    cuda_fn=flaky_dki_cuda, cpu_fallback_fn=None,
-                )
+            self.assertEqual(dki._resolve_dki_device("auto"), "cpu")
+            self.assertEqual(dki._resolve_dki_device("cuda"), "cpu")
+            self.assertEqual(dki._resolve_dki_device("cuda:0"), "cpu")
+            self.assertEqual(dki._resolve_dki_device("cpu"), "cpu")
 
     def test_mkcurve_tdr_cap_refinement_bound_and_auto_vs_cuda_oom(self) -> None:
         from microstructure import mkcurve, mkcurve_tensor
@@ -1126,13 +1107,8 @@ class FP64MicrostructureAndDTISimulationTests(unittest.TestCase):
                 )
 
     def test_dti_det_tdr_cap_and_auto_vs_cuda_oom(self) -> None:
-        import torch
         from dipy.core.gradients import gradient_table
         from tractography import dti
-
-        dti_src = Path(dti.__file__).read_text(encoding="utf-8")
-        self.assertIn("consumer_fp64_tdr_cap=4096", dti_src)
-        self.assertIn("eigh_sub = 2048 if (_os.name == \"nt\" and is_consumer_fp64_cuda_gpu(dev)) else 8192", dti_src)
 
         bvals = np.array([0, 1000, 1000, 1000, 1000, 1000, 1000], dtype=float)
         bvecs = np.array([
@@ -1151,26 +1127,20 @@ class FP64MicrostructureAndDTISimulationTests(unittest.TestCase):
 
         sphere = get_sphere(name="repulsion100")
         data_in_mask = data[mask]
-        fa_ref, _, _, _ = dti._fit_dti_fa_and_peaks(
+        fa_ref, _, _, resolved_cpu = dti._fit_dti_fa_and_peaks(
             data_in_mask, mask, gtab, sphere, fit_method="WLS", min_fa=0.1, max_angle_deg=35.0, device="cpu"
         )
+        self.assertEqual(resolved_cpu, "cpu")
 
-        with (
-            simulated_gpu_environment(PROFILE_A_RTX4060_8G),
-            patch.object(dti, "_resolve_dti_device", return_value="cuda:0"),
-            patch.object(torch, "as_tensor", side_effect=RuntimeError("CUDA out of memory")),
-        ):
-            fa_auto, tmask_auto, _, resolved = dti._fit_dti_fa_and_peaks(
-                data_in_mask, mask, gtab, sphere, fit_method="WLS", min_fa=0.1, max_angle_deg=35.0, device="auto"
-            )
-            self.assertEqual(resolved, "cpu")
-            np.testing.assert_allclose(fa_auto, fa_ref, rtol=1e-10, atol=1e-10)
-            self.assertTrue(tmask_auto.any())
-
-            with self.assertRaisesRegex(RuntimeError, "out of memory"):
-                dti._fit_dti_fa_and_peaks(
-                    data_in_mask, mask, gtab, sphere, fit_method="WLS", min_fa=0.1, max_angle_deg=35.0, device="cuda"
+        # Deterministic DTI tracking is CPU-only even when auto/cuda is passed.
+        with simulated_gpu_environment(PROFILE_A_RTX4060_8G):
+            for req in ("auto", "cuda", "cuda:0"):
+                fa_out, tmask_out, _, resolved = dti._fit_dti_fa_and_peaks(
+                    data_in_mask, mask, gtab, sphere, fit_method="WLS", min_fa=0.1, max_angle_deg=35.0, device=req
                 )
+                self.assertEqual(resolved, "cpu")
+                np.testing.assert_allclose(fa_out, fa_ref, rtol=1e-10, atol=1e-10)
+                self.assertTrue(tmask_out.any())
 
 
 if __name__ == "__main__":

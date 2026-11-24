@@ -396,6 +396,65 @@ def commit_predecoded_nifti_cache(
         return None
 
 
+def nifti_data_offset(image) -> int:
+    """Return the exact byte offset of the NIfTI voxel payload, preserving header extensions.
+
+    Nibabel moves ``vox_offset`` from ``image.header`` into ``image.dataobj.offset``
+    on load and resets ``header['vox_offset']`` to ``0``; reading only the header
+    misreads any file with header extensions (``vox_offset > 352``).
+    """
+
+    proxy = getattr(image, "dataobj", None)
+    offset = getattr(proxy, "offset", None)
+    if offset is not None:
+        return int(offset)
+    hdr = getattr(image, "header", None)
+    if hdr is not None and hasattr(hdr, "get_data_offset"):
+        raw = int(hdr.get_data_offset() or 0)
+        if raw > 0:
+            return raw
+    import nibabel as nib
+
+    if isinstance(image, nib.Nifti2Image):
+        return 544
+    return 352
+
+
+def nifti_scaling_params(image) -> tuple[float, float, bool]:
+    """Return ``(slope, inter, needs_scaling)`` matching ``nibabel``'s ``get_fdata()`` semantics.
+
+    Nibabel moves ``scl_slope`` and ``scl_inter`` from ``image.header`` into
+    ``image.dataobj`` on load and resets the header fields to ``NaN``; reading only
+    the header silently drops intensity scaling.
+    """
+
+    import math
+
+    proxy = getattr(image, "dataobj", None)
+    slope = getattr(proxy, "slope", None)
+    inter = getattr(proxy, "inter", None)
+    if slope is None and inter is None:
+        hdr = getattr(image, "header", None)
+        if hdr is not None and hasattr(hdr, "get_slope_inter"):
+            slope, inter = hdr.get_slope_inter()
+    if slope is None:
+        return 1.0, 0.0, False
+    try:
+        slope_f = float(slope)
+    except (TypeError, ValueError):
+        return 1.0, 0.0, False
+    if not math.isfinite(slope_f) or slope_f == 0.0:
+        return 1.0, 0.0, False
+    try:
+        inter_f = 0.0 if inter is None else float(inter)
+    except (TypeError, ValueError):
+        inter_f = 0.0
+    if not math.isfinite(inter_f):
+        inter_f = 0.0
+    needs = (slope_f != 1.0) or (inter_f != 0.0)
+    return slope_f, inter_f, needs
+
+
 def ensure_cached_uncompressed_nifti(path: Path) -> Optional[Path]:
     """Return an existing verified cached ``.nii`` or create one once for large stage inputs."""
 
@@ -414,7 +473,7 @@ def ensure_cached_uncompressed_nifti(path: Path) -> Optional[Path]:
         import numpy as np
 
         image = nib.load(str(source), mmap="r", keep_file_open=False)
-        offset = int(getattr(image.dataobj, "offset", 0) or image.header.get_data_offset())
+        offset = nifti_data_offset(image)
         expected_bytes = int(np.prod(image.shape, dtype=np.int64)) * int(image.header.get_data_dtype().itemsize) + offset
         cache_dir, _, _ = targets
         if expected_bytes <= 0 or not _has_cache_disk_budget(cache_dir.parent, expected_bytes):

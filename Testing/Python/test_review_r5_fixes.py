@@ -771,5 +771,25 @@ class UkfGpuSlotAndWddmTelemetryTests(unittest.TestCase):
         self.assertIsNone(sample_fail["owned_vram_mib"])
 
 
+class FreeWaterDeviceAttrTests(unittest.TestCase):
+    """Regression: MicrostructureConfig exposes free_water_device, not device."""
+
+    def test_free_water_uses_free_water_device_attribute(self) -> None:
+        from microstructure import pipeline as mp
+
+        cfg = mp.MicrostructureConfig(
+            subject_id="sub-01",
+            raw_input_bundle=SimpleNamespace(),
+            native_bundle=SimpleNamespace(),
+            output_dir=Path("/tmp/sub-01"),
+            free_water_device="cuda",
+        )
+        self.assertFalse(hasattr(cfg, "device"))
+        self.assertEqual(cfg.free_water_device, "cuda")
+        src = Path(mp.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("config.device", src)
+        self.assertIn('getattr(config, "free_water_device", "auto")', src)
+
+
 if __name__ == "__main__":
     unittest.main()

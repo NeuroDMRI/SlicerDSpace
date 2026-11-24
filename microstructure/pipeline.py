@@ -1283,7 +1283,7 @@ def _compute_free_water_maps_impl(
         data_chunk = np.asarray(dwi_img.dataobj[:, :, z_start:z_stop, :], dtype=np.float32)
         voxel_signals = data_chunk.reshape(-1, gradient_count)[mask_chunk.reshape(-1)]
         if use_batch_wls:
-            fw_req_raw = str(config.device or "auto").strip().lower()
+            fw_req_raw = str(getattr(config, "free_water_device", "auto") or "auto").strip().lower()
             fw_explicit_cuda = fw_req_raw == "cuda" or fw_req_raw.startswith("cuda:")
             fit, _ = wls_batch_fit(fw_model, voxel_signals, device=resolved_fw_device, explicit_cuda=fw_explicit_cuda)
         else:

@@ -624,9 +624,9 @@ async function runStartRoutes(browser, origin) {
         !document.getElementById('skills') &&
         !document.getElementById('demonstrations') &&
         manual.querySelector('.start-route-marker')?.textContent === 'A' &&
-        manual.querySelector('.start-route-text')?.textContent.trim() === 'Graphical setup and execution' &&
+        manual.querySelector('.start-route-text')?.textContent.trim() === 'Setup and execution' &&
         cli.querySelector('.start-route-marker')?.textContent === 'B' &&
-        cli.querySelector('.start-route-text')?.textContent.trim() === 'Command-line execution and cohort processing' &&
+        cli.querySelector('.start-route-text')?.textContent.trim() === 'Command-line setup and execution' &&
         manual.getBoundingClientRect().top < cli.getBoundingClientRect().top;
     });
     record(routeCheck && await page.locator('.start-recommended').count() === 0,
@@ -716,7 +716,8 @@ async function runLanguages(browser, origin) {
       `language ${width}px: Chinese link keeps the current section under a project base path`);
     record(await page.locator('.lang-btn.is-active').getAttribute('data-lang') === 'zh' &&
         await page.locator('#top .btn-primary').innerText() === '观看宣传片' &&
-        await page.locator('#cli-title .start-route-text').innerText() === '命令行运行与队列批处理' &&
+        await page.locator('#manual-title .start-route-text').innerText() === '安装与运行' &&
+        await page.locator('#cli-title .start-route-text').innerText() === '命令行安装与运行' &&
         await page.locator('.start-recommended').count() === 0 &&
         await page.locator('#guide-bot, .guide-bot, .guide-bot__launcher').count() === 0,
       `language ${width}px: capsule, homepage and routes use Chinese without guide bot`);
@@ -733,10 +734,11 @@ async function runLanguages(browser, origin) {
     record(header.fits && header.separate && header.centered && header.radius >= 999 && !header.overflow,
       `language ${width}px: capsule stays at the right without moving or covering navigation`, JSON.stringify(header));
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
-    await page.locator('#cli [data-code]').first().locator('.copy').click();
+    const cliDoctorBlock = page.locator('#cli [data-code]', { hasText: '--doctor' }).first();
+    await cliDoctorBlock.locator('.copy').click();
     await page.waitForTimeout(80);
     const copied = (await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n');
-    const expected = (await page.locator('#cli [data-code] code').first().textContent()).replace(/\r\n/g, '\n');
+    const expected = (await cliDoctorBlock.locator('code').textContent()).replace(/\r\n/g, '\n');
     record(copied === expected && copied.includes('--doctor'),
       `language ${width}px: copy preserves literal CLI command`);
     await page.goto(origin + '/SlicerDSpace/zh.html#performance', { waitUntil: 'load' });
@@ -797,7 +799,8 @@ async function runLanguages(browser, origin) {
   await page.locator('.lang-btn[data-lang="zh"]').click();
   await page.waitForURL(url => url.pathname.endsWith('/zh.html'));
   record(await page.locator('html').getAttribute('lang') === 'zh-CN' &&
-      await page.locator('#cli-title .start-route-text').innerText() === '命令行运行与队列批处理' &&
+      await page.locator('#manual-title .start-route-text').innerText() === '安装与运行' &&
+      await page.locator('#cli-title .start-route-text').innerText() === '命令行安装与运行' &&
       await page.locator('.start-recommended').count() === 0 &&
       await page.locator('#integrated tr[data-method]').count() === 30,
     'language no JS: Chinese content, commands and all methods are available without scripting');

@@ -298,6 +298,143 @@ class MKCurvePerfAndRamSafetyTests(unittest.TestCase):
             if thread_init_args:
                 self.assertEqual(thread_init_args, [None])
 
+    def test_mkcurve_fit_fast_matches_reference_and_falls_back_on_ill_conditioned(self) -> None:
+        from microstructure import mkcurve_tensor as tensor
+        from Testing.Python.test_microstructure_dki import synthetic_case
+
+        case = synthetic_case(noisy=True)
+        design = tensor.design_matrix(case["bvals"], case["bvecs"])
+        signals = case["data"].reshape(-1, len(design))
+        fitter = tensor._SyntheticB0Fitter(signals, design, solver="reference")
+        b0 = signals[:, 0].copy()
+
+        ref = fitter.fit(b0)
+        fast = fitter.fit_fast(b0)
+        np.testing.assert_allclose(fast, ref, rtol=1e-8, atol=1e-10)
+
+        # Subset mask only fits selected rows and leaves unselected rows NaN.
+        row_mask = np.zeros(len(signals), dtype=bool)
+        row_mask[::2] = True
+        fast_sub = fitter.fit_fast(b0, row_mask=row_mask)
+        np.testing.assert_allclose(fast_sub[row_mask], ref[row_mask], rtol=1e-8, atol=1e-10)
+        self.assertTrue(np.isnan(fast_sub[~row_mask]).all())
+
+        # Forced Cholesky LinAlgError falls back cleanly to exact eigvalsh conditioning check.
+        with patch("microstructure.mkcurve_tensor.np.linalg.cholesky", side_effect=np.linalg.LinAlgError("not SPD")):
+            fb_eig = fitter.fit_fast(b0)
+        np.testing.assert_allclose(fb_eig, ref, rtol=1e-8, atol=1e-10)
+
+        # Ill-conditioned rows (rejected by _spd_cond_ok) fall back cleanly to bit-exact pivoted QR reference.
+        with patch("microstructure.mkcurve_tensor._spd_cond_ok", side_effect=lambda gram, **kw: np.zeros(len(gram), dtype=bool)):
+            fb_qr = fitter.fit_fast(b0)
+        np.testing.assert_array_equal(fb_qr, ref)
+
+    def test_mkcurve_ols_initial_is_thread_safe_under_concurrent_dormqr(self) -> None:
+        import concurrent.futures
+        from microstructure import mkcurve_tensor as tensor
+        from Testing.Python.test_microstructure_dki import synthetic_case
+
+        case = synthetic_case(noisy=True)
+        design = tensor.design_matrix(case["bvals"], case["bvecs"])
+        _, scaled = tensor._prepared_design(design)
+        scaled_c = np.ascontiguousarray(scaled, dtype=np.float64)
+        rng = np.random.default_rng(2026)
+        batches = [rng.normal(5.0, 0.4, size=(128, len(design))) for _ in range(48)]
+        ref = [tensor._ols_initial(scaled_c, b.copy()) for b in batches]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+            par1 = list(ex.map(lambda b: tensor._ols_initial(scaled_c, b.copy()), batches))
+            par2 = list(ex.map(lambda b: tensor._ols_initial(scaled_c, b.copy()), batches))
+        for r, p1, p2 in zip(ref, par1, par2):
+            np.testing.assert_array_equal(p1, r)
+            np.testing.assert_array_equal(p2, r)
+
+    def test_mkcurve_streaming_prepare_masked_signals_bit_exact(self) -> None:
+        from microstructure.mkcurve import repair_nonpositive
+        from microstructure.mkcurve_inputs import _prepare_inputs, _prepare_masked_signals
+        from Testing.Python.test_microstructure_dki import synthetic_case, write_case
+
+        case = synthetic_case(noisy=True)
+        # Inject nonpositive & NaN values to exercise sequential 26-neighbor repair parity.
+        case["data"][1, 1, 1, 0] = 0.0
+        case["data"][0, 1, 1, 5] = -3.0
+        case["data"][1, 0, 1, 7] = np.nan
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            paths = write_case(root, case)
+            inputs = [paths[k] for k in ("dwi", "bval", "bvec", "mask")]
+
+            # Reference two-step path
+            ref_dir = root / "ref"
+            ref_dir.mkdir()
+            prepared, _, _ = _prepare_inputs(*inputs, ref_dir, 50.0, 3000.0, allow_nonfinite=True)
+            img = nib.load(str(prepared[0]), mmap="c")
+            data = img.dataobj.get_unscaled()
+            mask = nib.load(str(prepared[3])).get_fdata() > 0
+            rep_ref = repair_nonpositive(data, mask)
+            coords_ref = np.unravel_index(np.flatnonzero(mask.ravel(order="F")), mask.shape, order="F")
+            ref_masked = np.column_stack([data[..., v][coords_ref] for v in range(data.shape[-1])])
+            if isinstance(data, np.memmap):
+                data._mmap.close()
+            for holder in img.file_map.values():
+                if getattr(holder, "fileobj", None) is not None:
+                    holder.fileobj.close()
+
+            # Streaming single-pass path
+            str_dir = root / "stream"
+            str_dir.mkdir()
+            masked, mask_s, coords_s, bvals_s, bvecs_s, _, _, rep_s = _prepare_masked_signals(
+                *inputs, str_dir, 50.0, 3000.0, allow_nonfinite=True
+            )
+            try:
+                np.testing.assert_array_equal(np.asarray(masked), ref_masked)
+                self.assertEqual(rep_s["repaired_measurements"], rep_ref["repaired_measurements"])
+                self.assertEqual(rep_s["unresolved_measurements"], rep_ref["unresolved_measurements"])
+                np.testing.assert_array_equal(mask_s, mask)
+            finally:
+                masked._mmap.close()
+
+    def test_mkcurve_large_grid_uses_thread_pool_on_macos_windows_and_matches_reference(self) -> None:
+        import concurrent.futures
+        from microstructure.mkcurve import run_mkcurve
+        from Testing.Python.test_microstructure_dki import synthetic_case, write_case
+
+        case = synthetic_case(noisy=True)
+        grid64 = np.linspace(100.0, 2100.0, 64)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            paths = write_case(root, case)
+            inputs = [paths[k] for k in ("dwi", "bval", "bvec", "mask")]
+            seen_threads: list[int] = []
+            real_tp = concurrent.futures.ThreadPoolExecutor
+
+            def spy_tp(*, max_workers, initializer=None, initargs=()):
+                seen_threads.append(int(max_workers))
+                return real_tp(max_workers=int(max_workers))
+
+            fake_main = types.SimpleNamespace(__file__=__file__)
+            with (
+                patch.dict(os.environ, {}, clear=False),
+                patch.dict(sys.modules, {"__main__": fake_main}),
+                patch("sys.platform", "darwin"),
+                patch("shared.hardware_adapt.host_total_ram_gib", return_value=16.0),
+                patch("concurrent.futures.ProcessPoolExecutor", side_effect=AssertionError("should use ThreadPool for len(grid)>=64 on darwin")),
+                patch("concurrent.futures.ThreadPoolExecutor", side_effect=spy_tp),
+            ):
+                os.environ.pop("SLICERDSPACE_STAGE_CPUS", None)
+                rec_fast = run_mkcurve(*inputs, root / "fast", grid=grid64, num_workers=6, worker_threads=1)
+            self.assertEqual(seen_threads, [6])
+            self.assertEqual(rec_fast["settings"]["effective_workers"], 6)
+
+            # Verify numerical parity against serial single-worker run on the same 64-point grid.
+            rec_ser = run_mkcurve(*inputs, root / "ser", grid=grid64, num_workers=1, worker_threads=1)
+            for key in ("corrected_mk", "corrected_fa", "corrected_md", "corrected_ak", "corrected_rk"):
+                np.testing.assert_allclose(
+                    nib.load(rec_fast["maps"][key]).get_fdata(),
+                    nib.load(rec_ser["maps"][key]).get_fdata(),
+                    rtol=1e-7,
+                    atol=1e-7,
+                )
+
     def test_macos_csd_slab_transpose_bit_exact_and_skips_mrtrix_strides_only_on_darwin(self) -> None:
         from tractography.csd import _optimize_dwi_mif_volume_strides_in_ram
 

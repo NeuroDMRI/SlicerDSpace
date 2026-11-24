@@ -85,7 +85,9 @@ def _ols_initial(scaled, logs):
     if factorization is None:
         return lstsq(scaled, logs.T, lapack_driver="gelsy")[0]
     qr, jpvt, tau, r_upper = factorization
-    qtb, _, info = dormqr("L", "T", qr, tau, np.asfortranarray(logs.T), sub_lwork)
+    # Fortran LAPACK dormqr temporarily mutates the diagonal of A in-place during reflector
+    # application even when qr.flags.writeable is False; copy per call for thread safety.
+    qtb, _, info = dormqr("L", "T", qr.copy(order="F"), tau, np.asfortranarray(logs.T), sub_lwork)
     if info != 0:
         return lstsq(scaled, logs.T, lapack_driver="gelsy")[0]
     solved = dtrsm(1.0, r_upper, qtb[:columns], side=0, lower=0, trans_a=0, diag=0)
@@ -289,6 +291,37 @@ def _cached_grid_operator(scaled_shape, scaled_bytes, grid_shape, grid_bytes):
             X0, X0_is_e0, X0_full, a0_sq_nodes, U_R_full, a0_sq_full, log_grid)
 
 
+_EYE_22 = np.eye(22, dtype=np.float64)
+_EYE_22.setflags(write=False)
+
+
+def _spd_cond_ok(gram, max_cond=1e6):
+    """Exact ``(eig_min > 0) & (eig_max < max_cond * eig_min)`` via Frobenius upper bound + eigvalsh fallback.
+
+    For any SPD matrix ``G = L L^T``, ``cond_2(G) <= ||L||_F^2 * ||L^{-1}||_F^2 = tr(G) * ||L^{-1}||_F^2``.
+    Rows certified below ``max_cond`` by this guaranteed upper bound skip ``eigvalsh``; any non-SPD or
+    borderline rows are verified with exact ``np.linalg.eigvalsh`` so no ill-conditioned system ever slips through.
+    """
+    n = len(gram)
+    if not n:
+        return np.zeros(0, dtype=bool)
+    p = gram.shape[-1]
+    eye = _EYE_22 if p == 22 else np.eye(p, dtype=np.float64)
+    try:
+        L = np.linalg.cholesky(gram)
+        Linv = np.linalg.solve(L, np.broadcast_to(eye, gram.shape))
+        cond_ub = np.einsum("ijj->i", gram) * np.sum(Linv * Linv, axis=(-2, -1))
+        ok = np.isfinite(cond_ub) & (cond_ub < max_cond)
+        borderline = np.flatnonzero(~ok)
+        if len(borderline):
+            eig = np.linalg.eigvalsh(gram[borderline])
+            ok[borderline] = (eig[:, 0] > 0) & (eig[:, -1] < max_cond * eig[:, 0])
+        return ok
+    except np.linalg.LinAlgError:
+        eig = np.linalg.eigvalsh(gram)
+        return (eig[:, 0] > 0) & (eig[:, -1] < max_cond * eig[:, 0])
+
+
 class _SyntheticB0Fitter:
     """Chunk-local invariant logs; every b0 still gets its original WLLS solve."""
 
@@ -325,6 +358,66 @@ class _SyntheticB0Fitter:
             logs = self.logs[valid]
             logs[:, 0] = np.log(np.maximum(baseline[valid], np.finfo(float).eps))
         return _fit_logged_signals(logs, indices, self.count, *self.prepared, self.solver)
+
+    def fit_fast(self, b0, *, row_mask=None):
+        """Batched Cholesky normal-equation WLLS with exact pivoted-QR fallback on ill-conditioned voxels.
+
+        Mirrors ``_CudaSyntheticB0Fitter.fit`` on CPU: well-conditioned SPD normal systems solve in a
+        single BLAS/LAPACK batch while any non-SPD, poorly conditioned, or non-finite voxel falls back
+        to ``_fit_logged_signals`` (pivoted QR ``dgelsy``).
+        """
+        b0 = np.asarray(b0, dtype=np.float64)
+        if b0.shape != (self.count,):
+            raise ValueError("Synthetic b0 must have one value per voxel")
+        if self.prepared is None or not len(self.indices):
+            return np.full((self.count, 22), np.nan)
+        scale, scaled = self.prepared
+        baseline = b0[self.indices]
+        valid = np.isfinite(baseline)
+        if row_mask is not None:
+            valid = valid & np.asarray(row_mask, dtype=bool)[self.indices]
+        if not np.any(valid):
+            return np.full((self.count, 22), np.nan)
+        if valid.all():
+            act_indices = self.indices
+            logs = self._work_logs
+            logs[:, 0] = np.log(np.maximum(baseline, np.finfo(float).eps))
+        else:
+            act_indices = self.indices[valid]
+            logs = self.logs[valid]
+            logs[:, 0] = np.log(np.maximum(baseline[valid], np.finfo(float).eps))
+        n = len(logs)
+        output = np.full((self.count, 22), np.nan)
+        initial = _ols_initial(scaled, logs)
+        with np.errstate(over="ignore", invalid="ignore"):
+            weights = np.exp(scaled @ initial).T
+        w_max = weights.max(axis=1)
+        cand = np.isfinite(weights).all(axis=1) & (w_max > 0)
+        solved = np.zeros(n, dtype=bool)
+        if np.any(cand):
+            c_ids = np.flatnonzero(cand)
+            w = weights[c_ids] / w_max[c_ids, None]
+            weighted = scaled[None, :, :] * w[:, :, None]
+            gram = np.matmul(weighted.transpose(0, 2, 1), weighted)
+            safe = _spd_cond_ok(gram, max_cond=1e6)
+            if np.any(safe):
+                s_rel = np.flatnonzero(safe)
+                s_ids = c_ids[s_rel]
+                rhs = np.matmul(weighted[s_rel].transpose(0, 2, 1), (logs[s_ids] * w[s_rel])[:, :, None])
+                try:
+                    beta = np.linalg.solve(gram[s_rel], rhs)[:, :, 0] / scale
+                    good = np.isfinite(beta).all(axis=1)
+                    if np.any(good):
+                        acc = s_ids[good]
+                        output[act_indices[acc]] = beta[good]
+                        solved[acc] = True
+                except np.linalg.LinAlgError:
+                    pass
+        if not np.all(solved):
+            rem = np.flatnonzero(~solved)
+            fb = _fit_logged_signals(logs[rem], np.arange(len(rem)), len(rem), scale, scaled, self.solver)
+            output[act_indices[rem]] = fb
+        return output
 
     def fit_grid(self, grid):
         grid = np.ascontiguousarray(grid, dtype=np.float64)
@@ -368,10 +461,7 @@ class _SyntheticB0Fitter:
         safe = np.zeros(N, dtype=bool)
         if np.any(finite_w):
             fw_ids = np.flatnonzero(finite_w)
-            eig0 = np.linalg.eigvalsh(G_nodes[0, fw_ids])
-            eig1 = np.linalg.eigvalsh(G_nodes[-1, fw_ids])
-            ok = ((eig0[:, 0] > 0) & (eig0[:, -1] < 1e6 * eig0[:, 0])
-                  & (eig1[:, 0] > 0) & (eig1[:, -1] < 1e6 * eig1[:, 0]))
+            ok = _spd_cond_ok(G_nodes[0, fw_ids], max_cond=1e6) & _spd_cond_ok(G_nodes[-1, fw_ids], max_cond=1e6)
             safe[fw_ids[ok]] = True
         if np.any(safe):
             s_ids = np.flatnonzero(safe)
@@ -380,10 +470,11 @@ class _SyntheticB0Fitter:
             C_cheb = T_nodes_inv @ beta_nodes.reshape(K, -1)
             cheb_tail = np.max(np.abs(C_cheb[-2:].reshape(2, n_s, P)), axis=(0, 2))
             beta_all = (T_grid @ C_cheb).reshape(S, n_s, P)
+            beta_t = np.ascontiguousarray(beta_all.transpose(1, 0, 2))
             curves_safe = np.empty((S, n_s), dtype=np.float64)
-            for v0 in range(0, n_s, 16):
-                v1 = min(v0 + 16, n_s)
-                curves_safe[:, v0:v1] = mean_kurtosis(beta_all[:, v0:v1, :].reshape(-1, P)).reshape(S, v1 - v0)
+            for v0 in range(0, n_s, 2):
+                v1 = min(v0 + 2, n_s)
+                curves_safe[:, v0:v1] = mean_kurtosis(beta_t[v0:v1].reshape(-1, P)).reshape(v1 - v0, S).T
             near_thresh = np.any((np.abs(curves_safe) < 1e-3) | (np.abs(curves_safe - 5.0) < 1e-3), axis=0)
             c_masked = np.where((curves_safe < 0) | (curves_safe > 5.0) | ~np.isfinite(curves_safe), -1.0, curves_safe)
             rev_idx = np.argmax(c_masked[::-1] < 0, axis=0) + 1
@@ -409,7 +500,10 @@ class _SyntheticB0Fitter:
                 else:
                     B_sub += (W2_0_full.T * log_grid[:, None])[:, :, None] * X0[None, None, :]
                 betas_sub = np.linalg.solve(G_sub, B_sub[:, :, :, None])[:, :, :, 0] / scale
-                curves_safe[:, ref_rel] = mean_kurtosis(betas_sub.reshape(-1, P)).reshape(S, n_ref)
+                betas_sub_t = np.ascontiguousarray(betas_sub.transpose(1, 0, 2))
+                for r0 in range(0, n_ref, 4):
+                    r1 = min(r0 + 4, n_ref)
+                    curves_safe[:, ref_rel[r0:r1]] = mean_kurtosis(betas_sub_t[r0:r1].reshape(-1, P)).reshape(r1 - r0, S).T
             curves[:, self.indices[s_ids]] = curves_safe
         if not np.all(safe):
             u_ids = np.flatnonzero(~safe)
@@ -424,11 +518,15 @@ class _SyntheticB0Fitter:
 
 def mean_kurtosis(coefficients):
     diffusion_basis, kurtosis_basis = _integration_bases()
-    adc = coefficients[:, 1:7] @ diffusion_basis
-    fourth = coefficients[:, 7:22] @ kurtosis_basis
+    c_d = np.ascontiguousarray(coefficients[:, 1:7], dtype=np.float64)
+    c_k = np.ascontiguousarray(coefficients[:, 7:22], dtype=np.float64)
+    adc = c_d @ diffusion_basis
+    fourth = c_k @ kurtosis_basis
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        result = np.mean(fourth / adc ** 2, axis=1)
-        md_squared = np.mean(coefficients[:, [1, 4, 6]], axis=1) ** 2
+        np.square(adc, out=adc)
+        np.divide(fourth, adc, out=fourth)
+        result = fourth.mean(axis=1)
+        md_squared = ((c_d[:, 0] + c_d[:, 3] + c_d[:, 5]) * (1.0 / 3.0)) ** 2
     # Upstream W is normalized by MD^2: the algebraic cancellation is not
     # defined at zero MD, even if a direct numerator/ADC computation is finite.
     result[(md_squared == 0) | ~np.isfinite(md_squared)] = np.nan
@@ -485,21 +583,69 @@ def parameter_maps(coefficients):
     if np.any(valid_rot):
         vx_v, vy_v, s2_v, c_v = vx[valid_rot], vy[valid_rot], s2[valid_rot], c[valid_rot]
         factor = (1.0 - c_v) / s2_v
-        cross = np.zeros((len(vx_v), 3, 3), dtype=np.float64)
-        cross[:, 0, 2] = vy_v
-        cross[:, 1, 2] = -vx_v
-        cross[:, 2, 0] = -vy_v
-        cross[:, 2, 1] = vx_v
-        rotations[valid_rot] = np.eye(3)[None, :, :] + cross + (cross @ cross) * factor[:, None, None]
+        rotations[valid_rot, 0, 0] = 1.0 - vy_v * vy_v * factor
+        rotations[valid_rot, 0, 1] = vx_v * vy_v * factor
+        rotations[valid_rot, 0, 2] = vy_v
+        rotations[valid_rot, 1, 0] = vx_v * vy_v * factor
+        rotations[valid_rot, 1, 1] = 1.0 - vx_v * vx_v * factor
+        rotations[valid_rot, 1, 2] = -vx_v
+        rotations[valid_rot, 2, 0] = -vy_v
+        rotations[valid_rot, 2, 1] = vx_v
+        rotations[valid_rot, 2, 2] = 1.0 - (vx_v * vx_v + vy_v * vy_v) * factor
     radial = np.matmul(equator[None, :, :], np.swapaxes(rotations, -1, -2))
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        b4_dir = tensor_basis(nz_dirs, 4)
-        ak = np.sum(b4_dir * nz_betas[:, 7:22], axis=1) / (nz_e1 ** 2)
-        b4_rad = tensor_basis(radial, 4)
-        b2_rad = tensor_basis(radial, 2)
-        num_rk = np.einsum("kqd,kd->kq", b4_rad, nz_betas[:, 7:22])
-        den_rk = np.einsum("kqd,kd->kq", b2_rad, nz_betas[:, 1:7]) ** 2
-        rk = np.mean(num_rk / den_rk, axis=1)
+        dx, dy, dz = nz_dirs[:, 0], nz_dirs[:, 1], nz_dirs[:, 2]
+        dx2, dy2, dz2 = dx * dx, dy * dy, dz * dz
+        b = nz_betas
+        ak_num = (
+            dx2 * dx2 * b[:, 7]
+            + 4.0 * dx2 * dx * dy * b[:, 8]
+            + 4.0 * dx2 * dx * dz * b[:, 9]
+            + 6.0 * dx2 * dy2 * b[:, 10]
+            + 12.0 * dx2 * dy * dz * b[:, 11]
+            + 6.0 * dx2 * dz2 * b[:, 12]
+            + 4.0 * dx * dy2 * dy * b[:, 13]
+            + 12.0 * dx * dy2 * dz * b[:, 14]
+            + 12.0 * dx * dy * dz2 * b[:, 15]
+            + 4.0 * dx * dz2 * dz * b[:, 16]
+            + dy2 * dy2 * b[:, 17]
+            + 4.0 * dy2 * dy * dz * b[:, 18]
+            + 6.0 * dy2 * dz2 * b[:, 19]
+            + 4.0 * dy * dz2 * dz * b[:, 20]
+            + dz2 * dz2 * b[:, 21]
+        )
+        ak = ak_num / (nz_e1 * nz_e1)
+
+        rx, ry, rz = radial[:, :, 0], radial[:, :, 1], radial[:, :, 2]
+        rx2, ry2, rz2 = rx * rx, ry * ry, rz * rz
+        den_rk = (
+            rx2 * b[:, 1:2]
+            + 2.0 * rx * ry * b[:, 2:3]
+            + 2.0 * rx * rz * b[:, 3:4]
+            + ry2 * b[:, 4:5]
+            + 2.0 * ry * rz * b[:, 5:6]
+            + rz2 * b[:, 6:7]
+        )
+        np.square(den_rk, out=den_rk)
+        num_rk = (
+            rx2 * rx2 * b[:, 7:8]
+            + 4.0 * rx2 * rx * ry * b[:, 8:9]
+            + 4.0 * rx2 * rx * rz * b[:, 9:10]
+            + 6.0 * rx2 * ry2 * b[:, 10:11]
+            + 12.0 * rx2 * ry * rz * b[:, 11:12]
+            + 6.0 * rx2 * rz2 * b[:, 12:13]
+            + 4.0 * rx * ry2 * ry * b[:, 13:14]
+            + 12.0 * rx * ry2 * rz * b[:, 14:15]
+            + 12.0 * rx * ry * rz2 * b[:, 15:16]
+            + 4.0 * rx * rz2 * rz * b[:, 16:17]
+            + ry2 * ry2 * b[:, 17:18]
+            + 4.0 * ry2 * ry * rz * b[:, 18:19]
+            + 6.0 * ry2 * rz2 * b[:, 19:20]
+            + 4.0 * ry * rz2 * rz * b[:, 20:21]
+            + rz2 * rz2 * b[:, 21:22]
+        )
+        np.divide(num_rk, den_rk, out=num_rk)
+        rk = num_rk.mean(axis=1)
     maps["ak"][nz_indices] = ak
     maps["rk"][nz_indices] = rk
     return maps

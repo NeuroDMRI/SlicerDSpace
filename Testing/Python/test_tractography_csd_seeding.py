@@ -151,6 +151,9 @@ class TckgenSeedingTest(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     run_csd_act(config)
             for call in mock_run.call_args_list:
+                argv = call.args[0] if call.args else ()
+                if isinstance(argv, (list, tuple)) and argv and Path(str(argv[0])).name.lower() in {"sysctl", "file", "lipo", "sw_vers", "uname"}:
+                    continue
                 self.assertNotIn("MRTRIX_RNG_SEED", call.kwargs["env"])
                 self.assertEqual(call.kwargs['cwd'], config.output_dir.resolve())
 

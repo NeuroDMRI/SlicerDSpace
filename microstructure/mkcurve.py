@@ -133,41 +133,73 @@ def _fit_chunk(payload, *, reuse_signal_logs=None):
     if reuse_signal_logs:
         from microstructure.mkcurve_tensor import _SyntheticB0Fitter
         fitter = _SyntheticB0Fitter(signals, design, solver=solver)
-    original = fitter.fit(b0) if fitter else fit_wlls(signals, design, solver=solver)
     if fitter is not None and len(grid) >= 64:
+        original = fitter.fit_fast(b0)
         curves = fitter.fit_grid(grid)
         detection = detect_abnormal(curves, b0, grid, threshold)
         pos_max = detection["curve_valid_mask"] & (detection["max_mk"] > 0)
         if np.any(pos_max):
-            mk_at_max = mean_kurtosis(fitter.fit(detection["max_mk_b0"]))
+            mk_at_max = mean_kurtosis(fitter.fit_fast(detection["max_mk_b0"], row_mask=pos_max))
             detection["max_mk"][pos_max] = np.clip(mk_at_max[pos_max], 0.0, None)
+        abnormal = detection["abnormal_mask"]
+        corrected = original.copy()
+        if np.any(abnormal):
+            corrected[abnormal] = fitter.fit_fast(detection["corrected_b0"], row_mask=abnormal)[abnormal]
     else:
+        original = fitter.fit(b0) if fitter else fit_wlls(signals, design, solver=solver)
         curves = np.empty((len(grid), len(signals)))
         for step, value in enumerate(grid):
             signals[:, 0] = value
             coefficients = fitter.fit(signals[:, 0]) if fitter else fit_wlls(signals, design, solver=solver)
             curves[step] = mean_kurtosis(coefficients)
         detection = detect_abnormal(curves, b0, grid, threshold)
-    signals[:, 0] = detection["corrected_b0"]
-    corrected = fitter.fit(signals[:, 0]) if fitter else fit_wlls(signals, design, solver=solver)
-    for kind, coefficients in (("original", original), ("corrected", corrected)):
-        maps = parameter_maps(coefficients)
-        valid = np.isfinite(coefficients).all(axis=1)
-        for key, values in maps.items():
-            lower, upper = (0, 1) if key == "fa" else ((0, 3) if key in {"mk", "ak", "rk"} else (0, .005))
-            valid &= np.isfinite(values) & (values >= lower) & (values <= upper)
-            detection[f"{kind}_{key}"] = values
-        observed = signals.copy()
-        if kind == "original":
-            observed[:, 0] = b0
-        with np.errstate(over="ignore", invalid="ignore"):
-            predicted = np.exp(coefficients @ design.T)
-            detection[f"{kind}_nrmse"] = np.sqrt(np.mean((predicted - observed) ** 2, axis=1)) / np.exp(coefficients[:, 0])
-        valid &= detection["curve_valid_mask"] & np.isfinite(detection[f"{kind}_nrmse"])
-        detection[f"{kind}_valid_mask"] = valid
-        for key, mask in metric_validity(maps, np.isfinite(coefficients).all(axis=1),
-                                        detection["curve_valid_mask"], detection[f"{kind}_nrmse"]).items():
-            detection[f"{kind}_{key}_valid_mask"] = mask
+        signals[:, 0] = detection["corrected_b0"]
+        corrected = fitter.fit(signals[:, 0]) if fitter else fit_wlls(signals, design, solver=solver)
+
+    orig_maps = parameter_maps(original)
+    orig_finite = np.isfinite(original).all(axis=1)
+    orig_valid = orig_finite.copy()
+    for key, values in orig_maps.items():
+        lower, upper = (0, 1) if key == "fa" else ((0, 3) if key in {"mk", "ak", "rk"} else (0, .005))
+        orig_valid &= np.isfinite(values) & (values >= lower) & (values <= upper)
+        detection[f"original_{key}"] = values
+    orig_observed = signals.copy()
+    orig_observed[:, 0] = b0
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        predicted = np.exp(original @ design.T)
+        detection["original_nrmse"] = np.sqrt(np.mean((predicted - orig_observed) ** 2, axis=1)) / np.exp(original[:, 0])
+    orig_valid &= detection["curve_valid_mask"] & np.isfinite(detection["original_nrmse"])
+    detection["original_valid_mask"] = orig_valid
+    for key, mask in metric_validity(orig_maps, orig_finite,
+                                    detection["curve_valid_mask"], detection["original_nrmse"]).items():
+        detection[f"original_{key}_valid_mask"] = mask
+
+    # Unchanged (~abnormal) voxels share exact coefficients and b0 with original, so reuse their maps/NRMSE.
+    abnormal = detection["abnormal_mask"]
+    corr_maps = {key: values.copy() for key, values in orig_maps.items()}
+    corr_nrmse = detection["original_nrmse"].copy()
+    if np.any(abnormal):
+        ab_idx = np.flatnonzero(abnormal)
+        ab_maps = parameter_maps(corrected[ab_idx])
+        for key, values in ab_maps.items():
+            corr_maps[key][ab_idx] = values
+        ab_observed = signals[ab_idx].copy()
+        ab_observed[:, 0] = detection["corrected_b0"][ab_idx]
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            pred_ab = np.exp(corrected[ab_idx] @ design.T)
+            corr_nrmse[ab_idx] = np.sqrt(np.mean((pred_ab - ab_observed) ** 2, axis=1)) / np.exp(corrected[ab_idx, 0])
+    corr_finite = np.isfinite(corrected).all(axis=1)
+    corr_valid = corr_finite.copy()
+    for key, values in corr_maps.items():
+        lower, upper = (0, 1) if key == "fa" else ((0, 3) if key in {"mk", "ak", "rk"} else (0, .005))
+        corr_valid &= np.isfinite(values) & (values >= lower) & (values <= upper)
+        detection[f"corrected_{key}"] = values
+    detection["corrected_nrmse"] = corr_nrmse
+    corr_valid &= detection["curve_valid_mask"] & np.isfinite(corr_nrmse)
+    detection["corrected_valid_mask"] = corr_valid
+    for key, mask in metric_validity(corr_maps, corr_finite,
+                                    detection["curve_valid_mask"], corr_nrmse).items():
+        detection[f"corrected_{key}_valid_mask"] = mask
     return original, corrected, curves, detection
 
 
@@ -298,11 +330,12 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
     Original inputs remain immutable. Raw untruncated maps, validity masks,
     curve samples, coefficients and provenance are retained for review.
     """
+    import gzip
     import nibabel as nib
     import numpy as np
     from microstructure.mkcurve_tensor import design_matrix
     from microstructure.dki import _signature, _write_json
-    from microstructure.mkcurve_inputs import _prepare_inputs
+    from microstructure.mkcurve_inputs import _prepare_masked_signals
 
     if (type(voxels_per_chunk) is not int or voxels_per_chunk < 1
             or (num_workers is not None and (type(num_workers) is not int or num_workers < 1))
@@ -345,29 +378,17 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
     _write_json(root / "mkcurve_record.json", {"kind": "mkcurve_python_port", "status": "running", "inputs": inputs})
     try:
         with tempfile.TemporaryDirectory(prefix=".mkcurve-", dir=root, ignore_cleanup_errors=True) as temporary, ExitStack() as handles:
-            prepared, reference, preparation = _prepare_inputs(
+            masked_signals, mask, coords, bvals_sel, bvecs_sel, reference, preparation, repair = _prepare_masked_signals(
                 Path(dwi_path), Path(bval_path), Path(bvec_path), Path(mask_path), Path(temporary), b0_threshold, max_bvalue,
                 allow_nonfinite=True)
-            working_image = nib.load(str(prepared[0]), mmap="c")
-            data = working_image.dataobj.get_unscaled()
-            if isinstance(data, np.memmap):
-                handles.callback(data._mmap.close)
-            mask = nib.load(str(prepared[3])).get_fdata() > 0
-            repair = repair_nonpositive(data, mask)
-            coords = np.unravel_index(np.flatnonzero(mask.ravel(order="F")), mask.shape, order="F")
-            count = len(coords[0])
-            masked_signals = np.lib.format.open_memmap(
-                Path(temporary) / "masked_signals.npy", mode="w+", dtype=np.float64, shape=(count, data.shape[-1])
-            )
             handles.callback(masked_signals._mmap.close)
-            for volume_idx in range(data.shape[-1]):
-                masked_signals[:, volume_idx] = data[..., volume_idx][coords]
+            count = len(coords[0])
             b0 = masked_signals[:, 0].copy()
             grid = synthetic_b0_grid(b0) if grid is None else np.asarray(grid, dtype=float)
             if len(grid) < 3 or not np.isfinite(grid).all() or np.any(grid <= 0) or not np.all(np.diff(grid) > 0):
                 raise ValueError("Synthetic b0 grid must contain at least three finite positive increasing values")
             np.savetxt(root / "synthetic_b0_grid.csv", grid, delimiter=",")
-            design = design_matrix(np.loadtxt(prepared[1]), np.loadtxt(prepared[2]).T)
+            design = design_matrix(bvals_sel, bvecs_sel)
             curves = np.lib.format.open_memmap(root / "mk_vs_synthetic_b0.npy", mode="w+", dtype="float64", shape=(len(grid), count))
             original_coefficients = np.lib.format.open_memmap(root / "original_coefficients.npy", mode="w+", dtype="float64", shape=(count, 22))
             corrected_coefficients = np.lib.format.open_memmap(root / "corrected_coefficients.npy", mode="w+", dtype="float64", shape=(count, 22))
@@ -390,6 +411,10 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                         fp64=True,
                         consumer_fp64_tdr_cap=1024,
                     )
+                elif count >= 1024 and len(grid) >= 64 and voxels_per_chunk == 64:
+                    # Larger BLAS/LAPACK chunks amortise Python/dispatch overhead on full-brain scans
+                    # while keeping explicit chunk overrides and small synthetic tests untouched.
+                    eff_chunk = 256
                 else:
                     eff_chunk = voxels_per_chunk
                 chunk_fn = _fit_chunk_cuda if is_cuda_dev else _fit_chunk
@@ -404,8 +429,21 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                         and bool(main_file)
                         and Path(main_file).is_file()
                     )
-                    use_threads = not can_spawn or (sys.platform in ("win32", "darwin") and count < 256)
-                    if not use_threads:
+                    # When the vectorized GIL-releasing batched Cholesky + Chebyshev path is active
+                    # (len(grid) >= 64), ThreadPoolExecutor on Windows/macOS avoids spawn startup,
+                    # 1+ GiB pickle IPC, and multi-process RAM clamping (~30 MiB/thread vs ~1 GiB/proc).
+                    use_fast_threads = (
+                        not is_cuda_dev
+                        and len(grid) >= 64
+                        and sys.platform in ("win32", "darwin")
+                    )
+                    use_threads = use_fast_threads or not can_spawn or (sys.platform in ("win32", "darwin") and count < 256)
+                    if use_fast_threads:
+                        from shared.hardware_adapt import host_total_ram_gib
+                        tot_ram = host_total_ram_gib()
+                        if tot_ram is not None and tot_ram <= 10.0:
+                            eff_workers = min(eff_workers, 4)
+                    elif not use_threads:
                         from shared.hardware_adapt import adaptive_spawn_workers
                         safe_spawn = adaptive_spawn_workers(
                             eff_workers,
@@ -473,15 +511,31 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                                                "num_workers": eff_workers, "solver": solver, "device": resolved_device})
                         last_progress = now
                 paths, summaries = {}, {}
-                for key, values in results.items():
+                def _export_map(item):
+                    key, values = item
                     path = root / f"mkcurve_{key}.nii.gz"
                     header = reference.header.copy()
                     dtype = np.uint8 if values.dtype == bool else np.float32
                     header.set_data_dtype(dtype)
-                    nib.save(nib.Nifti1Image(values.astype(dtype), reference.affine, header), str(path))
-                    paths[key] = str(path)
+                    img = nib.Nifti1Image(values.astype(dtype), reference.affine, header)
+                    with open(path, "wb", buffering=2 * 1024 * 1024) as raw_fh:
+                        with gzip.GzipFile(filename="", mode="wb", fileobj=raw_fh, compresslevel=1, mtime=0) as gz_fh:
+                            img.to_file_map({"image": nib.FileHolder(fileobj=gz_fh)})
                     selected = values[coords]
-                    summaries[key] = {"finite": int(np.isfinite(selected).sum()), "nonzero": int(np.count_nonzero(selected))}
+                    return key, str(path), {"finite": int(np.isfinite(selected).sum()), "nonzero": int(np.count_nonzero(selected))}
+
+                export_workers = min(8, max(1, os.cpu_count() or 1), len(results)) if len(results) > 1 and count >= 1024 else 1
+                if export_workers > 1:
+                    from concurrent.futures import ThreadPoolExecutor
+                    with ThreadPoolExecutor(max_workers=export_workers) as export_pool:
+                        for key, out_path, summary in export_pool.map(_export_map, results.items()):
+                            paths[key] = out_path
+                            summaries[key] = summary
+                else:
+                    for item in results.items():
+                        key, out_path, summary = _export_map(item)
+                        paths[key] = out_path
+                        summaries[key] = summary
                 record = {"kind": "mkcurve_python_port", "status": "completed", "backend": backend,
                           "method": "author-style unconstrained WLLS, numerical 256-direction MK, synthetic-b0 correction",
                           "settings": {"threshold": threshold, "solver": solver, "device": resolved_device,
@@ -532,13 +586,8 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                     empty_cuda_cache_safely()
                 for array in (curves, original_coefficients, corrected_coefficients, masked_signals, *results.values()):
                     array._mmap.close()
-                if isinstance(data, np.memmap):
-                    data._mmap.close()
-                for holder in working_image.file_map.values():
-                    if getattr(holder, "fileobj", None) is not None:
-                        holder.fileobj.close()
                 results.clear()
-                del curves, original_coefficients, corrected_coefficients, masked_signals, data, working_image
+                del curves, original_coefficients, corrected_coefficients, masked_signals
                 import gc
                 gc.collect()
     except Exception as exc:

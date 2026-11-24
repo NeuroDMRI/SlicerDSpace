@@ -408,6 +408,81 @@ class CSDActBackendTest(unittest.TestCase):
             bval.write_text("0 2000\n", encoding="utf-8")
             self.assertFalse(_prepared_fod_reusable(config_more_streamlines, out_dir))
 
+    def test_macos_rosetta_dwi2response_prepends_arm64_child_shim_and_respects_kill_switch(self) -> None:
+        import os
+        from unittest.mock import patch
+        from tractography.csd import _mrtrix_csd_invocation
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            script = root / "mrtrix" / "bin" / "dwi2response"
+            script.parent.mkdir(parents=True)
+            script.touch()
+            library = script.parent.parent / "lib"
+            (library / "mrtrix3").mkdir(parents=True)
+            (library / "mrtrix3" / "__init__.py").touch()
+            python = root / "Slicer.app" / "Contents" / "bin" / "PythonSlicer"
+            python.parent.mkdir(parents=True)
+            python.touch()
+
+            with (
+                patch("tractography.csd.sys.platform", "darwin"),
+                patch("tractography.csd.find_pythonslicer", return_value=python),
+                patch("shared.external_process.process_is_translated", return_value=True),
+                patch("tractography.csd.os.path.exists", return_value=True),
+                patch.dict(os.environ, {}, clear=False),
+            ):
+                os.environ.pop("SLICERDSPACE_DISABLE_ARM64_EXEC", None)
+                cmd, env = _mrtrix_csd_invocation((str(script), "dhollander", "a.mif"), {})
+                self.assertEqual(cmd, (str(python), "-B", str(script), "dhollander", "a.mif"))
+                parts = env["PYTHONPATH"].split(os.pathsep)
+                self.assertEqual(len(parts), 2)
+                self.assertTrue(Path(parts[0], "sitecustomize.py").is_file())
+                self.assertEqual(parts[1], str(library))
+
+                # Kill switch disables the arm64 child shim and restores -S.
+                cmd_off, env_off = _mrtrix_csd_invocation(
+                    (str(script), "dhollander", "a.mif"),
+                    {"SLICERDSPACE_DISABLE_ARM64_EXEC": "1"},
+                )
+                self.assertEqual(cmd_off, (str(python), "-B", "-S", str(script), "dhollander", "a.mif"))
+                self.assertEqual(env_off["PYTHONPATH"], str(library))
+
+    def test_tractogram_summary_large_chunked_fast_path_matches_reference(self) -> None:
+        from tractography.csd import _tractogram_summary
+
+        rng = np.random.default_rng(123)
+        # > 1024 streamlines exercises the chunked vectorized np.add.reduceat path.
+        streamlines = [
+            rng.standard_normal((int(rng.integers(4, 24)), 3)).astype(np.float32) * 4.0
+            for _ in range(1300)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            tck_path = Path(tmp) / "large.tck"
+            tractogram = nib.streamlines.Tractogram(streamlines, affine_to_rasmm=np.eye(4))
+            nib.streamlines.save(nib.streamlines.TckFile(tractogram), str(tck_path))
+            summary = _tractogram_summary(tck_path)
+
+            ref_values = np.asarray(
+                [
+                    float(np.linalg.norm(np.diff(np.asarray(sl, dtype=np.float64), axis=0), axis=1).sum())
+                    for sl in nib.streamlines.load(str(tck_path), lazy_load=False).streamlines
+                ],
+                dtype=np.float64,
+            )
+            self.assertEqual(summary["streamline_count"], len(streamlines))
+            self.assertTrue(summary["all_points_finite"])
+            self.assertEqual(summary["fraction_shorter_than_20mm"], float(np.mean(ref_values < 20.0)))
+            for key, expected in (
+                ("min", float(np.min(ref_values))),
+                ("p05", float(np.percentile(ref_values, 5))),
+                ("median", float(np.median(ref_values))),
+                ("mean", float(np.mean(ref_values))),
+                ("p95", float(np.percentile(ref_values, 95))),
+                ("max", float(np.max(ref_values))),
+            ):
+                self.assertAlmostEqual(summary["length_mm"][key], expected, places=11)
+
 
 if __name__ == "__main__":
     unittest.main()

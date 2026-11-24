@@ -180,6 +180,24 @@ def _mrtrix_csd_invocation(command: tuple[str, ...], env: dict[str, str]) -> tup
         if not current.name.lower().startswith("python") or current.stem.lower() == "python-real":
             raise RuntimeError("Native dwi2response requires an installed Python or PythonSlicer launcher.")
         python = current
+    if sys.platform == "darwin":
+        from shared.external_process import ARM64_EXEC_DISABLE_ENV, process_is_translated
+
+        disabled = any(
+            str(src.get(ARM64_EXEC_DISABLE_ENV, "")).strip().lower() in {"1", "true", "yes", "on"}
+            for src in (os.environ, env or {})
+        )
+        shim_dir = Path(__file__).resolve().parent / "_arm64_child_shim"
+        if (
+            not disabled
+            and os.path.exists("/usr/bin/arch")
+            and (shim_dir / "sitecustomize.py").is_file()
+            and process_is_translated()
+        ):
+            # Omit -S so site.py loads sitecustomize.py, launching universal MRtrix child binaries
+            # (dwiextract, amp2response, mrmath, etc.) natively as arm64 instead of Rosetta x86_64.
+            py_path = f"{shim_dir}{os.pathsep}{library}"
+            return (str(python), "-B", *command), dict(env, PYTHONPATH=py_path)
     return (str(python), "-B", "-S", *command), dict(env, PYTHONPATH=str(library))
 
 
@@ -438,18 +456,69 @@ def _tractogram_summary(path: Path) -> dict[str, object]:
 
     seq = nib.streamlines.load(str(path), lazy_load=False).streamlines
     if hasattr(seq, "_data") and hasattr(seq, "_offsets") and hasattr(seq, "_lengths"):
-        data = np.asarray(seq._data, dtype=np.float64)
+        raw_data = np.asarray(seq._data)
         lengths_arr = np.asarray(seq._lengths, dtype=np.int64)
         offsets_arr = np.asarray(seq._offsets, dtype=np.int64)
+        n_sl = len(lengths_arr)
+        is_contiguous = (
+            n_sl == 0
+            or (
+                int(offsets_arr[0]) == 0
+                and int(offsets_arr[-1] + lengths_arr[-1]) <= raw_data.shape[0]
+                and (n_sl == 1 or bool(np.all(offsets_arr[1:] == offsets_arr[:-1] + lengths_arr[:-1])))
+            )
+        )
         if (
-            data.ndim == 2
-            and data.shape[1] == 3
+            raw_data.ndim == 2
+            and raw_data.shape[1] == 3
             and len(lengths_arr) == len(offsets_arr)
             and bool(np.all(lengths_arr >= 2))
-            and bool(np.isfinite(data).all())
+            and is_contiguous
+            and n_sl > 1024
+        ):
+            # Stream chunks of 65,536 streamlines (~15 MiB working buffer vs ~8 GiB full float64 copy)
+            # and reduce with vectorized np.add.reduceat (avoids 1M-iteration Python loop).
+            values = np.empty(n_sl, dtype=np.float64)
+            all_points_finite = True
+            chunk_sl = 65536
+            for s0 in range(0, n_sl, chunk_sl):
+                s1 = min(n_sl, s0 + chunk_sl)
+                o_sub = offsets_arr[s0:s1]
+                l_sub = lengths_arr[s0:s1]
+                p0 = int(o_sub[0])
+                p1 = int(o_sub[-1] + l_sub[-1])
+                pts = np.asarray(raw_data[p0:p1], dtype=np.float64)
+                if not bool(np.isfinite(pts).all()):
+                    all_points_finite = False
+                    break
+                diffs = pts[1:] - pts[:-1]
+                seg_norms = np.sqrt(np.einsum("ij,ij->i", diffs, diffs))
+                rel_o = o_sub - p0
+                if s1 - s0 > 1:
+                    seg_norms[rel_o[:-1] + l_sub[:-1] - 1] = 0.0
+                values[s0:s1] = np.add.reduceat(seg_norms, rel_o)
+            if not all_points_finite:
+                lengths: list[float] = []
+                for streamline in seq:
+                    points = np.asarray(streamline, dtype=np.float64)
+                    if points.ndim != 2 or points.shape[0] < 2 or points.shape[1] != 3:
+                        all_points_finite = False
+                        continue
+                    if not np.isfinite(points).all():
+                        all_points_finite = False
+                        continue
+                    lengths.append(float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum()))
+                values = np.asarray(lengths, dtype=np.float64)
+        elif (
+            raw_data.ndim == 2
+            and raw_data.shape[1] == 3
+            and len(lengths_arr) == len(offsets_arr)
+            and bool(np.all(lengths_arr >= 2))
+            and bool(np.isfinite(raw_data).all())
         ):
             all_points_finite = True
-            if len(lengths_arr):
+            if n_sl:
+                data = np.asarray(raw_data, dtype=np.float64)
                 diffs = data[1:] - data[:-1]
                 seg_norms = np.linalg.norm(diffs, axis=1)
                 values = np.array(
@@ -1059,15 +1128,23 @@ def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = 
 
             for idx, command in enumerate(serial_commands):
                 exec_cmd = command
-                if (
-                    not disable_csd_accel
-                    and sys.platform != "darwin"
-                    and Path(command[0]).stem.lower() == "mrconvert"
+                is_dwi_mrconvert = (
+                    Path(command[0]).stem.lower() == "mrconvert"
                     and len(command) > 2
                     and Path(command[2]) == dwi_mif
-                    and "-strides" not in command
-                ):
-                    exec_cmd = (*command, "-strides", "0,0,0,1")
+                )
+                if not disable_csd_accel and is_dwi_mrconvert:
+                    # Reuse an already-cached uncompressed .nii if a prior stage produced one (read-only lookup).
+                    try:
+                        from shared.diffusion_io import get_cached_uncompressed_nifti
+
+                        cached_dwi = get_cached_uncompressed_nifti(config.dwi_path)
+                        if cached_dwi is not None and cached_dwi.is_file():
+                            exec_cmd = (exec_cmd[0], cached_dwi.as_posix(), *exec_cmd[2:])
+                    except Exception:
+                        pass
+                    if sys.platform != "darwin" and "-strides" not in exec_cmd:
+                        exec_cmd = (*exec_cmd, "-strides", "0,0,0,1")
                 argv, env = _mrtrix_csd_invocation(exec_cmd, command_env)
                 _emit(f"[Tractography] Running MRtrix CSD/ACT command: {' '.join(argv)}", log)
                 with _timed_step(phase_timings, Path(command[0]).name, persist_timings, argv) as phase:
@@ -1099,10 +1176,22 @@ def run_csd_act(config: CSDActConfig, *, log: Optional[Callable[[str], None]] = 
                 n_jobs = len(parallel_mrtrix_commands) + (1 if (config.export_trk and tractogram_trk is not None) else 0)
                 total_ram_gib = host_total_ram_gib()
                 avail_ram_b = query_host_available_ram_bytes()
-                tight_ram = (total_ram_gib is not None and total_ram_gib <= 16.0) or (
+                # Measured 1M-streamline peak RSS: tcksift2 ~2.4 GiB, export_tck_to_trk ~2.7 GiB,
+                # tckconvert ~34 MiB. Running 2 workers on 16 GiB hosts hides tckconvert + TRK export
+                # behind tcksift2 (~5.1 GiB peak combined; macOS reports ~4-5 GiB available due to
+                # purgeable file cache) while keeping <=12 GiB or <3 GiB-avail hosts strictly serial.
+                very_tight_ram = (total_ram_gib is not None and total_ram_gib <= 12.0) or (
+                    avail_ram_b > 0 and avail_ram_b < 3 * GIB
+                )
+                moderate_ram = (total_ram_gib is not None and total_ram_gib <= 20.0) or (
                     avail_ram_b > 0 and avail_ram_b < 10 * GIB
                 )
-                post_workers = 1 if tight_ram else max(1, n_jobs)
+                if very_tight_ram:
+                    post_workers = 1
+                elif moderate_ram:
+                    post_workers = min(2, max(1, n_jobs))
+                else:
+                    post_workers = max(1, n_jobs)
                 with ThreadPoolExecutor(max_workers=post_workers) as post_pool:
                     post_futs = [post_pool.submit(_run_parallel_mrtrix, cmd_t) for cmd_t in parallel_mrtrix_commands]
                     if config.export_trk and tractogram_trk is not None:

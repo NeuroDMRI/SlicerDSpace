@@ -808,7 +808,7 @@ def _fit_noddi_cpu(
         }
         try:
             ctx_mp = mp.get_context("fork")
-            with ctx_mp.Pool(processes=workers, initializer=_init_noddi_fork_worker) as pool:
+            with _single_thread_blas(), ctx_mp.Pool(processes=workers, initializer=_init_noddi_fork_worker) as pool:
                 for rows, est_d, rmse_d, nrmse_d in pool.imap_unordered(
                     _noddi_fork_bucket_worker, nonempty_dirs, chunksize=1
                 ):

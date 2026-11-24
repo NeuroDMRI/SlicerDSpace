@@ -790,6 +790,14 @@ class FreeWaterDeviceAttrTests(unittest.TestCase):
         self.assertNotIn("config.device", src)
         self.assertIn('getattr(config, "free_water_device", "auto")', src)
 
+    def test_dki_and_noddi_limit_blas_threads_in_parent_before_fork(self) -> None:
+        from microstructure import dki, noddi_accel
+
+        dki_src = Path(dki.__file__).read_text(encoding="utf-8")
+        noddi_src = Path(noddi_accel.__file__).read_text(encoding="utf-8")
+        self.assertIn("with _single_thread_blas_for_fork(), ctx_mp.Pool(", dki_src)
+        self.assertIn("with _single_thread_blas(), ctx_mp.Pool(", noddi_src)
+
 
 if __name__ == "__main__":
     unittest.main()

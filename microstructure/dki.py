@@ -756,6 +756,18 @@ _DKI_FORK_CTX: dict[str, Any] | None = None
 _DKI_FORK_THREAD_LIMIT: Any = None
 
 
+def _single_thread_blas_for_fork():
+    """Drop OpenBLAS/MKL/OMP pools to 1 thread in the parent *before* fork() to prevent Linux futex deadlocks."""
+    from contextlib import nullcontext
+
+    try:
+        from threadpoolctl import threadpool_limits
+
+        return threadpool_limits(limits=1)
+    except Exception:
+        return nullcontext()
+
+
 def _init_dki_fork_worker() -> None:
     global _DKI_FORK_THREAD_LIMIT
     for key in (
@@ -1145,7 +1157,9 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                 wall_fit_start = time.monotonic()
                 try:
                     ctx_mp = mp.get_context("fork")
-                    with ctx_mp.Pool(processes=eff_workers, initializer=_init_dki_fork_worker) as pool:
+                    with _single_thread_blas_for_fork(), ctx_mp.Pool(
+                        processes=eff_workers, initializer=_init_dki_fork_worker
+                    ) as pool:
                         for result in pool.imap_unordered(_dki_fork_chunk_worker, chunk_ranges, chunksize=1):
                             completed = _apply_parallel_dki_result(result, completed)
                 finally:

@@ -1,9 +1,10 @@
 """Manifest-scoped result selection and ownership-aware Slicer scene management."""
 
 from pathlib import Path
+import hashlib
 import json
 import os
-from typing import Optional
+from typing import Any, Optional
 from shared.bundle_qc import bundle_record_error
 
 PREFIX = "SlicerDDSurfer."
@@ -13,6 +14,224 @@ _NATIVE_TRACT_SUFFIXES = (".vtk", ".vtp")
 # D6: the DEC colour FA map is the only NRRD result; other .nrrd files in the tree stay intermediates.
 DEC_SUFFIX = "-dti-dec.nrrd"
 DEC_SUFFIXES = ("-dti-dec.nrrd", "_dec.nrrd")
+_ARTIFACT_FULL_HASH_MAX_BYTES = 32 * 1024 * 1024
+_ARTIFACT_SAMPLE_CHUNK_BYTES = 64 * 1024
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _sample_sha256_file(path: Path, size: int) -> str:
+    """Fast head/middle/tail content digest for large (>32 MiB) files."""
+    digest = hashlib.sha256()
+    digest.update(f"size:{size}:".encode("ascii"))
+    chunk = _ARTIFACT_SAMPLE_CHUNK_BYTES
+    with path.open("rb") as stream:
+        digest.update(stream.read(chunk))
+        if size > chunk * 2:
+            mid = max(chunk, (size - chunk) // 2)
+            stream.seek(mid)
+            digest.update(stream.read(chunk))
+        if size > chunk:
+            stream.seek(max(0, size - chunk))
+            digest.update(stream.read(chunk))
+    return digest.hexdigest()
+
+
+def compute_artifact_fingerprint(path: Path | str, *, run_id: Optional[str] = None) -> dict[str, Any]:
+    """Build a lightweight integrity fingerprint for an output or QC file without copying data."""
+    target = Path(path).expanduser()
+    try:
+        resolved = target.resolve()
+    except OSError:
+        resolved = target
+    if not target.is_file():
+        record: dict[str, Any] = {"path": resolved.as_posix(), "exists": False}
+        if run_id:
+            record["run_id"] = str(run_id)
+        return record
+    stat = target.stat()
+    size = int(stat.st_size)
+    record = {
+        "path": resolved.as_posix(),
+        "exists": True,
+        "size": size,
+        "mtime_ns": int(stat.st_mtime_ns),
+        "ctime_ns": int(stat.st_ctime_ns),
+    }
+    if size <= _ARTIFACT_FULL_HASH_MAX_BYTES:
+        record["sha256"] = _sha256_file(target)
+    else:
+        record["sample_sha256"] = _sample_sha256_file(target, size)
+    if run_id:
+        record["run_id"] = str(run_id)
+    return record
+
+
+def _artifact_lookup_keys(path: Path | str) -> tuple[str, ...]:
+    raw = str(path)
+    p = Path(raw).expanduser()
+    candidates = [raw, p.as_posix()]
+    try:
+        resolved = p.resolve()
+        candidates.extend((str(resolved), resolved.as_posix()))
+    except OSError:
+        pass
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        for variant in (item, os.path.normcase(item), os.path.normcase(item.replace("\\", "/"))):
+            if variant not in seen:
+                seen.add(variant)
+                out.append(variant)
+    return tuple(out)
+
+
+def _lookup_artifact_fingerprint(fingerprints: Any, path: Path | str) -> Optional[dict[str, Any]]:
+    if not isinstance(fingerprints, dict) or not fingerprints:
+        return None
+    keys = _artifact_lookup_keys(path)
+    for key in keys:
+        hit = fingerprints.get(key)
+        if isinstance(hit, dict):
+            return hit
+    norm_keys = set(keys)
+    for rec_key, value in fingerprints.items():
+        if not isinstance(value, dict):
+            continue
+        rec_text = str(rec_key)
+        if (
+            os.path.normcase(rec_text) in norm_keys
+            or os.path.normcase(rec_text.replace("\\", "/")) in norm_keys
+        ):
+            return value
+    return None
+
+
+def artifact_fingerprint_matches(record: Any, path: Path | str) -> bool:
+    """Return True only when ``path`` on disk still matches the recorded fingerprint."""
+    if not isinstance(record, dict):
+        return False
+    if record.get("exists") is False:
+        return False
+    target = Path(path).expanduser()
+    if not target.is_file():
+        return False
+    try:
+        stat = target.stat()
+    except OSError:
+        return False
+    recorded_size = record.get("size")
+    if recorded_size is None:
+        return False
+    try:
+        if int(recorded_size) != int(stat.st_size):
+            return False
+    except (TypeError, ValueError):
+        return False
+    recorded_sha = record.get("sha256")
+    if isinstance(recorded_sha, str) and recorded_sha:
+        try:
+            return _sha256_file(target) == recorded_sha
+        except OSError:
+            return False
+    recorded_sample = record.get("sample_sha256")
+    if isinstance(recorded_sample, str) and recorded_sample:
+        try:
+            if "mtime_ns" in record and int(record["mtime_ns"]) != int(stat.st_mtime_ns):
+                return False
+            return _sample_sha256_file(target, int(stat.st_size)) == recorded_sample
+        except (OSError, TypeError, ValueError):
+            return False
+    try:
+        return int(record.get("mtime_ns", -1)) == int(stat.st_mtime_ns)
+    except (TypeError, ValueError):
+        return False
+
+
+def manifest_output_status(manifest: Any, path: Path | str, *, kind: str = "output") -> str:
+    """Classify an artifact referenced by ``manifest`` as ``current``, ``superseded``, ``missing``, or ``untracked``."""
+    if not isinstance(manifest, dict):
+        return "untracked"
+    if kind == "qc":
+        record = _lookup_artifact_fingerprint(manifest.get("qc_fingerprints"), path)
+        if record is None:
+            record = _lookup_artifact_fingerprint(manifest.get("output_fingerprints"), path)
+    else:
+        record = _lookup_artifact_fingerprint(manifest.get("output_fingerprints"), path)
+    if record is None:
+        return "untracked"
+    target = Path(path).expanduser()
+    if not target.is_file():
+        return "missing"
+    return "current" if artifact_fingerprint_matches(record, target) else "superseded"
+
+
+def _iter_manifest_path_strings(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _iter_manifest_path_strings(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _iter_manifest_path_strings(item)
+
+
+def build_manifest_artifact_fingerprints(
+    manifest: dict[str, Any],
+    *,
+    run_id: Optional[str] = None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Collect lightweight integrity fingerprints for every output and QC/manifest file referenced by ``manifest``."""
+    output_fps: dict[str, dict[str, Any]] = {}
+    qc_fps: dict[str, dict[str, Any]] = {}
+
+    def _record_into(target_map: dict[str, dict[str, Any]], raw_path: Any, *, key_name: str = "") -> None:
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            return
+        if candidate.is_dir():
+            return
+        if not candidate.exists() and key_name.lower().endswith("_dir"):
+            return
+        try:
+            key = candidate.resolve().as_posix()
+        except OSError:
+            key = candidate.as_posix()
+        if key not in target_map:
+            try:
+                target_map[key] = compute_artifact_fingerprint(candidate, run_id=run_id)
+            except OSError:
+                pass
+
+    for task in manifest.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        outputs = task.get("outputs") or {}
+        if isinstance(outputs, dict):
+            for out_key, out_val in outputs.items():
+                for raw in _iter_manifest_path_strings(out_val):
+                    _record_into(output_fps, raw, key_name=str(out_key))
+            for qc_key in ("qc", "qc_path", "manifest", "manifest_path"):
+                if isinstance(outputs.get(qc_key), str):
+                    _record_into(qc_fps, outputs[qc_key], key_name=qc_key)
+        for meta_key in ("qc_path", "manifest_path"):
+            _record_into(qc_fps, task.get(meta_key), key_name=meta_key)
+        for bundle_key, bundle_path in bundle_outputs(
+            task, allow_directory_scan=False, accept_qc_not_passed=True
+        ).items():
+            _record_into(output_fps, bundle_path, key_name=str(bundle_key))
+
+    _record_into(output_fps, manifest.get("brain_mask_path"), key_name="brain_mask_path")
+    return output_fps, qc_fps
 
 
 def result_file_suffix(path):
@@ -204,6 +423,9 @@ def recorded_qc_summary(manifest):
         try:
             if not value or not Path(value).is_absolute():
                 raise ValueError("Missing absolute QC path")
+            if manifest_output_status(manifest, value, kind="qc") == "superseded":
+                counts["unavailable"] += 1
+                continue
             record = json.loads(Path(value).read_text(encoding='utf-8'))
             status = record_qc_state(record)
             issue = status in {'failed', 'warning'} or bundle_record_error(task.get('name'), record)
@@ -380,6 +602,15 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
         qc_mark = None
         if name.split('@', 1)[0] in {'bundles.wmql', 'bundles.wma', 'bundles.tractcloud'}:
             value = task.get('qc_path') or (task.get('outputs') or {}).get('qc_path')
+            if value and manifest_output_status(manifest, value, kind="qc") == "superseded":
+                skipped.append({
+                    "label": name,
+                    "product": name,
+                    "path": str(value),
+                    "reason": "Archived QC record was superseded by a newer run",
+                    "reason_category": "superseded",
+                })
+                continue
             unreadable = not value
             try:
                 record = json.loads(Path(str(value)).read_text(encoding='utf-8')) if value else {}
@@ -416,6 +647,16 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
             if not path.is_file():
                 skipped.append({"path": value, "reason": "Manifest output is missing"})
                 continue
+            if manifest_output_status(manifest, path, kind="output") == "superseded":
+                skipped.append({
+                    "path": value,
+                    "label": name + "_" + str(key),
+                    "key": str(key),
+                    "product": name,
+                    "reason": "Archived output was superseded or modified by a newer run",
+                    "reason_category": "superseded",
+                })
+                continue
             # Prefer small anatomical/scalar products before expensive tractograms.
             suffix_lower = path.suffix.lower()
             priority = 2 if suffix_lower in {".tck", ".trk", ".vtk", ".vtp"} else 1 if suffix_lower in {".stl", ".obj"} else 0
@@ -432,13 +673,23 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
             identity = str(mask_path.resolve())
             if identity not in seen:
                 seen.add(identity)
-                candidates.append({
-                    "path": identity,
-                    "label": "preprocessing.brain_mask_mask",
-                    "key": "brain_mask",
-                    "product": "preprocessing.brain_mask",
-                    "priority": 0,
-                })
+                if manifest_output_status(manifest, mask_path, kind="output") == "superseded":
+                    skipped.append({
+                        "path": identity,
+                        "label": "preprocessing.brain_mask_mask",
+                        "key": "brain_mask",
+                        "product": "preprocessing.brain_mask",
+                        "reason": "Archived output was superseded or modified by a newer run",
+                        "reason_category": "superseded",
+                    })
+                else:
+                    candidates.append({
+                        "path": identity,
+                        "label": "preprocessing.brain_mask_mask",
+                        "key": "brain_mask",
+                        "product": "preprocessing.brain_mask",
+                        "priority": 0,
+                    })
     # A post-processing row sorts by its decided order (a tuple), every other row by its label as before.
     return sorted(candidates, key=lambda item: (item["priority"], item.get("order", ()), item["label"])), skipped
 

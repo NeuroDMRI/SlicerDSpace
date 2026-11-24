@@ -17,7 +17,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from shared.external_process import subprocess_no_window_kwargs, text_subprocess_kwargs
+from shared.external_process import (
+    copy_file_atomic,
+    needs_windows_ascii_staging,
+    subprocess_no_window_kwargs,
+    text_subprocess_kwargs,
+    windows_ascii_temp_dir,
+)
 
 
 ImportSourceKind = Literal["canonical", "dicom", "nifti", "nrrd"]
@@ -877,6 +883,257 @@ def _write_intent_marker(input_dir: Path, signatures: Mapping[str, Any]) -> None
     (input_dir / INTENT_MARKER_NAME).write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _same_resolved_path(left: Path, right: Path) -> bool:
+    try:
+        return left.expanduser().resolve() == right.expanduser().resolve()
+    except OSError:
+        return False
+
+
+def _validate_optional_metadata(metadata_path: Path, *, explicit: bool) -> bool:
+    if not metadata_path.is_file():
+        if explicit:
+            raise FileNotFoundError(f"Metadata sidecar not found: {metadata_path}")
+        return False
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"Invalid JSON metadata sidecar {metadata_path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"Metadata sidecar {metadata_path} must contain a JSON object.")
+    return True
+
+
+def _validate_optional_mask(
+    mask_path: Path,
+    expected_shape_3d: tuple[int, int, int] | None = None,
+    expected_affine: Any = None,
+) -> None:
+    resolved = mask_path.expanduser().resolve()
+    if not resolved.is_file():
+        raise FileNotFoundError(f"Brain mask not found: {resolved}")
+    import nibabel as nib
+    import numpy as np
+
+    try:
+        mask_img = nib.load(str(resolved))
+    except Exception as exc:
+        raise ValueError(f"Unable to read brain mask {resolved}: {exc}") from exc
+    if len(mask_img.shape) != 3 or not np.isfinite(mask_img.affine).all():
+        raise ValueError(f"Brain mask must be a 3D NIfTI with a finite affine: {resolved}")
+    if expected_shape_3d is not None and tuple(int(v) for v in mask_img.shape) != tuple(int(v) for v in expected_shape_3d):
+        raise ValueError(
+            f"Brain mask shape {mask_img.shape} does not match DWI spatial shape {expected_shape_3d}"
+        )
+    if expected_affine is not None and not np.allclose(mask_img.affine, expected_affine, rtol=0.0, atol=1e-3):
+        raise ValueError(f"Brain mask affine does not match DWI affine: {resolved}")
+    mask_arr = np.asanyarray(mask_img.dataobj)
+    if not np.isfinite(mask_arr).all():
+        raise ValueError(f"Brain mask contains non-finite values: {resolved}")
+
+
+def _cleanup_stale_canonical_artifacts(
+    targets: dict[str, Path],
+    *,
+    keep_metadata: bool,
+    keep_mask: bool,
+    protected_sources: set[Path] | None = None,
+) -> None:
+    protected = protected_sources or set()
+
+    def _safe_unlink(path: Path) -> None:
+        try:
+            resolved = path.expanduser().resolve()
+        except OSError:
+            resolved = path
+        if resolved in protected:
+            return
+        path.unlink(missing_ok=True)
+
+    for legacy_name in ("data.nii", "data.bval", "data.bvec", "data.json"):
+        _safe_unlink(targets["input_dir"] / legacy_name)
+    if not keep_metadata:
+        _safe_unlink(targets["metadata"])
+    if not keep_mask:
+        _safe_unlink(targets["mask"])
+        _safe_unlink(targets["mask"].with_name("nodif_brain_mask.manifest.json"))
+
+
+def _write_manifest_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    os.close(fd)
+    temporary = Path(tmp_name)
+    try:
+        temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _rewrite_converter_command(
+    command: list[str],
+    backend: str,
+    targets: dict[str, Path],
+    staged_targets: dict[str, Path],
+) -> list[str]:
+    rewritten = list(command)
+    if backend == "dcm2niix":
+        idx = rewritten.index("-o")
+        rewritten[idx + 1] = staged_targets["input_dir"].as_posix()
+        return rewritten
+    mapping = {
+        targets["dwi"].as_posix(): staged_targets["dwi"].as_posix(),
+        targets["bvals"].as_posix(): staged_targets["bvals"].as_posix(),
+        targets["bvecs"].as_posix(): staged_targets["bvecs"].as_posix(),
+        targets["metadata"].as_posix(): staged_targets["metadata"].as_posix(),
+        str(targets["dwi"]): str(staged_targets["dwi"]),
+        str(targets["bvals"]): str(staged_targets["bvals"]),
+        str(targets["bvecs"]): str(staged_targets["bvecs"]),
+        str(targets["metadata"]): str(staged_targets["metadata"]),
+    }
+    return [mapping.get(token, token) for token in rewritten]
+
+
+def _validate_nifti_bundle(
+    source: Path,
+    bval: Path,
+    bvec: Path,
+    metadata: Path,
+    *,
+    explicit_metadata: bool,
+    mask_path: Path | None,
+    targets: dict[str, Path],
+    force: bool,
+) -> dict[str, Any]:
+    """Validate an incoming NIfTI DWI + bval/bvec + optional metadata/mask without mutating targets."""
+    import nibabel as nib
+    import numpy as np
+    from shared.diffusion_io import prepare_uncompressed_cache_target
+
+    for required in (source, bval, bvec):
+        if not required.is_file():
+            raise FileNotFoundError(f"Input file not found: {required}")
+
+    image = nib.load(str(source))
+    if len(image.shape) != 4 or not np.isfinite(image.affine).all():
+        raise ValueError("DWI must be a four-dimensional NIfTI with a finite affine")
+    bval_bytes = bval.read_bytes()
+    bvec_bytes = bvec.read_bytes()
+    bval_has_bom = bval_bytes.startswith(b"\xef\xbb\xbf")
+    bvec_has_bom = bvec_bytes.startswith(b"\xef\xbb\xbf")
+    bval_raw = bval_bytes.decode("utf-8-sig")
+    bvec_raw = bvec_bytes.decode("utf-8-sig")
+    bvals = np.loadtxt(io.StringIO(bval_raw)).reshape(-1)
+    bvecs = np.loadtxt(io.StringIO(bvec_raw), ndmin=2)
+    bvecs_transposed = False
+    if bvecs.ndim == 2 and bvals.size != 3 and bvecs.shape == (bvals.size, 3):
+        bvecs = bvecs.T
+        bvecs_transposed = True
+    if bvals.size != image.shape[3] or bvecs.shape != (3, bvals.size):
+        raise ValueError("Gradient count/shape does not match the DWI volumes (expected 3 x N bvecs)")
+    if not np.isfinite(bvals).all() or not np.isfinite(bvecs).all():
+        raise ValueError("Gradients contain non-finite values")
+    has_metadata = _validate_optional_metadata(metadata, explicit=explicit_metadata)
+    if mask_path is not None:
+        _validate_optional_mask(mask_path, image.shape[:3], image.affine)
+    target = targets["dwi"]
+    for path in (target, targets["bvals"], targets["bvecs"]):
+        if path.exists() and not force:
+            raise FileExistsError(f"Refusing to overwrite existing file: {path}")
+    # Force voxel decoding in one sequential stream pass before committing anything, catching truncated data.
+    staged_cache_nii: Path | None = None
+    expected_cache_bytes = 0
+    if isinstance(image, (nib.Nifti1Image, nib.Nifti2Image)) and hasattr(image.dataobj, "offset"):
+        offset = max(0, int(getattr(image.dataobj, "offset", 0)))
+        expected_cache_bytes = (
+            int(np.prod(image.shape, dtype=np.int64)) * int(image.get_data_dtype().itemsize) + offset
+        )
+        if source.name.lower().endswith(".nii.gz"):
+            staged_cache_nii = prepare_uncompressed_cache_target(target, expected_cache_bytes)
+        try:
+            _validate_nifti_voxels_single_pass(image, source, tee_path=staged_cache_nii)
+        except Exception:
+            if staged_cache_nii is not None:
+                staged_cache_nii.unlink(missing_ok=True)
+            raise
+    else:
+        for index in range(image.shape[3]):
+            if not np.isfinite(np.asanyarray(image.dataobj[..., index])).all():
+                raise ValueError("DWI contains non-finite values")
+    return {
+        "source": source,
+        "bval": bval,
+        "bvec": bvec,
+        "metadata": metadata,
+        "has_metadata": has_metadata,
+        "bval_raw": bval_raw,
+        "bvec_raw": bvec_raw,
+        "bval_has_bom": bval_has_bom,
+        "bvec_has_bom": bvec_has_bom,
+        "bvecs": bvecs,
+        "bvecs_transposed": bvecs_transposed,
+        "staged_cache_nii": staged_cache_nii,
+        "expected_cache_bytes": expected_cache_bytes,
+    }
+
+
+def _commit_validated_nifti_bundle(
+    validated: dict[str, Any],
+    targets: dict[str, Path],
+    *,
+    force: bool,
+) -> None:
+    import nibabel as nib
+    from shared.diffusion_io import commit_predecoded_nifti_cache
+
+    source: Path = validated["source"]
+    target = targets["dwi"]
+    staged_cache_nii: Path | None = validated["staged_cache_nii"]
+    expected_cache_bytes: int = validated["expected_cache_bytes"]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    already_same = False
+    if target.exists():
+        try:
+            already_same = os.path.samefile(source, target)
+        except OSError:
+            already_same = False
+    if not already_same:
+        fd, name = tempfile.mkstemp(suffix=".nii.gz", dir=target.parent)
+        os.close(fd)
+        temporary = Path(name)
+        try:
+            if source.name.lower().endswith(".nii.gz"):
+                if not _try_cow_clone(source, temporary):
+                    shutil.copyfile(source, temporary)
+            else:
+                with source.open("rb") as src, gzip.open(temporary, "wb", compresslevel=1) as dst:
+                    shutil.copyfileobj(src, dst, length=4 * 1024 * 1024)
+            nib.load(str(temporary))
+            os.replace(temporary, target)
+        except Exception:
+            if staged_cache_nii is not None:
+                staged_cache_nii.unlink(missing_ok=True)
+            raise
+        finally:
+            temporary.unlink(missing_ok=True)
+    if staged_cache_nii is not None:
+        commit_predecoded_nifti_cache(target, staged_cache_nii, expected_cache_bytes)
+    if validated["bval_has_bom"]:
+        _write_text_file(validated["bval_raw"], targets["bvals"], force=force)
+    else:
+        _copy_file(validated["bval"], targets["bvals"], force=force)
+    if validated["bvecs_transposed"]:
+        transposed_text = "\n".join(" ".join(f"{float(v):.15g}" for v in row) for row in validated["bvecs"]) + "\n"
+        _write_text_file(transposed_text, targets["bvecs"], force=force)
+    elif validated["bvec_has_bom"]:
+        _write_text_file(validated["bvec_raw"], targets["bvecs"], force=force)
+    else:
+        _copy_file(validated["bvec"], targets["bvecs"], force=force)
+    if validated["has_metadata"]:
+        _copy_file(validated["metadata"], targets["metadata"], force=force)
+
+
 def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
     """Prepare external inputs and write input/input_import_manifest.json."""
 
@@ -914,50 +1171,192 @@ def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
         if conflicts:
             raise FileExistsError('Refusing to overwrite existing input files without --force: ' +
                                   ', '.join(path.as_posix() for path in conflicts))
-    if not config.dry_run:
-        targets["input_dir"].mkdir(parents=True, exist_ok=True)
-        if source_sigs is not None:
-            # D3: before any staged file is removed or written, so a failed import is retried in this folder.
-            _write_intent_marker(targets["input_dir"], source_sigs)
-        if config.force and config.mask_path is None:
-            src_input = (source / "input" if (source / "input").is_dir() else source) if source_kind == "canonical" else None
-            same_canonical = False
-            if src_input is not None:
-                try:
-                    same_canonical = src_input.resolve() == targets["input_dir"].resolve()
-                except OSError:
-                    same_canonical = False
-            if not same_canonical and (source_kind != "canonical" or not (src_input / "nodif_brain_mask.nii.gz").is_file()):
-                targets["mask"].unlink(missing_ok=True)
-                targets["mask"].with_name("nodif_brain_mask.manifest.json").unlink(missing_ok=True)
-        if config.force and backend != "copy" and config.output_kind == "canonical-nifti":
-            for stale_name in ("data.nii.gz", "data.nii", "bvals", "bvecs", "dwi.json", "data.bval", "data.bvec", "data.json"):
-                (targets["input_dir"] / stale_name).unlink(missing_ok=True)
+
     command_result: dict[str, Any] | None = None
     gradient_receipt: dict[str, Any] | None = None
 
-    if backend == "copy":
+    if config.dry_run:
+        if backend != "copy":
+            command = plan.get("command")
+            if not command:
+                raise ValueError(f"No import command was generated for backend={backend}.")
+            if backend == 'dwiconvert' and source_kind == 'nrrd':
+                command_result = _run_nrrd_conversion(command, source, targets, dry_run=True)
+            else:
+                command_result = _run(command, dry_run=True, cwd=None)
+            if backend == "dcm2niix":
+                plan["postprocess"] = _normalize_dcm2niix_outputs(targets["input_dir"], force=config.force, dry_run=True)
+    elif backend == "copy":
         if source_kind == "canonical":
-            _copy_canonical_source(source, targets, force=config.force, dry_run=config.dry_run)
+            src_input = source / "input" if (source / "input").is_dir() else source
+            same_canonical = _same_resolved_path(src_input, targets["input_dir"])
+            src_mask = (
+                config.mask_path.expanduser().resolve()
+                if config.mask_path is not None
+                else (src_input / "nodif_brain_mask.nii.gz" if (src_input / "nodif_brain_mask.nii.gz").is_file() else None)
+            )
+            # Validate entire incoming canonical bundle BEFORE touching any existing file in targets["input_dir"].
+            validated = _validate_nifti_bundle(
+                src_input / "data.nii.gz",
+                src_input / "bvals",
+                src_input / "bvecs",
+                src_input / "dwi.json",
+                explicit_metadata=False,
+                mask_path=src_mask,
+                targets=targets,
+                force=config.force,
+            )
+            try:
+                targets["input_dir"].mkdir(parents=True, exist_ok=True)
+                if source_sigs is not None:
+                    _write_intent_marker(targets["input_dir"], source_sigs)
+                _copy_canonical_source(source, targets, force=config.force, dry_run=False)
+                if config.mask_path is not None:
+                    targets["mask"].with_name("nodif_brain_mask.manifest.json").unlink(missing_ok=True)
+                    _copy_file(config.mask_path.expanduser().resolve(), targets["mask"], force=config.force)
+                elif not same_canonical and (src_input / "nodif_brain_mask.nii.gz").is_file():
+                    targets["mask"].with_name("nodif_brain_mask.manifest.json").unlink(missing_ok=True)
+                if config.force and not same_canonical:
+                    protected = {p.resolve() for p in (
+                        src_input / "data.nii.gz",
+                        src_input / "bvals",
+                        src_input / "bvecs",
+                        src_input / "dwi.json",
+                        src_mask,
+                    ) if p is not None and p.exists()}
+                    _cleanup_stale_canonical_artifacts(
+                        targets,
+                        keep_metadata=validated["has_metadata"],
+                        keep_mask=src_mask is not None,
+                        protected_sources=protected,
+                    )
+            finally:
+                if validated["staged_cache_nii"] is not None:
+                    validated["staged_cache_nii"].unlink(missing_ok=True)
         elif source_kind == "nifti":
-            _copy_nifti_source(source, targets, config, force=config.force, dry_run=config.dry_run)
+            bval = (config.bval_path or _sidecar_for(source, ".bval")).expanduser().resolve()
+            bvec = (config.bvec_path or _sidecar_for(source, ".bvec")).expanduser().resolve()
+            metadata = (config.metadata_path or _sidecar_for(source, ".json")).expanduser().resolve()
+            # Validate entire incoming NIfTI bundle BEFORE mutating or deleting ANY existing file.
+            validated = _validate_nifti_bundle(
+                source,
+                bval,
+                bvec,
+                metadata,
+                explicit_metadata=config.metadata_path is not None,
+                mask_path=config.mask_path,
+                targets=targets,
+                force=config.force,
+            )
+            targets["input_dir"].mkdir(parents=True, exist_ok=True)
+            if source_sigs is not None:
+                # D3: written before committing files so an I/O error mid-commit retries in this folder.
+                _write_intent_marker(targets["input_dir"], source_sigs)
+            _commit_validated_nifti_bundle(validated, targets, force=config.force)
+            if config.mask_path is not None:
+                targets["mask"].with_name("nodif_brain_mask.manifest.json").unlink(missing_ok=True)
+                _copy_file(config.mask_path.expanduser().resolve(), targets["mask"], force=config.force)
+            if config.force:
+                protected = {p.resolve() for p in (source, bval, bvec, metadata, config.mask_path) if p is not None and p.exists()}
+                _cleanup_stale_canonical_artifacts(
+                    targets,
+                    keep_metadata=validated["has_metadata"],
+                    keep_mask=config.mask_path is not None,
+                    protected_sources=protected,
+                )
     else:
         command = plan.get("command")
         if not command:
             raise ValueError(f"No import command was generated for backend={backend}.")
-        cwd = targets["input_dir"] if backend == "dcm2niix" else None
-        if backend == 'dwiconvert' and source_kind == 'nrrd':
-            command_result = _run_nrrd_conversion(command, source, targets, dry_run=config.dry_run)
-            if not config.dry_run and config.output_kind == "canonical-nifti":
-                gradient_receipt = _correct_nrrd_import_gradients(source, targets)
+        if config.mask_path is not None:
+            _validate_optional_mask(config.mask_path)
+        if config.output_kind == "canonical-nifti":
+            has_existing_workspace = (
+                targets["manifest"].is_file()
+                or targets["dwi"].exists()
+                or targets["mask"].exists()
+            )
+            targets["input_dir"].mkdir(parents=True, exist_ok=True)
+            if source_sigs is not None and not has_existing_workspace:
+                _write_intent_marker(targets["input_dir"], source_sigs)
+            stage_ctx = (
+                windows_ascii_temp_dir(prefix="imp_stage_")
+                if needs_windows_ascii_staging(targets["input_dir"])
+                else tempfile.TemporaryDirectory(prefix=".import-stage-", dir=targets["input_dir"])
+            )
+            with stage_ctx as stage_tmp:
+                stage_dir = Path(stage_tmp)
+                staged_targets = {
+                    **targets,
+                    "input_dir": stage_dir,
+                    "dwi": stage_dir / "data.nii.gz",
+                    "bvals": stage_dir / "bvals",
+                    "bvecs": stage_dir / "bvecs",
+                    "metadata": stage_dir / "dwi.json",
+                }
+                staged_command = _rewrite_converter_command(command, backend, targets, staged_targets)
+                cwd = stage_dir if backend == "dcm2niix" else None
+                if backend == "dwiconvert" and source_kind == "nrrd":
+                    command_result = _run_nrrd_conversion(staged_command, source, staged_targets, dry_run=False)
+                    gradient_receipt = _correct_nrrd_import_gradients(source, staged_targets)
+                else:
+                    command_result = _run(staged_command, dry_run=False, cwd=cwd)
+                if backend == "dcm2niix":
+                    plan["postprocess"] = _normalize_dcm2niix_outputs(stage_dir, force=True, dry_run=False)
+                    # Reject ambiguous multi-series DICOM conversions inside the staging directory
+                    # before copying canonical files so extra series are never silently dropped.
+                    staged_series: list[Path] = []
+                    for image in sorted(stage_dir.glob("*.nii*")):
+                        stem = image.name[:-7] if image.name.endswith(".nii.gz") else image.stem
+                        grads = (
+                            (stage_dir / "bvals", stage_dir / "bvecs")
+                            if stem == "data" and (stage_dir / "bvals").is_file()
+                            else (stage_dir / f"{stem}.bval", stage_dir / f"{stem}.bvec")
+                        )
+                        if all(path.is_file() for path in grads):
+                            staged_series.append(image)
+                    if len(staged_series) > 1 or (len(staged_series) == 1 and staged_series[0].name != "data.nii.gz"):
+                        raise ValueError(
+                            "DICOM conversion must yield exactly one unambiguous DWI series with gradients; "
+                            "select a single diffusion series directory."
+                        )
+                    # Record canonical postprocess paths for downstream consumers.
+                    for action in plan["postprocess"]:
+                        action["source"] = (targets["input_dir"] / Path(action["source"]).name).as_posix()
+                        action["target"] = (targets["input_dir"] / Path(action["target"]).name).as_posix()
+                if config.mask_path is not None and staged_targets["dwi"].is_file():
+                    import nibabel as nib
+
+                    conv_img = nib.load(str(staged_targets["dwi"]))
+                    _validate_optional_mask(config.mask_path, conv_img.shape[:3], conv_img.affine)
+                has_staged_metadata = staged_targets["metadata"].is_file()
+                if has_staged_metadata:
+                    _validate_optional_metadata(staged_targets["metadata"], explicit=False)
+                # Staging and validation succeeded: now atomically commit to targets["input_dir"].
+                if source_sigs is not None:
+                    _write_intent_marker(targets["input_dir"], source_sigs)
+                for key in ("dwi", "bvals", "bvecs"):
+                    if staged_targets[key].is_file():
+                        copy_file_atomic(staged_targets[key], targets[key])
+                if has_staged_metadata:
+                    copy_file_atomic(staged_targets["metadata"], targets["metadata"])
+                if config.mask_path is not None:
+                    targets["mask"].with_name("nodif_brain_mask.manifest.json").unlink(missing_ok=True)
+                    _copy_file(config.mask_path.expanduser().resolve(), targets["mask"], force=config.force)
+                if config.force:
+                    protected = {config.mask_path.expanduser().resolve()} if config.mask_path is not None else set()
+                    _cleanup_stale_canonical_artifacts(
+                        targets,
+                        keep_metadata=has_staged_metadata,
+                        keep_mask=config.mask_path is not None,
+                        protected_sources=protected,
+                    )
         else:
-            command_result = _run(command, dry_run=config.dry_run, cwd=cwd)
-        if backend == "dcm2niix":
-            plan["postprocess"] = _normalize_dcm2niix_outputs(targets["input_dir"], force=config.force, dry_run=config.dry_run)
-    if config.mask_path:
-        if not config.dry_run:
-            targets["mask"].with_name("nodif_brain_mask.manifest.json").unlink(missing_ok=True)
-            _copy_file(config.mask_path.expanduser().resolve(), targets["mask"], force=config.force)
+            targets["compat_nrrd"].parent.mkdir(parents=True, exist_ok=True)
+            command_result = _run(command, dry_run=False, cwd=None)
+            if config.mask_path is not None:
+                targets["mask"].with_name("nodif_brain_mask.manifest.json").unlink(missing_ok=True)
+                _copy_file(config.mask_path.expanduser().resolve(), targets["mask"], force=config.force)
 
     manifest = {
         "kind": "slicerdsurfer_input_import_manifest",
@@ -971,7 +1370,7 @@ def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
             "dwi": targets["dwi"].as_posix(),
             "bvals": targets["bvals"].as_posix(),
             "bvecs": targets["bvecs"].as_posix(),
-            "metadata": targets["metadata"].as_posix(),
+            "metadata": targets["metadata"].as_posix() if (config.dry_run or targets["metadata"].exists()) else None,
             "mask": targets["mask"].as_posix() if targets["mask"].exists() or config.mask_path else None,
         },
         **({"source_signatures": source_sigs} if source_sigs is not None else {}),
@@ -979,7 +1378,7 @@ def prepare_inputs(config: InputImportConfig) -> dict[str, Any]:
         **({"output_signatures": _output_signatures(targets)} if not config.dry_run else {}),
     }
     if not config.dry_run:
-        targets["manifest"].write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _write_manifest_atomic(targets["manifest"], manifest)
     return manifest
 
 
@@ -1078,91 +1477,17 @@ def _copy_nifti_source(
     metadata = (config.metadata_path or _sidecar_for(source, ".json")).expanduser().resolve()
     if dry_run:
         return
-    import nibabel as nib
-    import numpy as np
-    from shared.diffusion_io import commit_predecoded_nifti_cache, prepare_uncompressed_cache_target
-
-    image = nib.load(str(source))
-    if len(image.shape) != 4 or not np.isfinite(image.affine).all():
-        raise ValueError("DWI must be a four-dimensional NIfTI with a finite affine")
-    bval_bytes = bval.read_bytes()
-    bvec_bytes = bvec.read_bytes()
-    bval_has_bom = bval_bytes.startswith(b"\xef\xbb\xbf")
-    bvec_has_bom = bvec_bytes.startswith(b"\xef\xbb\xbf")
-    bval_raw = bval_bytes.decode("utf-8-sig")
-    bvec_raw = bvec_bytes.decode("utf-8-sig")
-    bvals = np.loadtxt(io.StringIO(bval_raw)).reshape(-1)
-    bvecs = np.loadtxt(io.StringIO(bvec_raw), ndmin=2)
-    bvecs_transposed = False
-    if bvecs.ndim == 2 and bvals.size != 3 and bvecs.shape == (bvals.size, 3):
-        bvecs = bvecs.T
-        bvecs_transposed = True
-    if bvals.size != image.shape[3] or bvecs.shape != (3, bvals.size):
-        raise ValueError("Gradient count/shape does not match the DWI volumes (expected 3 x N bvecs)")
-    if not np.isfinite(bvals).all() or not np.isfinite(bvecs).all():
-        raise ValueError("Gradients contain non-finite values")
-    target = targets["dwi"]
-    for path in (target, targets["bvals"], targets["bvecs"]):
-        if path.exists() and not force:
-            raise FileExistsError(f"Refusing to overwrite existing file: {path}")
-    # Force voxel decoding in one sequential stream pass before committing anything, catching truncated data.
-    staged_cache_nii: Path | None = None
-    expected_cache_bytes = 0
-    if isinstance(image, (nib.Nifti1Image, nib.Nifti2Image)) and hasattr(image.dataobj, "offset"):
-        offset = max(0, int(getattr(image.dataobj, "offset", 0)))
-        expected_cache_bytes = (
-            int(np.prod(image.shape, dtype=np.int64)) * int(image.get_data_dtype().itemsize) + offset
-        )
-        if source.name.lower().endswith(".nii.gz"):
-            staged_cache_nii = prepare_uncompressed_cache_target(target, expected_cache_bytes)
-        try:
-            _validate_nifti_voxels_single_pass(image, source, tee_path=staged_cache_nii)
-        except Exception:
-            if staged_cache_nii is not None:
-                staged_cache_nii.unlink(missing_ok=True)
-            raise
-    else:
-        for index in range(image.shape[3]):
-            if not np.isfinite(np.asanyarray(image.dataobj[..., index])).all():
-                raise ValueError("DWI contains non-finite values")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    already_same = False
-    if target.exists():
-        try:
-            already_same = os.path.samefile(source, target)
-        except OSError:
-            already_same = False
-    if not already_same:
-        fd, name = tempfile.mkstemp(suffix=".nii.gz", dir=target.parent)
-        os.close(fd)
-        temporary = Path(name)
-        try:
-            if source.name.lower().endswith(".nii.gz"):
-                if not _try_cow_clone(source, temporary):
-                    shutil.copyfile(source, temporary)
-            else:
-                with source.open("rb") as src, gzip.open(temporary, "wb", compresslevel=1) as dst:
-                    shutil.copyfileobj(src, dst, length=4 * 1024 * 1024)
-            nib.load(str(temporary))
-            os.replace(temporary, target)
-        except Exception:
-            if staged_cache_nii is not None:
-                staged_cache_nii.unlink(missing_ok=True)
-            raise
-        finally:
-            temporary.unlink(missing_ok=True)
-    if staged_cache_nii is not None:
-        commit_predecoded_nifti_cache(target, staged_cache_nii, expected_cache_bytes)
-    if bval_has_bom:
-        _write_text_file(bval_raw, targets["bvals"], force=force)
-    else:
-        _copy_file(bval, targets["bvals"], force=force)
-    if bvecs_transposed:
-        transposed_text = "\n".join(" ".join(f"{float(v):.15g}" for v in row) for row in bvecs) + "\n"
-        _write_text_file(transposed_text, targets["bvecs"], force=force)
-    elif bvec_has_bom:
-        _write_text_file(bvec_raw, targets["bvecs"], force=force)
-    else:
-        _copy_file(bvec, targets["bvecs"], force=force)
-    if metadata.is_file():
-        _copy_file(metadata, targets["metadata"], force=force)
+    validated = _validate_nifti_bundle(
+        source,
+        bval,
+        bvec,
+        metadata,
+        explicit_metadata=config.metadata_path is not None,
+        mask_path=config.mask_path,
+        targets=targets,
+        force=force,
+    )
+    _commit_validated_nifti_bundle(validated, targets, force=force)
+    if force and not validated["has_metadata"]:
+        if not _same_resolved_path(metadata, targets["metadata"]):
+            targets["metadata"].unlink(missing_ok=True)

@@ -64,6 +64,29 @@ def _write_tracking(root: Path, run_name: str, backend: str) -> dict:
         weights = dirs["tractogram_dir"] / f"{SID}_csd_act_ifod2_sift2_weights.txt"
         weights.write_text("1.0\n", encoding="utf-8")
         dirs["csd_dir"].mkdir(parents=True, exist_ok=True)
+        (dirs["csd_dir"] / "csd_act_manifest.json").write_text(
+            json.dumps({
+                "status": "completed",
+                "parameters": {"use_sift2": True},
+                "outputs": {"tractogram": tract.as_posix(), "sift2_weights": weights.as_posix()},
+            }) + "\n",
+            encoding="utf-8",
+        )
+        (dirs["csd_dir"] / "csd_act_qc.json").write_text(
+            json.dumps({
+                "status": "completed",
+                "scientific_output_summary": {
+                    "tck": {"file": T._file_record(tract), "streamline_count": 1},
+                    "sift2": {
+                        "file": T._file_record(weights),
+                        "weight_count": 1,
+                        "all_finite": True,
+                        "all_nonnegative": True,
+                    },
+                },
+            }) + "\n",
+            encoding="utf-8",
+        )
     else:
         tract = dirs["dti_tractogram_dir"] / f"{SID}-dti-deterministic.trk"
         T._write_test_tractogram(tract)

@@ -48,6 +48,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -783,14 +784,113 @@ def _stream_nifti_dwi_values(nifti_path: Path, expected_dims: tuple[int, int, in
     return values
 
 
+def _windows_staging_helpers():
+    try:
+        from shared.external_process import (
+            copy_file_atomic,
+            link_or_copy_file,
+            needs_windows_ascii_staging,
+            windows_ascii_temp_dir,
+        )
+    except ImportError:
+        repo_root = str(Path(__file__).resolve().parents[1])
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from shared.external_process import (
+            copy_file_atomic,
+            link_or_copy_file,
+            needs_windows_ascii_staging,
+            windows_ascii_temp_dir,
+        )
+    return needs_windows_ascii_staging, windows_ascii_temp_dir, link_or_copy_file, copy_file_atomic
+
+
+def _nhdr_data_file_path(nhdr_path: Path) -> Path | None:
+    """Return the resolved ``data file:`` target of a detached ``.nhdr``, or ``None``."""
+    if nhdr_path.suffix.lower() != ".nhdr" or not nhdr_path.is_file():
+        return None
+    try:
+        with nhdr_path.open("r", encoding="utf-8", errors="replace") as handle:
+            for _ in range(1024):
+                raw_line = handle.readline()
+                if not raw_line:
+                    break
+                line = raw_line.strip()
+                if not line:
+                    break
+                if line.startswith("#") or ":=" in line or ":" not in line:
+                    continue
+                key, _, value = line.partition(":")
+                if key.strip().lower().replace(" ", "") == "datafile":
+                    target = value.strip()
+                    if not target:
+                        return None
+                    candidate = Path(target)
+                    if not candidate.is_absolute():
+                        candidate = nhdr_path.parent / candidate
+                    return candidate.resolve()
+    except OSError:
+        return None
+    return None
+
+
+def _file_compound_suffix(path: Path) -> str:
+    lower = path.name.lower()
+    for suffix in (".nii.gz", ".raw.gz", ".mif.gz"):
+        if lower.endswith(suffix):
+            return path.name[-len(suffix):]
+    return path.suffix or ".nrrd"
+
+
+def _stage_teem_input(path: Path, stage_dir: Path, stem: str, *, header_only: bool = False) -> Path:
+    """Stage a NRRD/NHDR input inside an ASCII directory for Windows Teem ``fopen()`` calls."""
+    _, _, link_or_copy_file, _ = _windows_staging_helpers()
+    src = Path(path)
+    if src.suffix.lower() == ".nhdr":
+        lines = src.read_text(encoding="utf-8", errors="replace").splitlines()
+        if header_only:
+            data_entry = f"{stem}_dummy.raw"
+            (stage_dir / data_entry).write_bytes(b"")
+        else:
+            data_file = _nhdr_data_file_path(src)
+            if data_file is not None and data_file.is_file():
+                staged_data = link_or_copy_file(data_file, stage_dir / f"{stem}_data{_file_compound_suffix(data_file)}")
+                data_entry = staged_data.name
+            else:
+                data_entry = None
+        if data_entry is not None:
+            updated: list[str] = []
+            replaced = False
+            for line in lines:
+                if line.lstrip().lower().startswith(("data file:", "datafile:")):
+                    updated.append(f"data file: {data_entry}")
+                    replaced = True
+                else:
+                    updated.append(line)
+            if not replaced:
+                updated.append(f"data file: {data_entry}")
+            lines = updated
+        staged_nhdr = stage_dir / f"{stem}.nhdr"
+        staged_nhdr.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return staged_nhdr
+    return link_or_copy_file(src, stage_dir / f"{stem}{_file_compound_suffix(src)}")
+
+
 def estimate_file(dwi_path, tensor_path, baseline_path, method="WLS", shift_negative=False,
                   threads=None, log=print) -> dict:
     """DWIToDTIEstimation: read a DWI NRRD, write the tensor NRRD and the baseline NRRD."""
     vtk, vtkTeem, numpy_support, storage_node_class = _vtk_modules()
+    needs_staging, ascii_temp_dir, _, copy_file_atomic = _windows_staging_helpers()
     threads = max(1, int(threads or default_threads()))
     started = time.monotonic()
     dwi_path_obj = Path(dwi_path)
+    tensor_path_obj = Path(tensor_path)
+    baseline_path_obj = Path(baseline_path)
     nifti_payload = _nifti_payload_from_nhdr(dwi_path_obj)
+    nhdr_data = _nhdr_data_file_path(dwi_path_obj) if dwi_path_obj.suffix.lower() == ".nhdr" else None
+    stage_input = needs_staging(dwi_path_obj, nhdr_data)
+    stage_tensor = needs_staging(tensor_path_obj)
+    stage_baseline = needs_staging(baseline_path_obj)
     reader = None
     image = None
     values = None
@@ -798,81 +898,96 @@ def estimate_file(dwi_path, tensor_path, baseline_path, method="WLS", shift_nega
     max_b = 0.0
     ras_to_ijk_rotation = None
 
-    if nifti_payload is not None:
-        info_reader = vtkTeem.vtkTeemNRRDReader()
-        info_reader.SetFileName(str(dwi_path))
-        info_reader.UpdateInformation()
-        if not info_reader.GetReadStatus():
-            ext = info_reader.GetDataExtent()
-            dims = (ext[1] - ext[0] + 1, ext[3] - ext[2] + 1, ext[5] - ext[4] + 1)
-            if all(dim > 0 for dim in dims):
-                cand_grads, cand_max_b, cand_rot = prepare_gradients(info_reader, vtk, storage_node_class)
-                streamed = _stream_nifti_dwi_values(nifti_payload, dims, int(cand_grads.shape[0]))
-                if streamed is not None:
-                    reader = info_reader
-                    gradients, max_b, ras_to_ijk_rotation = cand_grads, cand_max_b, cand_rot
-                    image = vtk.vtkImageData()
-                    image.SetExtent(ext)
-                    image.SetSpacing(info_reader.GetDataSpacing())
-                    image.SetOrigin(info_reader.GetDataOrigin())
-                    values = streamed
+    stage_ctx = ascii_temp_dir(prefix="teem_est_") if (stage_input or stage_tensor or stage_baseline) else nullcontext(None)
+    with stage_ctx as stage_dir:
+        if nifti_payload is not None:
+            info_path = _stage_teem_input(dwi_path_obj, stage_dir, "dwi_hdr", header_only=True) if stage_input else dwi_path_obj
+            info_reader = vtkTeem.vtkTeemNRRDReader()
+            info_reader.SetFileName(str(info_path))
+            info_reader.UpdateInformation()
+            if not info_reader.GetReadStatus():
+                ext = info_reader.GetDataExtent()
+                dims = (ext[1] - ext[0] + 1, ext[3] - ext[2] + 1, ext[5] - ext[4] + 1)
+                if all(dim > 0 for dim in dims):
+                    cand_grads, cand_max_b, cand_rot = prepare_gradients(info_reader, vtk, storage_node_class)
+                    streamed = _stream_nifti_dwi_values(nifti_payload, dims, int(cand_grads.shape[0]))
+                    if streamed is not None:
+                        reader = info_reader
+                        gradients, max_b, ras_to_ijk_rotation = cand_grads, cand_max_b, cand_rot
+                        image = vtk.vtkImageData()
+                        image.SetExtent(ext)
+                        image.SetSpacing(info_reader.GetDataSpacing())
+                        image.SetOrigin(info_reader.GetDataOrigin())
+                        values = streamed
 
-    if values is None:
-        reader = vtkTeem.vtkTeemNRRDReader()
-        reader.SetFileName(str(dwi_path))
-        reader.Update()
-        if reader.GetReadStatus():
-            raise TeemError(f"Error reading diffusion file {dwi_path}")
-        gradients, max_b, ras_to_ijk_rotation = prepare_gradients(reader, vtk, storage_node_class)
-        image = reader.GetOutput()
-        scalars = image.GetPointData().GetScalars()
-        if scalars is None or scalars.GetNumberOfComponents() != gradients.shape[0]:
-            raise TeemError("The input has to have a number of components equal to the number of gradients")
-        values = numpy_support.vtk_to_numpy(scalars)
-        values = values.reshape(-1, gradients.shape[0])
+        if values is None:
+            full_path = _stage_teem_input(dwi_path_obj, stage_dir, "dwi_full", header_only=False) if stage_input else dwi_path_obj
+            reader = vtkTeem.vtkTeemNRRDReader()
+            reader.SetFileName(str(full_path))
+            reader.Update()
+            if reader.GetReadStatus():
+                raise TeemError(f"Error reading diffusion file {dwi_path}")
+            gradients, max_b, ras_to_ijk_rotation = prepare_gradients(reader, vtk, storage_node_class)
+            image = reader.GetOutput()
+            scalars = image.GetPointData().GetScalars()
+            if scalars is None or scalars.GetNumberOfComponents() != gradients.shape[0]:
+                raise TeemError("The input has to have a number of components equal to the number of gradients")
+            values = numpy_support.vtk_to_numpy(scalars)
+            values = values.reshape(-1, gradients.shape[0])
 
-    if values.size > 0 and not np.any(values != 0):
-        raise TeemError(
-            f"Diffusion volume {dwi_path} read as all zeros ({values.shape[0]} voxels x {values.shape[1]} gradients); "
-            "refusing to fit an empty tensor bundle"
-        )
-    read_seconds = time.monotonic() - started
+        if values.size > 0 and not np.any(values != 0):
+            raise TeemError(
+                f"Diffusion volume {dwi_path} read as all zeros ({values.shape[0]} voxels x {values.shape[1]} gradients); "
+                "refusing to fit an empty tensor bundle"
+            )
+        read_seconds = time.monotonic() - started
 
-    fit_started = time.monotonic()
-    tensors, baseline, failures = estimate_tensors(values, gradients, max_b, method, shift_negative, threads)
-    fit_seconds = time.monotonic() - fit_started
+        fit_started = time.monotonic()
+        tensors, baseline, failures = estimate_tensors(values, gradients, max_b, method, shift_negative, threads)
+        fit_seconds = time.monotonic() - fit_started
 
-    xx, xy, xz, yy, yz, zz = (tensors[:, column] for column in range(1, 7))
-    full = np.stack([xx, xy, xz, xy, yy, yz, xz, yz, zz], axis=1).astype(np.float32)
-    baseline_cast, cast_out_of_range = _cast_like_c(baseline, values.dtype)
-    del tensors, values
+        xx, xy, xz, yy, yz, zz = (tensors[:, column] for column in range(1, 7))
+        full = np.stack([xx, xy, xz, xy, yy, yz, xz, yz, zz], axis=1).astype(np.float32)
+        baseline_cast, cast_out_of_range = _cast_like_c(baseline, values.dtype)
+        del tensors, values
 
-    ijk_to_ras = _ijk_to_ras(reader, vtk)
-    tensor_image = vtk.vtkImageData()
-    tensor_image.CopyStructure(image)
-    tensor_array = numpy_support.numpy_to_vtk(full, deep=True, array_type=vtk.VTK_FLOAT)
-    tensor_image.GetPointData().SetTensors(tensor_array)
-    writer = vtkTeem.vtkTeemNRRDWriter()
-    writer.SetInputData(tensor_image)
-    writer.SetFileName(str(tensor_path))
-    writer.UseCompressionOn()
-    writer.SetIJKToRASMatrix(ijk_to_ras)
-    ras_to_ijk_rotation.Invert()  # tensor components are in IJK; the frame maps them back
-    writer.SetMeasurementFrameMatrix(ras_to_ijk_rotation)
-    writer.Write()
+        ijk_to_ras = _ijk_to_ras(reader, vtk)
+        tensor_write_path = (stage_dir / "DTI.nrrd") if stage_tensor else tensor_path_obj
+        baseline_write_path = (stage_dir / "b0.nrrd") if stage_baseline else baseline_path_obj
+        tensor_image = vtk.vtkImageData()
+        tensor_image.CopyStructure(image)
+        tensor_array = numpy_support.numpy_to_vtk(full, deep=True, array_type=vtk.VTK_FLOAT)
+        tensor_image.GetPointData().SetTensors(tensor_array)
+        writer = vtkTeem.vtkTeemNRRDWriter()
+        writer.SetInputData(tensor_image)
+        writer.SetFileName(str(tensor_write_path))
+        writer.UseCompressionOn()
+        writer.SetIJKToRASMatrix(ijk_to_ras)
+        ras_to_ijk_rotation.Invert()  # tensor components are in IJK; the frame maps them back
+        writer.SetMeasurementFrameMatrix(ras_to_ijk_rotation)
+        writer.Write()
+        if not tensor_write_path.is_file() or tensor_write_path.stat().st_size == 0:
+            raise TeemError(f"Error writing tensor file {tensor_path}")
 
-    baseline_image = vtk.vtkImageData()
-    baseline_image.CopyStructure(image)
-    baseline_array = numpy_support.numpy_to_vtk(
-        baseline_cast, deep=True, array_type=numpy_support.get_vtk_array_type(baseline_cast.dtype))
-    baseline_array.SetName("Baseline")
-    baseline_image.GetPointData().SetScalars(baseline_array)
-    writer2 = vtkTeem.vtkTeemNRRDWriter()
-    writer2.SetInputData(baseline_image)
-    writer2.SetFileName(str(baseline_path))
-    writer2.UseCompressionOn()
-    writer2.SetIJKToRASMatrix(ijk_to_ras)
-    writer2.Write()
+        baseline_image = vtk.vtkImageData()
+        baseline_image.CopyStructure(image)
+        baseline_array = numpy_support.numpy_to_vtk(
+            baseline_cast, deep=True, array_type=numpy_support.get_vtk_array_type(baseline_cast.dtype))
+        baseline_array.SetName("Baseline")
+        baseline_image.GetPointData().SetScalars(baseline_array)
+        writer2 = vtkTeem.vtkTeemNRRDWriter()
+        writer2.SetInputData(baseline_image)
+        writer2.SetFileName(str(baseline_write_path))
+        writer2.UseCompressionOn()
+        writer2.SetIJKToRASMatrix(ijk_to_ras)
+        writer2.Write()
+        if not baseline_write_path.is_file() or baseline_write_path.stat().st_size == 0:
+            raise TeemError(f"Error writing baseline file {baseline_path}")
+
+        if stage_tensor:
+            copy_file_atomic(tensor_write_path, tensor_path_obj)
+        if stage_baseline:
+            copy_file_atomic(baseline_write_path, baseline_path_obj)
 
     lib = load_teem()
     receipt = dict(
@@ -938,22 +1053,30 @@ def write_dec_nrrd(path, rgb, dims, ijk_to_ras) -> None:
 def dec_file(tensor_path, fa_path, dec_path, log=print) -> dict:
     """Read the tensor NRRD and the FA NRRD, write the DEC colour FA map beside them."""
     vtk, vtkTeem, numpy_support, _storage = _vtk_modules()
+    needs_staging, ascii_temp_dir, _, _ = _windows_staging_helpers()
     started = time.monotonic()
-    reader = vtkTeem.vtkTeemNRRDReader()
-    reader.SetFileName(str(tensor_path))
-    reader.Update()
-    tensors = reader.GetOutput().GetPointData().GetTensors()
-    if reader.GetReadStatus() or tensors is None:
-        raise TeemError(f"No tensor data in {tensor_path}")
-    fa_reader = vtkTeem.vtkTeemNRRDReader()
-    fa_reader.SetFileName(str(fa_path))
-    fa_reader.Update()
-    fa_scalars = fa_reader.GetOutput().GetPointData().GetScalars()
-    if fa_reader.GetReadStatus() or fa_scalars is None:
-        raise TeemError(f"No FA data in {fa_path}")
-    frame = _matrix_to_numpy(reader.GetMeasurementFrameMatrix(), 3)
-    rgb = directional_colour(numpy_support.vtk_to_numpy(tensors), frame, numpy_support.vtk_to_numpy(fa_scalars))
-    write_dec_nrrd(dec_path, rgb, reader.GetOutput().GetDimensions(), _ijk_to_ras(reader, vtk))
+    tensor_obj, fa_obj = Path(tensor_path), Path(fa_path)
+    stage_tensor = needs_staging(tensor_obj)
+    stage_fa = needs_staging(fa_obj)
+    stage_ctx = ascii_temp_dir(prefix="teem_dec_") if (stage_tensor or stage_fa) else nullcontext(None)
+    with stage_ctx as stage_dir:
+        tensor_in = _stage_teem_input(tensor_obj, stage_dir, "tensor") if stage_tensor else tensor_obj
+        fa_in = _stage_teem_input(fa_obj, stage_dir, "fa") if stage_fa else fa_obj
+        reader = vtkTeem.vtkTeemNRRDReader()
+        reader.SetFileName(str(tensor_in))
+        reader.Update()
+        tensors = reader.GetOutput().GetPointData().GetTensors()
+        if reader.GetReadStatus() or tensors is None:
+            raise TeemError(f"No tensor data in {tensor_path}")
+        fa_reader = vtkTeem.vtkTeemNRRDReader()
+        fa_reader.SetFileName(str(fa_in))
+        fa_reader.Update()
+        fa_scalars = fa_reader.GetOutput().GetPointData().GetScalars()
+        if fa_reader.GetReadStatus() or fa_scalars is None:
+            raise TeemError(f"No FA data in {fa_path}")
+        frame = _matrix_to_numpy(reader.GetMeasurementFrameMatrix(), 3)
+        rgb = directional_colour(numpy_support.vtk_to_numpy(tensors), frame, numpy_support.vtk_to_numpy(fa_scalars))
+        write_dec_nrrd(dec_path, rgb, reader.GetOutput().GetDimensions(), _ijk_to_ras(reader, vtk))
     seconds = round(time.monotonic() - started, 3)
     if log:
         log(f"[TeemDTI] DEC colour FA map in {seconds} s")
@@ -963,27 +1086,41 @@ def dec_file(tensor_path, fa_path, dec_path, log=print) -> dict:
 def scalar_files(tensor_path, outputs, threads=None, log=print) -> dict:
     """DiffusionTensorScalarMeasurements for several operations from one read of the tensor."""
     vtk, vtkTeem, _numpy_support, _storage = _vtk_modules()
+    needs_staging, ascii_temp_dir, _, copy_file_atomic = _windows_staging_helpers()
     threads = max(1, int(threads or default_threads()))
     started = time.monotonic()
-    reader = vtkTeem.vtkTeemNRRDReader()
-    reader.SetFileName(str(tensor_path))
-    reader.Update()
-    if reader.GetReadStatus() or reader.GetOutput().GetPointData().GetTensors() is None:
-        raise TeemError(f"No tensor data in {tensor_path}")
-    for operation, output_path in outputs:
-        if operation not in SCALAR_OPERATIONS:
-            raise ValueError(f"Operation {operation} not supported")
-        maths = vtkTeem.vtkDiffusionTensorMathematics()
-        maths.SetInputConnection(0, reader.GetOutputPort())
-        getattr(maths, "SetOperationTo" + SCALAR_OPERATIONS[operation])()
-        maths.SetNumberOfThreads(threads)
-        maths.Update()
-        writer = vtkTeem.vtkTeemNRRDWriter()
-        writer.SetInputConnection(maths.GetOutputPort())
-        writer.SetFileName(str(output_path))
-        writer.UseCompressionOn()
-        writer.SetIJKToRASMatrix(_ijk_to_ras(reader, vtk))
-        writer.Write()
+    tensor_obj = Path(tensor_path)
+    stage_tensor = needs_staging(tensor_obj)
+    stage_any_out = any(needs_staging(out_path) for _, out_path in outputs)
+    stage_ctx = ascii_temp_dir(prefix="teem_scl_") if (stage_tensor or stage_any_out) else nullcontext(None)
+    with stage_ctx as stage_dir:
+        tensor_in = _stage_teem_input(tensor_obj, stage_dir, "tensor") if stage_tensor else tensor_obj
+        reader = vtkTeem.vtkTeemNRRDReader()
+        reader.SetFileName(str(tensor_in))
+        reader.Update()
+        if reader.GetReadStatus() or reader.GetOutput().GetPointData().GetTensors() is None:
+            raise TeemError(f"No tensor data in {tensor_path}")
+        for idx, (operation, output_path) in enumerate(outputs):
+            if operation not in SCALAR_OPERATIONS:
+                raise ValueError(f"Operation {operation} not supported")
+            out_obj = Path(output_path)
+            stage_out = needs_staging(out_obj)
+            write_path = (stage_dir / f"scalar_{idx}.nrrd") if stage_out else out_obj
+            maths = vtkTeem.vtkDiffusionTensorMathematics()
+            maths.SetInputConnection(0, reader.GetOutputPort())
+            getattr(maths, "SetOperationTo" + SCALAR_OPERATIONS[operation])()
+            maths.SetNumberOfThreads(threads)
+            maths.Update()
+            writer = vtkTeem.vtkTeemNRRDWriter()
+            writer.SetInputConnection(maths.GetOutputPort())
+            writer.SetFileName(str(write_path))
+            writer.UseCompressionOn()
+            writer.SetIJKToRASMatrix(_ijk_to_ras(reader, vtk))
+            writer.Write()
+            if not write_path.is_file() or write_path.stat().st_size == 0:
+                raise TeemError(f"Error writing scalar file {output_path}")
+            if stage_out:
+                copy_file_atomic(write_path, out_obj)
     seconds = round(time.monotonic() - started, 3)
     if log:
         log(f"[TeemDTI] {len(outputs)} scalar maps with {threads} threads in {seconds} s")
@@ -1071,16 +1208,36 @@ def main(argv=None) -> int:
         if args.command == "scalars":
             scalar_files(args.input_tensor, _parse_outputs(args.outputs), args.threads)
             return 0
-        receipt = estimate_file(args.input_volume, args.output_tensor, args.output_baseline,
-                                args.enumeration, args.shiftNeg, args.threads)
         outputs = _parse_outputs(args.scalar)
-        if outputs:
-            receipt["scalars"] = scalar_files(args.output_tensor, outputs, args.threads)
-        if args.dec:
-            fa_path = dict(outputs).get("FractionalAnisotropy")
-            if not fa_path:
-                raise TeemError("--dec needs --scalar FractionalAnisotropy=PATH")
-            receipt["dec"] = dec_file(args.output_tensor, fa_path, args.dec)
+        needs_staging, ascii_temp_dir, _, copy_file_atomic = _windows_staging_helpers()
+        if needs_staging(args.output_tensor, args.output_baseline, *(p for _, p in outputs)):
+            with ascii_temp_dir(prefix="teem_cli_") as stage_dir:
+                staged_tensor = stage_dir / "DTI.nrrd"
+                staged_baseline = stage_dir / "b0.nrrd"
+                staged_outputs = [(op, stage_dir / f"scalar_{idx}.nrrd") for idx, (op, _) in enumerate(outputs)]
+                receipt = estimate_file(args.input_volume, staged_tensor, staged_baseline,
+                                        args.enumeration, args.shiftNeg, args.threads)
+                if staged_outputs:
+                    receipt["scalars"] = scalar_files(staged_tensor, staged_outputs, args.threads)
+                if args.dec:
+                    fa_path = dict(staged_outputs).get("FractionalAnisotropy")
+                    if not fa_path:
+                        raise TeemError("--dec needs --scalar FractionalAnisotropy=PATH")
+                    receipt["dec"] = dec_file(staged_tensor, fa_path, args.dec)
+                copy_file_atomic(staged_tensor, args.output_tensor)
+                copy_file_atomic(staged_baseline, args.output_baseline)
+                for (_, staged_out), (_, dest_out) in zip(staged_outputs, outputs):
+                    copy_file_atomic(staged_out, dest_out)
+        else:
+            receipt = estimate_file(args.input_volume, args.output_tensor, args.output_baseline,
+                                    args.enumeration, args.shiftNeg, args.threads)
+            if outputs:
+                receipt["scalars"] = scalar_files(args.output_tensor, outputs, args.threads)
+            if args.dec:
+                fa_path = dict(outputs).get("FractionalAnisotropy")
+                if not fa_path:
+                    raise TeemError("--dec needs --scalar FractionalAnisotropy=PATH")
+                receipt["dec"] = dec_file(args.output_tensor, fa_path, args.dec)
         if args.receipt:
             Path(args.receipt).write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
         return 0

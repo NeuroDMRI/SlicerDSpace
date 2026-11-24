@@ -594,11 +594,20 @@ def download_and_apply_code_overlay(
                 raise RuntimeError(
                     f"Applied code tree verification failed: {applied_sha} != {remote['code_sha256']}"
                 )
-        except Exception:
-            _rollback_apply(resolved_root, backup_dir, backed_up, created, backup_map=backup_map)
+        except Exception as apply_exc:
+            rollback_created = list(dict.fromkeys([*created, *created_planned]))
+            rollback_report = _rollback_apply(
+                resolved_root, backup_dir, backed_up, rollback_created, backup_map=backup_map
+            )
             _clear_stale_pyc(resolved_root, old_files | new_files)
-            _discard_journal(journal_dir)
-            raise
+            if rollback_report.get("ok"):
+                _discard_journal(journal_dir)
+                raise
+            err_summary = "; ".join(rollback_report.get("errors") or ("unknown rollback error",))
+            raise RuntimeError(
+                f"Update apply failed ({apply_exc}) and rollback was incomplete "
+                f"(journal preserved at {journal_dir}): {err_summary}"
+            ) from apply_exc
 
         _discard_journal(journal_dir)
         return {

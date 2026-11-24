@@ -314,6 +314,9 @@ class ProductOrchestratorResult:
 _RUNNING_PREFIX = "[Orchestrator] Running "
 # LE-6: the stage that started last and has not recorded a task yet; one value per context, so cohort threads do not mix.
 _CURRENT_STAGE: contextvars.ContextVar[str] = contextvars.ContextVar("slicerdspace_current_stage", default="")
+_FAILURE_RECORDED_EXC: contextvars.ContextVar[Optional[BaseException]] = contextvars.ContextVar(
+    "slicerdspace_failure_recorded_exc", default=None
+)
 _STAGE_LABEL_TARGETS = (  # log label prefix -> target id
     ("DWI preprocessing", "preprocessing"), ("DDSeg", "segmentation"), ("DDParcel", "parcellation"),
     ("DDSurfer surface", "surface"), ("DDSurfer postprocess", "surface_postprocess"),
@@ -3479,6 +3482,66 @@ def _csd_act_complete(
         return False
 
 
+def _sift2_weights_invalid_reason(
+    sift2_weights: Path,
+    tractogram: Path,
+    csd_manifest_path: Path,
+    csd_qc_path: Path,
+    *,
+    use_sift2: bool,
+) -> Optional[str]:
+    """Return ``None`` only when SIFT2 is enabled and ``sift2_weights`` is provenance-verified against ``tractogram``."""
+    if not use_sift2:
+        return "SIFT2 disabled for CSD/ACT"
+    if not tractogram.is_file():
+        return "missing TCK tractogram"
+    if not sift2_weights.is_file():
+        return "missing SIFT2 weights"
+    try:
+        if sift2_weights.stat().st_size <= 0 or tractogram.stat().st_size <= 0:
+            return "empty SIFT2 weights or tractogram file"
+    except OSError:
+        return "unreadable SIFT2 weights or tractogram file"
+    if not csd_manifest_path.is_file() or not csd_qc_path.is_file():
+        return "missing CSD/ACT manifest or QC provenance to verify SIFT2 weights"
+    try:
+        manifest = _read_json(csd_manifest_path)
+        qc = _read_json(csd_qc_path)
+    except (OSError, TypeError, ValueError):
+        return "unreadable CSD/ACT manifest or QC provenance for SIFT2 weights"
+    if not isinstance(manifest, dict) or not isinstance(qc, dict):
+        return "invalid CSD/ACT manifest or QC provenance for SIFT2 weights"
+    if manifest.get("status") != "completed" or qc.get("status") != "completed":
+        return "CSD/ACT manifest or QC is not completed"
+    params = manifest.get("parameters")
+    if isinstance(params, dict) and params.get("use_sift2", True) is False:
+        return "CSD/ACT manifest recorded use_sift2=False"
+    outputs = manifest.get("outputs")
+    if isinstance(outputs, dict) and "sift2_weights" in outputs and not outputs.get("sift2_weights"):
+        return "CSD/ACT manifest recorded no SIFT2 weights output"
+    summary = qc.get("scientific_output_summary")
+    if not isinstance(summary, dict):
+        return "CSD/ACT QC is missing scientific_output_summary"
+    tck = summary.get("tck")
+    sift2 = summary.get("sift2")
+    if not isinstance(tck, dict) or not isinstance(sift2, dict):
+        return "CSD/ACT QC is missing TCK or SIFT2 summary records"
+    try:
+        tck_count = int(tck.get("streamline_count", 0) or 0)
+        weight_count = int(sift2.get("weight_count", 0) or 0)
+    except (TypeError, ValueError):
+        return "CSD/ACT QC has invalid streamline or SIFT2 weight counts"
+    if tck_count <= 0 or weight_count != tck_count:
+        return "SIFT2 weight count does not match CSD/ACT streamline count"
+    if not bool(sift2.get("all_finite")) or not bool(sift2.get("all_nonnegative")):
+        return "CSD/ACT QC recorded invalid SIFT2 weights"
+    if not _file_record_matches(tck.get("file"), tractogram):
+        return "SIFT2 weights do not match current tractogram"
+    if not _file_record_matches(sift2.get("file"), sift2_weights):
+        return "SIFT2 weights file does not match CSD/ACT QC provenance"
+    return None
+
+
 def _sift2_weights_current(
     sift2_weights: Path,
     tractogram: Path,
@@ -3488,48 +3551,16 @@ def _sift2_weights_current(
     use_sift2: bool,
 ) -> bool:
     """Return True only when SIFT2 is enabled and ``sift2_weights`` matches the active tractogram."""
-    if not use_sift2 or not sift2_weights.is_file() or not tractogram.is_file():
-        return False
-    has_manifest = csd_manifest_path.is_file()
-    has_qc = csd_qc_path.is_file()
-    if not has_manifest and not has_qc:
-        try:
-            return sift2_weights.stat().st_size > 0
-        except OSError:
-            return False
-    if not has_manifest or not has_qc:
-        return False
-    try:
-        manifest = _read_json(csd_manifest_path)
-        qc = _read_json(csd_qc_path)
-    except (OSError, TypeError, ValueError):
-        return False
-    if manifest.get("status") != "completed" or qc.get("status") != "completed":
-        return False
-    params = manifest.get("parameters")
-    if isinstance(params, dict) and params.get("use_sift2", True) is False:
-        return False
-    outputs = manifest.get("outputs")
-    if isinstance(outputs, dict) and "sift2_weights" in outputs and not outputs.get("sift2_weights"):
-        return False
-    summary = qc.get("scientific_output_summary")
-    if not isinstance(summary, dict):
-        return False
-    tck = summary.get("tck")
-    sift2 = summary.get("sift2")
-    if not isinstance(tck, dict) or not isinstance(sift2, dict):
-        return False
-    tck_count = int(tck.get("streamline_count", 0) or 0)
-    weight_count = int(sift2.get("weight_count", 0) or 0)
-    if tck_count <= 0 or weight_count != tck_count:
-        return False
-    if not bool(sift2.get("all_finite")) or not bool(sift2.get("all_nonnegative")):
-        return False
-    if not _file_record_matches(tck.get("file"), tractogram):
-        return False
-    if not _file_record_matches(sift2.get("file"), sift2_weights):
-        return False
-    return True
+    return (
+        _sift2_weights_invalid_reason(
+            sift2_weights,
+            tractogram,
+            csd_manifest_path,
+            csd_qc_path,
+            use_sift2=use_sift2,
+        )
+        is None
+    )
 
 
 def _dki_config(config: ProductOrchestratorConfig, inputs: dict[str, Path]):
@@ -4520,22 +4551,45 @@ def plan_subject_products(config: ProductOrchestratorConfig, *, write: bool = Tr
             elif primary_tractography_backend != "csd_act" and config.connectome_backend == "mrtrix":
                 add(target, "blocked", "UKF/DTI tractography currently supports python connectome backend only", "configuration", outputs=conn_outputs, provides=False)
             else:
-                sift2_valid = primary_tractography_backend == "csd_act" and _sift2_weights_current(
-                    sift2_weights,
-                    csd_tractogram,
-                    csd_dir / "csd_act_manifest.json",
-                    csd_qc,
-                    use_sift2=bool(csd_opts["use_sift2"]),
+                sift2_invalid_reason = (
+                    _sift2_weights_invalid_reason(
+                        sift2_weights,
+                        csd_tractogram,
+                        csd_dir / "csd_act_manifest.json",
+                        csd_qc,
+                        use_sift2=bool(csd_opts["use_sift2"]),
+                    )
+                    if primary_tractography_backend == "csd_act"
+                    else "SIFT2 requires CSD/ACT tractography"
                 )
-                add(
-                    target,
-                    "will_run",
-                    "ready to run connectome",
-                    "runnable",
-                    inputs={"tractogram": tractogram, "parcellation": parcellation, "sift2_weights": sift2_weights if sift2_valid else None},
-                    outputs=conn_outputs,
-                    dependencies={"parcellation": "available" if parcellation is not None else "will_run", "tractogram": "available" if tractogram.is_file() else "will_run"},
-                )
+                sift2_valid = sift2_invalid_reason is None
+                tractography_will_run = any(item.target == "tractography" and item.will_run for item in items)
+                if (
+                    sift2_only
+                    and primary_tractography_backend == "csd_act"
+                    and not sift2_valid
+                    and not (tractography_will_run and bool(csd_opts["use_sift2"]))
+                ):
+                    add(
+                        target,
+                        "blocked",
+                        sift2_invalid_reason or "SIFT2 weights do not match current tractogram",
+                        "configuration" if not bool(csd_opts["use_sift2"]) else "upstream",
+                        inputs={"tractogram": tractogram, "parcellation": parcellation, "sift2_weights": None},
+                        outputs=conn_outputs,
+                        dependencies={"parcellation": "available" if parcellation is not None else "will_run", "tractogram": "available" if tractogram.is_file() else "will_run"},
+                        provides=False,
+                    )
+                else:
+                    add(
+                        target,
+                        "will_run",
+                        "ready to run connectome",
+                        "runnable",
+                        inputs={"tractogram": tractogram, "parcellation": parcellation, "sift2_weights": sift2_weights if sift2_valid else None},
+                        outputs=conn_outputs,
+                        dependencies={"parcellation": "available" if parcellation is not None else "will_run", "tractogram": "available" if tractogram.is_file() else "will_run"},
+                    )
             continue
 
     plan_warnings: list[str] = []
@@ -4566,6 +4620,121 @@ def _now_utc() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+_ARCHIVE_METADATA_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024
+
+
+def _snapshot_archived_manifest(
+    payload: dict[str, Any],
+    *,
+    history_dir: Path,
+    run_name: str,
+    revision: str,
+) -> dict[str, Any]:
+    """Attach artifact fingerprints and snapshot small JSON QC/manifest files for an archived run.
+
+    Avoids duplicating large binary outputs (``.nii.gz``/``.trk``/``.vtk``/``.tck``) while
+    making archived QC/stage-manifest records immutable and allowing ``result_scene`` to detect
+    when live outputs on disk have been superseded by a newer run.
+    """
+    from shared.result_scene import (
+        _lookup_artifact_fingerprint,
+        artifact_fingerprint_matches,
+        build_manifest_artifact_fingerprints,
+        compute_artifact_fingerprint,
+    )
+
+    archived_payload = json.loads(json.dumps(payload))
+    run_id = str(archived_payload.get("run_id") or f"{run_name}:{revision}")
+    archived_payload["run_id"] = run_id
+    archived_payload["archived"] = True
+    archived_payload["archive_revision"] = revision
+
+    existing_out_fps = (
+        dict(archived_payload.get("output_fingerprints"))
+        if isinstance(archived_payload.get("output_fingerprints"), dict)
+        else {}
+    )
+    existing_qc_fps = (
+        dict(archived_payload.get("qc_fingerprints"))
+        if isinstance(archived_payload.get("qc_fingerprints"), dict)
+        else {}
+    )
+    fresh_out_fps, fresh_qc_fps = build_manifest_artifact_fingerprints(archived_payload, run_id=run_id)
+    for key, fp in fresh_out_fps.items():
+        existing_out_fps.setdefault(key, fp)
+    for key, fp in fresh_qc_fps.items():
+        existing_qc_fps.setdefault(key, fp)
+
+    snapshots_dir = history_dir / "snapshots"
+    copied_by_source: dict[str, Path] = {}
+
+    def _snapshot_small_json(raw_path: Any, label: str) -> Optional[Path]:
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return None
+        src = Path(raw_path).expanduser()
+        if not src.is_absolute() or not src.is_file():
+            return None
+        try:
+            resolved_src = src.resolve()
+            if resolved_src.stat().st_size > _ARCHIVE_METADATA_SNAPSHOT_MAX_BYTES:
+                return None
+        except OSError:
+            return None
+        src_key = resolved_src.as_posix()
+        # Never snapshot a live QC/manifest file that was already overwritten before archiving.
+        recorded_fp = _lookup_artifact_fingerprint(existing_qc_fps, resolved_src)
+        if recorded_fp is not None and not artifact_fingerprint_matches(recorded_fp, resolved_src):
+            return None
+        cached_snap = copied_by_source.get(src_key)
+        if cached_snap is not None:
+            return cached_snap
+        snapshots_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = _safe_task_dir_name(src.stem) + (src.suffix or ".json")
+        dest = snapshots_dir / f"{label}_{safe_name}"
+        shutil.copy2(resolved_src, dest)
+        copied_by_source[src_key] = dest
+        try:
+            snap_key = dest.resolve().as_posix()
+            existing_qc_fps[snap_key] = compute_artifact_fingerprint(dest, run_id=run_id)
+        except OSError:
+            pass
+        return dest
+
+    tasks = archived_payload.get("tasks")
+    if isinstance(tasks, list):
+        for idx, task in enumerate(tasks):
+            if not isinstance(task, dict):
+                continue
+            orig_qc = task.get("qc_path")
+            qc_snap = _snapshot_small_json(orig_qc, f"t{idx:03d}_qc")
+            if qc_snap is not None:
+                task.setdefault("original_qc_path", orig_qc)
+                task["qc_path"] = qc_snap.as_posix()
+            orig_man = task.get("manifest_path")
+            man_snap = _snapshot_small_json(orig_man, f"t{idx:03d}_manifest")
+            if man_snap is not None:
+                task.setdefault("original_manifest_path", orig_man)
+                task["manifest_path"] = man_snap.as_posix()
+            outputs = task.get("outputs")
+            if isinstance(outputs, dict):
+                for key in ("qc", "qc_path"):
+                    val = outputs.get(key)
+                    if isinstance(val, str) and val.strip():
+                        snap = qc_snap if val == orig_qc and qc_snap is not None else _snapshot_small_json(val, f"t{idx:03d}_{key}")
+                        if snap is not None:
+                            outputs[key] = snap.as_posix()
+                for key in ("manifest", "manifest_path"):
+                    val = outputs.get(key)
+                    if isinstance(val, str) and val.strip():
+                        snap = man_snap if val == orig_man and man_snap is not None else _snapshot_small_json(val, f"t{idx:03d}_{key}")
+                        if snap is not None:
+                            outputs[key] = snap.as_posix()
+
+    archived_payload["output_fingerprints"] = existing_out_fps
+    archived_payload["qc_fingerprints"] = existing_qc_fps
+    return archived_payload
+
+
 def _archive_existing_run_records(layout, run_name: str) -> dict[str, Path]:
     """Preserve prior run-level provenance before reusing a run name."""
 
@@ -4583,6 +4752,21 @@ def _archive_existing_run_records(layout, run_name: str) -> dict[str, Path]:
     archived: dict[str, Path] = {}
     for key, source in existing.items():
         destination = history_dir / source.name
+        if key == "orchestration_manifest":
+            try:
+                payload = json.loads(source.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                payload = None
+            if isinstance(payload, dict):
+                enriched = _snapshot_archived_manifest(
+                    payload,
+                    history_dir=history_dir,
+                    run_name=run_name,
+                    revision=revision,
+                )
+                destination.write_text(json.dumps(enriched, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                archived[key] = destination
+                continue
         shutil.copy2(source, destination)
         archived[key] = destination
     return archived
@@ -4678,7 +4862,8 @@ def _write_orchestration_checkpoint(
 
 
 def _mark_orchestration_failed(config: ProductOrchestratorConfig, error: BaseException, stage: str = "") -> Path:
-    subject_root = config.subject_root.expanduser().resolve()
+    raw_subject = config.subject_root.expanduser()
+    subject_root = (raw_subject.parent if raw_subject.is_file() else raw_subject).resolve()
     output_root = config.output_root.expanduser().resolve() if config.output_root is not None else None
     layout = subject_layout(subject_root, output_root=output_root)
     run_name = normalize_run_name(config.run_name)
@@ -4709,10 +4894,39 @@ def _mark_orchestration_failed(config: ProductOrchestratorConfig, error: BaseExc
         }
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
     if config.execute and config.write_run_record:
         _write_run_record_best_effort(path, None)  # a failed run is also archived
     return path
+
+
+def _mark_orchestration_failed_under_lock(
+    config: ProductOrchestratorConfig,
+    error: BaseException,
+    stage: str = "",
+) -> Optional[Path]:
+    """Record failed orchestration status strictly while holding the workspace lock.
+
+    If another active run holds the workspace lock, refuse to overwrite its live
+    manifest and return ``None``.
+    """
+    from shared.workspace_lock import WorkspaceLockError, subject_workspace_lock
+
+    raw_subject = config.subject_root.expanduser()
+    lock_base = raw_subject.parent if raw_subject.is_file() else raw_subject
+    output_root = config.output_root.expanduser().resolve() if config.output_root is not None else None
+    layout = subject_layout(lock_base.resolve(), output_root=output_root)
+    run_name = normalize_run_name(config.run_name)
+    try:
+        with subject_workspace_lock(layout, subject_id=config.subject_id, run_name=run_name):
+            return _mark_orchestration_failed(config, error, stage)
+    except WorkspaceLockError:
+        return None
 
 
 def _write_run_record_best_effort(manifest_path: Path, log) -> None:
@@ -5239,19 +5453,28 @@ def _run_subject_products_impl(
     output_root = config.output_root.expanduser().resolve() if config.output_root is not None else None
     layout = subject_layout(subject_root, output_root=output_root)
     run_name = normalize_run_name(config.run_name)
-    from shared.workspace_lock import workspace_lock
+    from shared.workspace_lock import WorkspaceLockError, subject_workspace_lock
 
-    with workspace_lock(layout.run_metadata, subject_id=config.subject_id, run_name=run_name):
-        return _run_subject_products_locked(
-            config=config,
-            targets=targets,
-            subject_root=subject_root,
-            output_root=output_root,
-            layout=layout,
-            run_name=run_name,
-            bundle_backends=bundle_backends,
-            log=log,
-        )
+    with subject_workspace_lock(layout, subject_id=config.subject_id, run_name=run_name):
+        try:
+            return _run_subject_products_locked(
+                config=config,
+                targets=targets,
+                subject_root=subject_root,
+                output_root=output_root,
+                layout=layout,
+                run_name=run_name,
+                bundle_backends=bundle_backends,
+                log=log,
+            )
+        except WorkspaceLockError:
+            raise
+        except Exception as exc:
+            if _FAILURE_RECORDED_EXC.get() is not exc:
+                stage = _CURRENT_STAGE.get()
+                _mark_orchestration_failed(config, exc, stage)
+                _FAILURE_RECORDED_EXC.set(exc)
+            raise
 
 
 def _run_subject_products_locked(
@@ -6962,16 +7185,28 @@ def _run_subject_products_locked(
                     log,
                 )
         weighted_connectome_handled = False
-        sift2_weights_valid = (
-            primary_tractography_backend == "csd_act"
-            and _sift2_weights_current(
+        sift2_invalid_reason = (
+            _sift2_weights_invalid_reason(
                 sift2_weights,
                 csd_tractogram,
                 csd_dir / "csd_act_manifest.json",
                 csd_qc,
                 use_sift2=bool(csd_opts["use_sift2"]),
             )
+            if primary_tractography_backend == "csd_act"
+            else "SIFT2 requires CSD/ACT tractography"
         )
+        sift2_weights_valid = primary_tractography_backend == "csd_act" and sift2_invalid_reason is None
+        if (
+            run_sift2
+            and primary_tractography_backend == "csd_act"
+            and not sift2_weights_valid
+            and sift2_weights.is_file()
+        ):
+            _emit(
+                f"[Orchestrator] Refusing unverified SIFT2 weights ({sift2_invalid_reason}): {sift2_weights}",
+                log,
+            )
         if run_fiber_count:
             conn_qc = connectome_dir / f"{config.subject_id}-connectome-streamline_count_qc.json"
             conn_matrix = connectome_dir / f"{config.subject_id}-connectome-streamline_count.csv"
@@ -7078,7 +7313,7 @@ def _run_subject_products_locked(
             not weighted_connectome_handled
             and run_sift2
             and primary_tractography_backend == 'csd_act'
-            and (sift2_weights_valid or (explicit_connectome_metrics and not run_fiber_count))
+            and (sift2_weights_valid or explicit_connectome_metrics)
         )
         if sift2_should_run:
             sift2_qc = sift2_connectome_dir / f"{config.subject_id}-connectome-sift2_weighted_streamline_count_qc.json"
@@ -7124,12 +7359,7 @@ def _run_subject_products_locked(
             elif not tractogram.is_file():
                 tasks.append(ProductTaskRecord(name="connectome.sift2_weighted", status="blocked", reason="missing TCK tractogram"))
             elif not sift2_weights_valid:
-                if not bool(csd_opts["use_sift2"]):
-                    sift2_block_reason = "SIFT2 disabled for CSD/ACT"
-                elif not sift2_weights.is_file():
-                    sift2_block_reason = "missing SIFT2 weights"
-                else:
-                    sift2_block_reason = "SIFT2 weights do not match current tractogram"
+                sift2_block_reason = sift2_invalid_reason or "SIFT2 weights do not match current tractogram"
                 tasks.append(ProductTaskRecord(name="connectome.sift2_weighted", status="blocked", reason=sift2_block_reason))
             else:
                 from connectome import ConnectomeConfig, run_connectome
@@ -7418,7 +7648,20 @@ def _run_subject_products_locked(
     performance_profile['wall_time_seconds'] = manifest['wall_time_seconds']
     performance_profile['wall_time_scope'] = manifest['wall_time_scope']
     Path(performance_profile['path']).write_text(json.dumps(performance_profile, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    import uuid
+    from shared.result_scene import build_manifest_artifact_fingerprints
+
+    run_id = f"{run_name}:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}:{uuid.uuid4().hex[:8]}"
+    manifest["run_id"] = run_id
+    out_fps, qc_fps = build_manifest_artifact_fingerprints(manifest, run_id=run_id)
+    manifest["output_fingerprints"] = out_fps
+    manifest["qc_fingerprints"] = qc_fps
+    tmp_manifest = manifest_path.with_name(f".{manifest_path.name}.{os.getpid()}.tmp")
+    try:
+        tmp_manifest.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(tmp_manifest, manifest_path)
+    finally:
+        tmp_manifest.unlink(missing_ok=True)
     if config.execute and config.write_run_record:
         _write_run_record_best_effort(manifest_path, log)  # D6/C40: after every manifest is final
     return ProductOrchestratorResult(
@@ -7438,9 +7681,10 @@ def run_subject_products(
     """Run products while preserving a failed manifest if any stage raises."""
 
     from contextlib import nullcontext
-    from shared.workspace_lock import WorkspaceLockError, workspace_lock
+    from shared.workspace_lock import WorkspaceLockError, subject_workspace_lock
 
     _CURRENT_STAGE.set("")
+    prev_recorded_token = _FAILURE_RECORDED_EXC.set(None)
     try:
         fresh_closure = not config.closure_applied  # Q1: multi-tracking children arrive already closed
         config = _with_closure(config)
@@ -7461,8 +7705,8 @@ def run_subject_products(
             or (config.output_root is not None and config.output_root.expanduser().exists())
         )
         early_lock = (
-            workspace_lock(
-                subject_layout(lock_base.resolve(), output_root=config.output_root).run_metadata,
+            subject_workspace_lock(
+                subject_layout(lock_base.resolve(), output_root=config.output_root),
                 subject_id=config.subject_id,
                 run_name=normalize_run_name(config.run_name),
             )
@@ -7470,61 +7714,76 @@ def run_subject_products(
             else nullcontext()
         )
         with early_lock:
-            target_workspace = (
-                subject_layout(config.subject_root, output_root=config.output_root).workspace_root
-                if config.output_root is not None
-                else None
-            )
-            if config.execute:
-                if not config.subject_id.strip() or config.select_streamlines <= 0:
-                    raise ValueError("subject_id is required and select_streamlines must be positive")
-                _normalize_targets(config)
-                from shared.dicom_input import prepare_dicom_root
-                dicom_record = prepare_dicom_root(
-                    config.subject_root,
-                    config.subject_id,
-                    dwiconvert=config.dwiconvert_executable,
-                    log=log,
-                    target_root=target_workspace,
+            try:
+                target_workspace = (
+                    subject_layout(config.subject_root, output_root=config.output_root).workspace_root
+                    if config.output_root is not None
+                    else None
                 )
-                if dicom_record is not None and target_workspace is not None:
-                    config = replace(config, subject_root=target_workspace)
-                if find_convertible_input(config.subject_root) is not None:
-                    mrconvert_exe = None
-                    if config.mrtrix_bin_dir is not None:
-                        candidate = Path(config.mrtrix_bin_dir).expanduser() / (
-                            "mrconvert.exe" if os.name == "nt" else "mrconvert"
-                        )
-                        if candidate.is_file():
-                            mrconvert_exe = candidate
-                    prepared_root = prepare_convertible_root(
+                if config.execute:
+                    if not config.subject_id.strip() or config.select_streamlines <= 0:
+                        raise ValueError("subject_id is required and select_streamlines must be positive")
+                    _normalize_targets(config)
+                    from shared.dicom_input import prepare_dicom_root
+                    dicom_record = prepare_dicom_root(
                         config.subject_root,
                         config.subject_id,
                         dwiconvert=config.dwiconvert_executable,
-                        mrconvert=mrconvert_exe,
                         log=log,
                         target_root=target_workspace,
                     )
-                    if prepared_root != config.subject_root.expanduser().resolve():
-                        config = replace(config, subject_root=prepared_root)
-            elif config.subject_root.expanduser().is_file():
-                found = find_convertible_input(config.subject_root)
-                if found is not None:
-                    config = replace(config, subject_root=found[2])
-            config = _with_preprocessing_pe_decision(config)
-            from shared.diffusion_io import subject_cache_root
-            cache_root = subject_layout(config.subject_root, output_root=config.output_root).cache
-            with subject_cache_root(cache_root):
-                use_multi, config = _uses_multi_tracking_variants(config)
-                if use_multi:
-                    from shared.multi_tracking import run
-                    return run(config, log=log)
-                return _run_subject_products_impl(config, log=log)
+                    if dicom_record is not None and target_workspace is not None:
+                        config = replace(config, subject_root=target_workspace)
+                    if find_convertible_input(config.subject_root) is not None:
+                        mrconvert_exe = None
+                        if config.mrtrix_bin_dir is not None:
+                            candidate = Path(config.mrtrix_bin_dir).expanduser() / (
+                                "mrconvert.exe" if os.name == "nt" else "mrconvert"
+                            )
+                            if candidate.is_file():
+                                mrconvert_exe = candidate
+                        prepared_root = prepare_convertible_root(
+                            config.subject_root,
+                            config.subject_id,
+                            dwiconvert=config.dwiconvert_executable,
+                            mrconvert=mrconvert_exe,
+                            log=log,
+                            target_root=target_workspace,
+                        )
+                        if prepared_root != config.subject_root.expanduser().resolve():
+                            config = replace(config, subject_root=prepared_root)
+                elif config.subject_root.expanduser().is_file():
+                    found = find_convertible_input(config.subject_root)
+                    if found is not None:
+                        config = replace(config, subject_root=found[2])
+                config = _with_preprocessing_pe_decision(config)
+                from shared.diffusion_io import subject_cache_root
+                cache_root = subject_layout(config.subject_root, output_root=config.output_root).cache
+                with subject_cache_root(cache_root):
+                    use_multi, config = _uses_multi_tracking_variants(config)
+                    if use_multi:
+                        from shared.multi_tracking import run
+                        return run(config, log=log)
+                    return _run_subject_products_impl(config, log=log)
+            except WorkspaceLockError:
+                raise
+            except Exception as exc:
+                stage = _CURRENT_STAGE.get()
+                if _FAILURE_RECORDED_EXC.get() is not exc:
+                    _mark_orchestration_failed_under_lock(config, exc, stage)
+                    _FAILURE_RECORDED_EXC.set(exc)
+                if stage:
+                    _emit(stage_failure_text(stage, exc, config.output_root), log)  # LE-6: the log line names the stage
+                raise
     except WorkspaceLockError:
         raise
     except Exception as exc:
-        stage = _CURRENT_STAGE.get()
-        _mark_orchestration_failed(config, exc, stage)
-        if stage:
-            _emit(stage_failure_text(stage, exc, config.output_root), log)  # LE-6: the log line names the stage
+        if _FAILURE_RECORDED_EXC.get() is not exc:
+            stage = _CURRENT_STAGE.get()
+            _mark_orchestration_failed_under_lock(config, exc, stage)
+            _FAILURE_RECORDED_EXC.set(exc)
+            if stage:
+                _emit(stage_failure_text(stage, exc, config.output_root), log)  # LE-6: the log line names the stage
         raise
+    finally:
+        _FAILURE_RECORDED_EXC.reset(prev_recorded_token)

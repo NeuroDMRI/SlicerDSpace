@@ -84,6 +84,17 @@ def anatomy_input_dir(output_root: Path, product: str = "") -> Path:
     return canonical
 
 
+def canonical_workspace_root(subject_root: Path, output_root: Optional[Path] = None) -> Path:
+    """Resolve the canonical workspace root shared by ``<W>`` and ``<W>/outputs`` aliases."""
+
+    if output_root is None:
+        return Path(subject_root).expanduser().resolve()
+    resolved_out = Path(output_root).expanduser().resolve()
+    if resolved_out.name.lower() in {"output", "outputs"} and resolved_out.parent != resolved_out:
+        return resolved_out.parent
+    return resolved_out
+
+
 @dataclass(frozen=True)
 class SubjectIOLayout:
     """Canonical output, preprocessed, and cache directories for one subject root."""
@@ -93,11 +104,12 @@ class SubjectIOLayout:
 
     @property
     def workspace_root(self) -> Path:
-        if self.output_root is None:
-            return self.subject_root
-        if self.output_root.name.lower() in {"output", "outputs"}:
-            return self.output_root.parent
-        return self.output_root
+        return canonical_workspace_root(self.subject_root, self.output_root)
+
+    @property
+    def workspace_lock_dir(self) -> Path:
+        """Canonical per-workspace lock directory shared by ``<W>``, ``<W>/outputs``, and ``<W>/output``."""
+        return self.cache
 
     @property
     def outputs(self) -> Path:

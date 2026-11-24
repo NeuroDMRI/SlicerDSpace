@@ -17,8 +17,98 @@ _PE_DIRECTIONS = {
     "PA": (0, 1, 0), "AP": (0, -1, 0),
     "IS": (0, 0, 1), "SI": (0, 0, -1),
 }
+_OPPOSITE_PE_DIRECTIONS = {
+    "LR": "RL", "RL": "LR",
+    "PA": "AP", "AP": "PA",
+    "IS": "SI", "SI": "IS",
+}
 # MRtrix 3.0.8's default BZeroThreshold, in s/mm².
 _BZERO_THRESHOLD = 10.0
+
+
+def describe_grid_mismatch(first: dict, second: dict) -> str | None:
+    """Return a diagnostic string when two MRtrix ``mrinfo -json_all`` headers differ spatially, else ``None``."""
+    size_a = list(first.get("size") or ())[:3]
+    size_b = list(second.get("size") or ())[:3]
+    if len(size_a) != 3 or len(size_b) != 3 or size_a != size_b:
+        return f"3D dimensions differ ({tuple(size_a)} vs {tuple(size_b)})"
+    spacing_a = list(first.get("spacing") or ())[:3]
+    spacing_b = list(second.get("spacing") or ())[:3]
+    if len(spacing_a) == 3 and len(spacing_b) == 3:
+        for axis, (one, two) in enumerate(zip(spacing_a, spacing_b)):
+            if one is None or two is None or not math.isfinite(one) or not math.isfinite(two) or one <= 0 or two <= 0:
+                return f"non-positive or non-finite voxel spacing on axis {axis} ({one!r} vs {two!r})"
+            if abs(two - one) / (0.5 * (one + two)) > 1e-4:
+                return f"voxel spacing differs ({tuple(spacing_a)} vs {tuple(spacing_b)} mm)"
+    transform_a = list(first.get("transform") or ())[:3]
+    transform_b = list(second.get("transform") or ())[:3]
+    if len(transform_a) != 3 or len(transform_b) != 3:
+        return "missing 3x4 spatial transform header"
+    max_rot_diff = 0.0
+    max_origin_diff = 0.0
+    for one, two in zip(transform_a, transform_b):
+        if len(one) < 4 or len(two) < 4:
+            return "malformed spatial transform row"
+        if not all(math.isfinite(v) for v in (*one[:4], *two[:4])):
+            return "non-finite spatial transform values"
+        for a, b in zip(one[:3], two[:3]):
+            max_rot_diff = max(max_rot_diff, abs(float(a) - float(b)))
+        max_origin_diff = max(max_origin_diff, abs(float(one[3]) - float(two[3])))
+    if max_rot_diff > 1e-4:
+        return f"orientation/rotation matrix differs (max element diff {max_rot_diff:.6g}, tolerance 1e-4)"
+    if max_origin_diff > 1e-2:
+        return f"origin differs by {max_origin_diff:.3f} mm (tolerance 0.01 mm)"
+    return None
+
+
+def _same_grid(first: dict, second: dict) -> bool:
+    return describe_grid_mismatch(first, second) is None
+
+
+def validate_b0_pair_headers(forward_header: dict, reverse_header: dict) -> None:
+    """Fail fast before ``mrcat``/Topup when forward and reverse b=0 headers disagree spatially."""
+    mismatch = describe_grid_mismatch(forward_header, reverse_header)
+    if mismatch is not None:
+        raise ValueError(
+            "Forward and reverse phase-encoded b=0 images do not share the same spatial grid before Topup merge: "
+            f"{mismatch}."
+        )
+
+
+def validate_topup_pe_metadata(
+    phase_encoding: str,
+    readout_time: float | None,
+    *,
+    reverse_phase_encoding: str | None = None,
+    reverse_readout_time: float | None = None,
+) -> tuple[tuple[int, int, int], float]:
+    """Validate anatomical phase-encoding direction(s) and total readout time before merge/Topup."""
+    pe_norm = str(phase_encoding or "").strip().upper()
+    direction = _PE_DIRECTIONS.get(pe_norm)
+    if direction is None:
+        raise ValueError(f"Unsupported anatomical phase encoding direction: {phase_encoding}")
+    if isinstance(readout_time, bool):
+        raise ValueError("FSL readout time must be positive and finite.")
+    readout = DWIFSLPREPROC_DEFAULT_READOUT_S if readout_time is None else float(readout_time)
+    if not math.isfinite(readout) or readout <= 0:
+        raise ValueError("FSL readout time must be positive and finite.")
+    if reverse_phase_encoding is not None and str(reverse_phase_encoding).strip():
+        rev_norm = str(reverse_phase_encoding).strip().upper()
+        if rev_norm not in _PE_DIRECTIONS:
+            raise ValueError(f"Unsupported reverse phase encoding direction: {reverse_phase_encoding}")
+        expected_rev = _OPPOSITE_PE_DIRECTIONS[pe_norm]
+        if rev_norm != expected_rev:
+            raise ValueError(
+                f"Reverse phase-encoded b=0 PhaseEncodingDirection ({rev_norm}) is not opposite to main DWI "
+                f"PhaseEncodingDirection ({pe_norm}); Topup requires {expected_rev}."
+            )
+    if reverse_readout_time is not None:
+        if isinstance(reverse_readout_time, bool):
+            raise ValueError("Reverse phase-encoded b=0 TotalReadoutTime must be positive and finite.")
+        rev_ro = float(reverse_readout_time)
+        if not math.isfinite(rev_ro) or rev_ro <= 0:
+            raise ValueError("Reverse phase-encoded b=0 TotalReadoutTime must be positive and finite.")
+    return direction, readout
 
 
 def _require_file(path: Path) -> None:
@@ -44,19 +134,6 @@ def _write_pe_table(path: Path, direction: tuple[int, ...], readout: float, volu
     else:
         text = row(1) * volumes
     path.write_text(text, encoding="ascii")
-
-
-def _same_grid(first: dict, second: dict) -> bool:
-    if first["size"][:3] != second["size"][:3]:
-        return False
-    for one, two in zip(first["spacing"][:3], second["spacing"][:3]):
-        if one and two and not math.isnan(one) and not math.isnan(two):
-            if abs(two - one) / (0.5 * (one + two)) > 1e-4:
-                return False
-    for one, two in zip(first["transform"][:3], second["transform"][:3]):
-        if any(abs(a - b) > 1e-4 for a, b in zip(one[:3], two[:3])) or abs(one[3] - two[3]) > 1e-2:
-            return False
-    return True
 
 
 def _validate_gradients(bvec: Path, bval: Path, volumes: int) -> None:
@@ -91,6 +168,10 @@ def run_fsl_correction(
     run_stage: Callable[[list[str]], str],
     topup_config: Path | None = None,
     force: bool = False,
+    forward_b0: Path | None = None,
+    reverse_b0: Path | None = None,
+    reverse_phase_encoding: str | None = None,
+    reverse_readout_time: float | None = None,
 ) -> None:
     """Correct a single-PE DWI with an optional balanced forward/reverse pair.
 
@@ -98,13 +179,13 @@ def run_fsl_correction(
     The callback runs one argv and raises on nonzero exit. MRtrix performs the
     FSL phase and gradient conversions in the image's actual on-disk strides.
     """
-    direction = _PE_DIRECTIONS.get(phase_encoding.upper())
-    if direction is None:
-        raise ValueError(f"Unsupported anatomical phase encoding direction: {phase_encoding}")
-    readout = DWIFSLPREPROC_DEFAULT_READOUT_S if readout_time is None else float(readout_time)
-    if not math.isfinite(readout) or readout <= 0:
-        raise ValueError("FSL readout time must be positive and finite.")
-    use_topup = se_epi_pair is not None
+    direction, readout = validate_topup_pe_metadata(
+        phase_encoding,
+        readout_time,
+        reverse_phase_encoding=reverse_phase_encoding,
+        reverse_readout_time=reverse_readout_time,
+    )
+    use_topup = se_epi_pair is not None or (forward_b0 is not None and reverse_b0 is not None)
     required = ["mrconvert", "mrinfo", "dwi2mask", "maskfilter", "eddy"]
     if use_topup:
         required.extend(("mrcat", "mrtransform", "mrcalc", "topup", "applytopup"))
@@ -167,6 +248,16 @@ def run_fsl_correction(
     mask_source = dwi
     eddy_topup: list[str] = []
     if use_topup:
+        if forward_b0 is not None and reverse_b0 is not None:
+            forward_b0_header = header(forward_b0, "forward_b0_header.json")
+            reverse_b0_header = header(reverse_b0, "reverse_b0_header.json")
+            validate_b0_pair_headers(forward_b0_header, reverse_b0_header)
+            if se_epi_pair is None:
+                merged_pair = scratch / "se_epi_pair_validated.mif"
+                call("mrcat", forward_b0, reverse_b0, merged_pair, "-axis", "3")
+                _require_file(merged_pair)
+                se_epi_pair = merged_pair
+        assert se_epi_pair is not None
         pair_header = header(se_epi_pair, "se_epi_header.json")
         pair_shape = pair_header["size"]
         if len(pair_shape) != 4 or pair_shape[3] < 2 or pair_shape[3] % 2:

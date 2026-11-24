@@ -783,11 +783,31 @@ def _resolve_dki_fork_workers(config: DkiConfig) -> int:
         avail = len(os.sched_getaffinity(0))
     except (AttributeError, OSError):
         avail = os.cpu_count() or 1
+    ram_cap: int | None = None
+    try:
+        from shared.hardware_adapt import GIB, query_host_available_ram_bytes
+
+        avail_b = query_host_available_ram_bytes()
+        if avail_b > 0:
+            avail_gib = float(avail_b) / float(GIB)
+            # Fork workers share masked_unscaled and runtime pages via CoW;
+            # each worker only needs ~25-32 MiB private scratch per chunk.
+            # Strictly throttle to 1 worker under tight (<1 GiB) available RAM.
+            if avail_gib < 1.0:
+                ram_cap = 1
+            elif avail_gib < 2.0:
+                ram_cap = max(1, int(avail_gib // 0.25))
+            else:
+                ram_cap = max(1, int(avail_gib // 0.025))
+    except Exception:
+        ram_cap = None
     if config.num_threads is not None:
-        return max(1, min(int(config.num_threads), avail))
+        workers = max(1, min(int(config.num_threads), avail))
+        return min(workers, ram_cap) if ram_cap is not None else workers
     env_stage = os.environ.get("SLICERDSPACE_STAGE_CPUS", "").strip()
     if env_stage.isdigit() and int(env_stage) > 0:
-        return max(1, min(int(env_stage), avail))
+        workers = max(1, min(int(env_stage), avail))
+        return min(workers, ram_cap) if ram_cap is not None else workers
     try:
         from shared.hardware_adapt import host_total_ram_gib
 
@@ -795,7 +815,8 @@ def _resolve_dki_fork_workers(config: DkiConfig) -> int:
     except Exception:
         tot_gib = None
     if tot_gib is not None and tot_gib > 48.0 and avail >= 8:
-        return max(1, min(72, max(1, avail // 2)))
+        workers = max(1, min(72, max(1, avail // 2)))
+        return min(workers, ram_cap) if ram_cap is not None else workers
     return 1
 
 
@@ -836,7 +857,7 @@ def _resolve_dki_spawn_workers(config: DkiConfig) -> int:
             ),
         )
     except Exception:
-        return min(req, 4)
+        return 1
 
 
 def _eval_dki_chunk_signals(model, fit_method_name: str, start: int, stop: int, chunk_unscaled, slope, inter):
@@ -1272,7 +1293,11 @@ def _compute_maps(config: DkiConfig, paths: dict[str, Path], log):
                 header.set_data_dtype(array.dtype)
                 staged = work / paths[key].name
                 export_jobs.append((array, image.affine, header, staged, paths[key]))
-            export_workers = min(8, max(1, os.cpu_count() or 1), len(export_jobs))
+            export_workers = (
+                1
+                if available_ram_bytes() < 256 * 1024 * 1024
+                else min(8, max(1, os.cpu_count() or 1), len(export_jobs))
+            )
             if export_workers > 1 and len(flat_indices) >= 1024:
                 with ThreadPoolExecutor(max_workers=export_workers) as export_pool:
                     futs = [export_pool.submit(_save_dki_nifti_fast, *job) for job in export_jobs]

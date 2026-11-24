@@ -568,7 +568,9 @@ def adaptive_spawn_workers(
 ) -> int:
     """Cap multiprocessing ``spawn`` worker count on Windows/macOS or low-RAM hosts to prevent OOM.
 
-    High-RAM Linux servers (>48 GiB total RAM) preserve ``requested_workers`` unchanged.
+    High-RAM Linux servers (>48 GiB total and available RAM) preserve ``requested_workers`` unchanged.
+    Both total physical RAM (minus ``reserve_ram_gib``) and currently available RAM strictly bound
+    the worker count so tight available memory throttles down to 1 worker instead of overcommitting.
     """
     req = max(1, int(requested_workers))
     if req <= 1:
@@ -576,32 +578,32 @@ def adaptive_spawn_workers(
     plat = sys.platform if platform_name is None else str(platform_name).lower()
     tot = host_total_ram_gib() if total_ram_gib is None else float(total_ram_gib)
     is_spawn = plat in {"win32", "darwin"}
-    if not is_spawn and tot is not None and tot > 48.0:
-        return req
     if available_ram_gib is None:
         avail_b = query_host_available_ram_bytes()
         avail = float(avail_b) / float(GIB) if avail_b > 0 else None
     else:
-        avail = float(available_ram_gib)
-    # On spawn platforms (Windows/macOS), use conservative usable budget bounded by both total and available RAM.
-    if tot is not None and avail is not None:
-        usable = min(tot, max(avail + 2.0, tot * 0.65))
-    elif tot is not None:
-        usable = tot
-    elif avail is not None:
-        usable = avail
-    else:
-        return min(req, 4 if is_spawn else req)
-    if not is_spawn and usable > 48.0:
+        avail = max(0.0, float(available_ram_gib))
+    if not is_spawn and tot is not None and tot > 48.0 and (avail is None or avail > 48.0):
         return req
-    budget_workers = max(1, int((usable - float(reserve_ram_gib)) // max(0.5, float(per_worker_ram_gib))))
-    if tot is not None and tot <= 12.0:
-        budget_workers = min(budget_workers, 2)
-    elif tot is not None and tot <= 20.0 and is_spawn:
-        budget_workers = min(budget_workers, 3)
-    elif tot is not None and tot <= 36.0 and is_spawn:
-        budget_workers = min(budget_workers, 4)
-    return max(1, min(req, int(max_workers), budget_workers))
+    if tot is None and avail is None:
+        return min(req, 4 if is_spawn else req)
+    per_worker = max(0.5, float(per_worker_ram_gib))
+    limits: list[int] = [req, int(max_workers)]
+    if tot is not None:
+        tot_budget = max(1, int((tot - float(reserve_ram_gib)) // per_worker))
+        if tot <= 12.0:
+            tot_budget = min(tot_budget, 2)
+        elif tot <= 20.0 and is_spawn:
+            tot_budget = min(tot_budget, 3)
+        elif tot <= 36.0 and is_spawn:
+            tot_budget = min(tot_budget, 4)
+        limits.append(tot_budget)
+    if avail is not None:
+        # ``available_ram_gib`` already reflects currently free headroom (excluding OS/parent process
+        # and the 30% safety factor from ``available_resources``), so bound new workers strictly by it.
+        avail_budget = max(1, int(max(0.0, avail) // per_worker))
+        limits.append(avail_budget)
+    return max(1, min(limits))
 
 
 def _parse_linux_cpulist(spec: str) -> list[int]:

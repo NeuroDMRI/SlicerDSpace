@@ -6,6 +6,7 @@ cannot stop the rollback. Keep it standard-library only; psutil is optional and 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -250,26 +251,158 @@ def discard_journal(journal_directory: Path) -> None:
     shutil.rmtree(win_fs_path(journal_directory), ignore_errors=True)
 
 
+_ROLLBACK_RETRIES = 3
+_ROLLBACK_RETRY_DELAY = 0.05
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while True:
+            chunk = stream.read(262144)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _files_match(src: Path, dst: Path) -> bool:
+    try:
+        if not src.is_file() or not dst.is_file():
+            return False
+        if src.stat().st_size != dst.stat().st_size:
+            return False
+        return _sha256_file(src) == _sha256_file(dst)
+    except OSError:
+        return False
+
+
+def _unlink_with_retry(dst: Path, *, retries: int, retry_delay: float) -> Optional[str]:
+    attempts = max(1, int(retries))
+    last_error: Optional[str] = None
+    for attempt in range(attempts):
+        try:
+            if not os.path.lexists(dst):
+                return None
+            dst.unlink()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            if attempt + 1 < attempts and retry_delay > 0:
+                time.sleep(retry_delay)
+            continue
+        if not os.path.lexists(dst):
+            return None
+        last_error = f"file still exists after unlink: {dst}"
+        if attempt + 1 < attempts and retry_delay > 0:
+            time.sleep(retry_delay)
+    if not os.path.lexists(dst):
+        return None
+    return last_error or f"failed to remove {dst}"
+
+
+def _restore_file_with_retry(
+    src: Path,
+    dst_raw: Path,
+    *,
+    retries: int,
+    retry_delay: float,
+) -> Optional[str]:
+    if not src.is_file():
+        return f"backup file missing: {src}"
+    dst = win_fs_path(dst_raw)
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return f"{type(exc).__name__}: {exc}"
+    tmp_name = f".{dst_raw.name[:180]}.rbk.{os.getpid()}.tmp"
+    tmp_fs = win_fs_path(dst_raw.with_name(tmp_name))
+    attempts = max(1, int(retries))
+    last_error: Optional[str] = None
+    for attempt in range(attempts):
+        try:
+            shutil.copy2(src, tmp_fs)
+            os.replace(tmp_fs, dst)
+        except OSError as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            try:
+                tmp_fs.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if attempt + 1 < attempts and retry_delay > 0:
+                time.sleep(retry_delay)
+            continue
+        if _files_match(src, dst):
+            return None
+        last_error = f"post-restore verification failed for {dst_raw}"
+        if attempt + 1 < attempts and retry_delay > 0:
+            time.sleep(retry_delay)
+    try:
+        tmp_fs.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return last_error or f"failed to restore {dst_raw}"
+
+
 def rollback_apply(
     module_root: Path,
     backup_dir: Path,
     backed_up_relatives: List[str],
     created_relatives: List[str],
     backup_map: Optional[Dict[str, str]] = None,
-) -> None:
+    *,
+    retries: int = _ROLLBACK_RETRIES,
+    retry_delay: float = _ROLLBACK_RETRY_DELAY,
+) -> Dict[str, Any]:
+    """Roll back created and overwritten files, tracking and verifying every operation."""
+    root = Path(module_root)
+    backup_root = Path(backup_dir)
+    removed: List[str] = []
+    restored: List[str] = []
+    failed_removals: List[Dict[str, str]] = []
+    failed_restores: List[Dict[str, str]] = []
+    errors: List[str] = []
+
     for rel in created_relatives:
-        dst = win_fs_path(module_root / rel)
-        try:
-            dst.unlink(missing_ok=True)
-        except OSError:
-            pass
+        rel_path = Path(rel)
+        if rel_path.is_absolute() or ".." in rel_path.parts:
+            err = f"unsafe relative path: {rel!r}"
+            failed_removals.append({"path": str(rel), "error": err})
+            errors.append(f"remove {rel}: {err}")
+            continue
+        dst = win_fs_path(root / rel)
+        err = _unlink_with_retry(dst, retries=retries, retry_delay=retry_delay)
+        if err is not None:
+            failed_removals.append({"path": str(rel), "error": err})
+            errors.append(f"remove {rel}: {err}")
+        else:
+            removed.append(str(rel))
+
     for rel in backed_up_relatives:
+        rel_path = Path(rel)
+        if rel_path.is_absolute() or ".." in rel_path.parts:
+            err = f"unsafe relative path: {rel!r}"
+            failed_restores.append({"path": str(rel), "error": err})
+            errors.append(f"restore {rel}: {err}")
+            continue
         backup_rel = backup_map.get(rel, rel) if backup_map else rel
-        src = win_fs_path(backup_dir / backup_rel)
-        dst = win_fs_path(module_root / rel)
-        if src.is_file():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
+        src = win_fs_path(backup_root / backup_rel)
+        err = _restore_file_with_retry(src, root / rel, retries=retries, retry_delay=retry_delay)
+        if err is not None:
+            failed_restores.append({"path": str(rel), "error": err})
+            errors.append(f"restore {rel}: {err}")
+        else:
+            restored.append(str(rel))
+
+    return {
+        "ok": not failed_removals and not failed_restores,
+        "restored": restored,
+        "removed": removed,
+        "failed_removals": failed_removals,
+        "failed_restores": failed_restores,
+        "errors": errors,
+    }
 
 
 def recover_interrupted_update(module_root: Optional[Path] = None, *, lock_held: bool = False) -> Optional[Dict[str, Any]]:
@@ -336,18 +469,39 @@ def _recover_locked(root: Path, *, check_owner: bool) -> Optional[Dict[str, Any]
             f"{len(missing)} backup file(s) are missing (first: {missing[0]}). Reinstall the SlicerDSpace package.",
             flush=True,
         )
-        return {"status": "rollback_incomplete", "missing": missing}
-    rollback_apply(root, backup_dir, backed_up, created, backup_map=backup_map)
-    clear_stale_pyc(root, set(backed_up) | set(created))
+        return {"status": "rollback_incomplete", "ok": False, "missing": missing, "journal": str(journal_file)}
+    report = rollback_apply(root, backup_dir, backed_up, created, backup_map=backup_map)
+    clear_stale_pyc(root, set(report["restored"]) | set(report["removed"]))
+    if not report["ok"]:
+        first_err = report["errors"][0] if report["errors"] else "unknown error"
+        print(
+            f"SlicerDSpace: rollback of the interrupted update to {journal.get('target_version')} is incomplete "
+            f"({len(report['failed_restores'])} restore failure(s), {len(report['failed_removals'])} removal failure(s); "
+            f"first: {first_err}). Journal and backups were kept at {directory}; close any process using those files "
+            "and restart Slicer to retry, or reinstall the SlicerDSpace package.",
+            flush=True,
+        )
+        return {
+            "status": "rollback_incomplete",
+            "ok": False,
+            "target_version": journal.get("target_version"),
+            "restored_files": len(report["restored"]),
+            "removed_files": len(report["removed"]),
+            "failed_removals": report["failed_removals"],
+            "failed_restores": report["failed_restores"],
+            "errors": report["errors"],
+            "journal": str(journal_file),
+        }
     discard_journal(directory)
     print(
         f"SlicerDSpace: rolled back an interrupted update to {journal.get('target_version')} "
-        f"({len(backed_up)} files restored, {len(created)} removed). Restart Slicer if the module fails to load.",
+        f"({len(report['restored'])} files restored, {len(report['removed'])} removed). Restart Slicer if the module fails to load.",
         flush=True,
     )
     return {
         "status": "rolled_back",
+        "ok": True,
         "target_version": journal.get("target_version"),
-        "restored_files": len(backed_up),
-        "removed_files": len(created),
+        "restored_files": len(report["restored"]),
+        "removed_files": len(report["removed"]),
     }

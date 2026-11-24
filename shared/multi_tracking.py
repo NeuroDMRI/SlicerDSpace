@@ -106,14 +106,23 @@ def plan(config, *, write=True):
 def run(config, *, log=None):
     from shared.bundle_sources import explicit_sources
     from shared.orchestrator import (ProductOrchestratorResult, ProductTaskRecord, run_subject_products,
-                                     _archive_existing_run_records, _normalize_bundle_backends, _with_closure)
+                                     _CURRENT_STAGE, _FAILURE_RECORDED_EXC, _archive_existing_run_records,
+                                     _mark_orchestration_failed, _normalize_bundle_backends, _with_closure)
     config = _with_closure(config)
     from shared.io_layout import subject_layout, normalize_run_name
-    from shared.workspace_lock import WorkspaceLockError, workspace_lock
+    from shared.workspace_lock import WorkspaceLockError, subject_workspace_lock
     layout = subject_layout(config.subject_root, output_root=config.output_root)
     name = normalize_run_name(config.run_name)
-    with workspace_lock(layout.run_metadata, subject_id=config.subject_id, run_name=name):
-        return _run_locked(config, layout=layout, name=name, log=log)
+    with subject_workspace_lock(layout, subject_id=config.subject_id, run_name=name):
+        try:
+            return _run_locked(config, layout=layout, name=name, log=log)
+        except WorkspaceLockError:
+            raise
+        except Exception as exc:
+            if _FAILURE_RECORDED_EXC.get() is not exc:
+                _mark_orchestration_failed(config, exc, _CURRENT_STAGE.get())
+                _FAILURE_RECORDED_EXC.set(exc)
+            raise
 
 
 def _run_locked(config, *, layout, name, log=None):
@@ -182,6 +191,14 @@ def _run_locked(config, *, layout, name, log=None):
     payload["status"] = "failed" if failed else "completed" if config.execute else "planned"
     payload["elapsed_seconds"] = time.monotonic() - started
     payload['ended_at'] = datetime.now(timezone.utc).isoformat()
+    import uuid
+    from shared.result_scene import build_manifest_artifact_fingerprints
+
+    run_id = f"{name}:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ')}:{uuid.uuid4().hex[:8]}"
+    payload["run_id"] = run_id
+    out_fps, qc_fps = build_manifest_artifact_fingerprints(payload, run_id=run_id)
+    payload["output_fingerprints"] = out_fps
+    payload["qc_fingerprints"] = qc_fps
     publish()
     if config.execute:
         # T-C5: one run record from the final aggregate manifest, not one per child.

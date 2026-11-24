@@ -336,6 +336,44 @@ def _tensor_direction_getter(
     return peaks
 
 
+def _resolve_dti_fit_workers(
+    cpus: int,
+    *,
+    n_vox: int,
+    n_gradients: int,
+    n_sphere_verts: int = 362,
+    is_wls: bool = True,
+    chunk_voxels: int = 32768,
+    available_ram_bytes: int | None = None,
+) -> tuple[int, int]:
+    """Resolve RAM-bounded ``(workers, chunk_voxels)`` for multi-threaded CPU DTI fitting.
+
+    Preserves up to 16 worker threads on high-memory machines while throttling down to
+    1 worker (and smaller working chunks) when available host RAM is tight.
+    """
+    from shared.hardware_adapt import MIB, query_host_available_ram_bytes
+
+    cpu_limit = max(1, min(16, int(cpus)))
+    base_chunk = max(1, int(chunk_voxels))
+    if n_vox <= 0:
+        return 1, base_chunk
+    g = max(1, int(n_gradients))
+    s_verts = max(1, int(n_sphere_verts))
+    # WLS holds sig, log_s, w, w2, w2*log_s (5*G) + lhs (49) + tensors/evals/evecs (32) + sphere dot (s_verts).
+    per_voxel_bytes = ((5 * g + 81 + s_verts) if is_wls else (2 * g + 32 + s_verts)) * 8
+    avail = query_host_available_ram_bytes() if available_ram_bytes is None else int(available_ram_bytes)
+    if avail <= 0:
+        return 1, min(base_chunk, 4096)
+    usable_budget = int(avail * 0.50)
+    if avail < 512 * MIB:
+        eff_chunk = max(1024, min(base_chunk, max(1024, usable_budget // max(1, per_voxel_bytes))))
+        return 1, eff_chunk
+    eff_chunk = base_chunk
+    per_worker_bytes = max(32 * MIB, min(int(n_vox), eff_chunk) * per_voxel_bytes)
+    ram_workers = max(1, (usable_budget - 256 * MIB) // per_worker_bytes)
+    return max(1, min(cpu_limit, int(ram_workers))), eff_chunk
+
+
 def _fit_dti_fa_and_peaks(
     data_in_mask,
     mask,
@@ -416,8 +454,14 @@ def _fit_dti_fa_and_peaks(
         from shared.numeric_threads import reserved_stage_cpus
 
         cpus = reserved_stage_cpus() or max(1, int(_os.cpu_count() or 1))
-        workers = max(1, min(16, cpus))
-        chunks = [(s, min(n_vox, s + 32768)) for s in range(0, n_vox, 32768)]
+        workers, chunk_voxels = _resolve_dti_fit_workers(
+            cpus,
+            n_vox=n_vox,
+            n_gradients=int(w_mat.shape[0]),
+            n_sphere_verts=int(sphere_verts.shape[0]),
+            is_wls=is_wls,
+        )
+        chunks = [(s, min(n_vox, s + chunk_voxels)) for s in range(0, n_vox, chunk_voxels)]
         if workers > 1 and len(chunks) >= 2 and n_vox >= 65536:
             try:
                 from threadpoolctl import threadpool_limits

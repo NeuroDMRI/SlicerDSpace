@@ -19,6 +19,7 @@ from shared.cohort_schedule import scheduled_stage
 from concurrent.futures import ThreadPoolExecutor
 import gzip
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -760,8 +761,9 @@ def _prepare_reverse_b0_nrrd(
     else:
         raise ValueError(f"reverse_phase_b0 NRRD must be 3D or 4D; received {data.ndim}D ({data.shape}).")
     if reference_path is not None and Path(reference_path).is_file():
+        ref_img = nib.load(str(reference_path))
+        ref_affine = np.asarray(ref_img.affine, dtype=float)
         try:
-            ref_affine = np.asarray(nib.load(str(reference_path)).affine, dtype=float)
             xform = nib.orientations.ornt_transform(
                 nib.orientations.io_orientation(ras_affine),
                 nib.orientations.io_orientation(ref_affine),
@@ -772,9 +774,371 @@ def _prepare_reverse_b0_nrrd(
                 ras_affine = ras_affine @ nib.orientations.inv_ornt_aff(xform, orig_shape)
         except Exception:
             pass
+        validate_reverse_b0_spatial_grid(
+            ref_img.shape,
+            ref_affine,
+            vol3d.shape,
+            ras_affine,
+            forward_label="main DWI",
+            reverse_label=f"reverse phase-encoded b=0 ({source.name})",
+        )
     vol = vol3d[..., np.newaxis]
     dest.parent.mkdir(parents=True, exist_ok=True)
     nib.save(nib.Nifti1Image(vol, ras_affine), str(dest))
+
+
+_OPPOSITE_PE_DESIGNATORS = {
+    "AP": "PA",
+    "PA": "AP",
+    "LR": "RL",
+    "RL": "LR",
+    "IS": "SI",
+    "SI": "IS",
+}
+
+
+def validate_reverse_b0_spatial_grid(
+    forward_shape: tuple[int, ...] | list[int],
+    forward_affine: Any,
+    reverse_shape: tuple[int, ...] | list[int],
+    reverse_affine: Any,
+    *,
+    forward_label: str = "main DWI",
+    reverse_label: str = "reverse phase-encoded b=0",
+    spacing_rtol: float = 1e-4,
+    rotation_atol: float = 1e-4,
+    origin_atol_mm: float = 1e-2,
+) -> None:
+    """Validate that forward and reverse b=0 images share the exact same 3D spatial grid before ``mrcat``/Topup.
+
+    MRtrix ``mrcat`` adopts the first image's affine header when concatenating volumes of identical 3D matrix size,
+    which would silently hide origin, spacing, or orientation mismatches from downstream Topup checks.
+    """
+    import numpy as np
+
+    fwd_dims = tuple(int(v) for v in tuple(forward_shape)[:3])
+    rev_dims = tuple(int(v) for v in tuple(reverse_shape)[:3])
+    if len(fwd_dims) != 3 or any(d <= 0 for d in fwd_dims):
+        raise ValueError(f"Invalid {forward_label} spatial shape: {tuple(forward_shape)}")
+    if len(rev_dims) != 3 or any(d <= 0 for d in rev_dims):
+        raise ValueError(f"Invalid {reverse_label} spatial shape: {tuple(reverse_shape)}")
+    if fwd_dims != rev_dims:
+        raise ValueError(
+            f"{reverse_label} spatial grid does not match {forward_label} before Topup merge: "
+            f"3D dimensions differ ({rev_dims} vs {fwd_dims})."
+        )
+    fwd_aff = np.asarray(forward_affine, dtype=np.float64)
+    rev_aff = np.asarray(reverse_affine, dtype=np.float64)
+    if fwd_aff.shape != (4, 4) or not np.isfinite(fwd_aff).all() or abs(float(np.linalg.det(fwd_aff[:3, :3]))) < 1e-12:
+        raise ValueError(f"{forward_label} has a non-finite or singular spatial affine.")
+    if rev_aff.shape != (4, 4) or not np.isfinite(rev_aff).all() or abs(float(np.linalg.det(rev_aff[:3, :3]))) < 1e-12:
+        raise ValueError(f"{reverse_label} has a non-finite or singular spatial affine.")
+
+    fwd_spacing = np.linalg.norm(fwd_aff[:3, :3], axis=0)
+    rev_spacing = np.linalg.norm(rev_aff[:3, :3], axis=0)
+    if np.any(fwd_spacing <= 0) or np.any(rev_spacing <= 0):
+        raise ValueError("Topup spatial grid validation encountered non-positive voxel spacing.")
+    rel_spacing = np.abs(rev_spacing - fwd_spacing) / (0.5 * (fwd_spacing + rev_spacing))
+    if float(np.max(rel_spacing)) > float(spacing_rtol):
+        raise ValueError(
+            f"{reverse_label} spatial grid does not match {forward_label} before Topup merge: "
+            f"voxel sizes differ ({tuple(round(float(v), 5) for v in rev_spacing)} vs "
+            f"{tuple(round(float(v), 5) for v in fwd_spacing)} mm, tolerance {spacing_rtol:g})."
+        )
+
+    fwd_rot = fwd_aff[:3, :3] / fwd_spacing[None, :]
+    rev_rot = rev_aff[:3, :3] / rev_spacing[None, :]
+    max_rot_diff = float(np.max(np.abs(rev_rot - fwd_rot)))
+    if max_rot_diff > float(rotation_atol):
+        raise ValueError(
+            f"{reverse_label} spatial grid does not match {forward_label} before Topup merge: "
+            f"orientation/rotation matrix differs (max element diff {max_rot_diff:.6g}, tolerance {rotation_atol:g})."
+        )
+
+    origin_diff = np.abs(rev_aff[:3, 3] - fwd_aff[:3, 3])
+    max_origin_diff = float(np.max(origin_diff))
+    if max_origin_diff > float(origin_atol_mm):
+        raise ValueError(
+            f"{reverse_label} spatial grid does not match {forward_label} before Topup merge: "
+            f"origin differs by {max_origin_diff:.3f} mm (tolerance {origin_atol_mm:g} mm; "
+            f"forward={np.round(fwd_aff[:3, 3], 3).tolist()}, reverse={np.round(rev_aff[:3, 3], 3).tolist()})."
+        )
+
+
+def _read_nrrd_spatial_grid_aligned(source: Path, reference_affine: Any) -> tuple[tuple[int, int, int], Any]:
+    """Read an NRRD/NHDR header's 3D shape and RAS affine after the same orientation alignment as ``_prepare_reverse_b0_nrrd``."""
+    import nibabel as nib
+    import nrrd
+    import numpy as np
+    from shared.input_preview import _nrrd_diffusion_axis, _nrrd_ras_affine, _space_signs
+
+    header = nrrd.read_header(str(source))
+    raw_sizes = header.get("sizes")
+    sizes = () if raw_sizes is None else tuple(int(s) for s in raw_sizes)
+    if len(sizes) == 3:
+        directions = np.asarray(header.get("space directions"), dtype=float)
+        if directions.shape != (3, 3) or not np.all(np.isfinite(directions)):
+            raise ValueError(f"Reverse phase-encoded b=0 NRRD has invalid space directions: {source}")
+        origin = np.asarray(header.get("space origin", [0.0, 0.0, 0.0]), dtype=float)
+        affine = np.eye(4)
+        affine[:3, :3] = directions.T
+        affine[:3, 3] = origin
+        ras_affine = np.diag(list(_space_signs(header.get("space"))) + [1.0]) @ affine
+        shape3d = sizes
+    elif len(sizes) == 4:
+        axis = _nrrd_diffusion_axis(header, 4)
+        ras_affine = _nrrd_ras_affine(header, axis)
+        shape3d = tuple(sizes[i] for i in range(4) if i != axis)
+    else:
+        raise ValueError(f"reverse_phase_b0 must be a 3D or 4D image; received shape {sizes}.")
+
+    ref_affine = np.asarray(reference_affine, dtype=float)
+    try:
+        xform = nib.orientations.ornt_transform(
+            nib.orientations.io_orientation(ras_affine),
+            nib.orientations.io_orientation(ref_affine),
+        )
+        if not np.allclose(xform, [[0, 1], [1, 1], [2, 1]]):
+            orig_shape = shape3d
+            shape3d = tuple(orig_shape[int(axis_idx)] for axis_idx in xform[:, 0])
+            ras_affine = ras_affine @ nib.orientations.inv_ornt_aff(xform, orig_shape)
+    except Exception:
+        pass
+    return shape3d, ras_affine
+
+
+def _read_mif_header_dict(path: Path) -> Optional[dict[str, Any]]:
+    """Parse ``dim``, ``vox``, and ``transform`` from an MRtrix ``.mif`` / ``.mif.gz`` header in pure Python."""
+    opener = gzip.open if path.name.lower().endswith(".gz") else open
+    try:
+        with opener(path, "rb") as stream:
+            first = stream.readline(256)
+            if not first.startswith(b"mrtrix image"):
+                return None
+            dims: list[int] = []
+            vox: list[float] = []
+            transform_rows: list[list[float]] = []
+            for _ in range(512):
+                raw_line = stream.readline(4096)
+                if not raw_line:
+                    break
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if line == "END":
+                    break
+                if ":" not in line:
+                    continue
+                key, _, value = line.partition(":")
+                key = key.strip().lower()
+                val = value.strip()
+                if key == "dim":
+                    dims = [int(tok.strip()) for tok in val.split(",") if tok.strip()]
+                elif key == "vox":
+                    vox = [float(tok.strip()) for tok in val.split(",") if tok.strip()]
+                elif key == "transform":
+                    row = [float(tok.strip()) for tok in val.split(",") if tok.strip()]
+                    if len(row) == 4:
+                        transform_rows.append(row)
+    except OSError:
+        return None
+    except ValueError:
+        return None
+    if len(dims) < 3 or len(vox) < 3 or len(transform_rows) < 3:
+        return None
+    return {"size": dims, "spacing": vox, "transform": transform_rows[:3]}
+
+
+def _mrinfo_header_dict(image_path: Path, mrinfo_cmd: str, env: dict[str, str]) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix=".mrinfo-") as tmp:
+        out_json = Path(tmp) / "hdr.json"
+        _run_command([mrinfo_cmd, image_path.as_posix(), "-json_all", out_json.as_posix()], env=env, log=None, capture=True)
+        if not out_json.is_file() or out_json.stat().st_size == 0:
+            raise RuntimeError(f"mrinfo failed to inspect image header: {image_path}")
+        return json.loads(out_json.read_text(encoding="utf-8"))
+
+
+def _validate_reverse_b0_sidecar_metadata(
+    reverse_path: Path,
+    reverse_affine: Any,
+    forward_pe: Optional[str],
+) -> None:
+    """Validate optional sibling JSON sidecar on the reverse-PE b=0 image (PE direction & TotalReadoutTime)."""
+    from shared.pe_resolution import ANATOMICAL_DESIGNATORS, _is_axis_code, axis_code_to_designator, designator_axis
+
+    stem = _reverse_phase_stem(reverse_path)
+    sidecar_path = reverse_path.parent / f"{stem}.json"
+    if not sidecar_path.is_file():
+        return
+    try:
+        payload = json.loads(sidecar_path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"Reverse phase-encoded b=0 sidecar {sidecar_path.name} is not valid JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"Reverse phase-encoded b=0 sidecar {sidecar_path.name} must contain a JSON object.")
+
+    if "TotalReadoutTime" in payload and payload["TotalReadoutTime"] is not None:
+        raw_ro = payload["TotalReadoutTime"]
+        if isinstance(raw_ro, bool) or not isinstance(raw_ro, (int, float)):
+            raise ValueError(
+                f"Reverse phase-encoded b=0 sidecar {sidecar_path.name} has non-numeric TotalReadoutTime: {raw_ro!r}."
+            )
+        ro_val = float(raw_ro)
+        if not math.isfinite(ro_val) or ro_val <= 0.0:
+            raise ValueError(
+                f"Reverse phase-encoded b=0 sidecar {sidecar_path.name} TotalReadoutTime must be positive and finite "
+                f"(received {raw_ro!r})."
+            )
+
+    raw_pe = payload.get("PhaseEncodingDirection")
+    if raw_pe is not None:
+        if not isinstance(raw_pe, str) or not raw_pe.strip():
+            raise ValueError(
+                f"Reverse phase-encoded b=0 sidecar {sidecar_path.name} has invalid PhaseEncodingDirection: {raw_pe!r}."
+            )
+        pe_text = raw_pe.strip()
+        if pe_text.upper() in ANATOMICAL_DESIGNATORS:
+            rev_designator: Optional[str] = pe_text.upper()
+        elif _is_axis_code(pe_text.lower()):
+            rev_designator = axis_code_to_designator(pe_text, reverse_affine) if reverse_affine is not None else None
+            if rev_designator is None and reverse_affine is not None:
+                raise ValueError(
+                    f"Reverse phase-encoded b=0 sidecar {sidecar_path.name} PhaseEncodingDirection {raw_pe!r} "
+                    "cannot be mapped cleanly to an anatomical axis (oblique or invalid affine)."
+                )
+        else:
+            raise ValueError(
+                f"Reverse phase-encoded b=0 sidecar {sidecar_path.name} has unrecognized PhaseEncodingDirection "
+                f"{raw_pe!r}; expected one of AP, PA, LR, RL, IS, SI or i, i-, j, j-, k, k-."
+            )
+        if rev_designator is not None and forward_pe is not None:
+            expected_rev = _OPPOSITE_PE_DESIGNATORS.get(forward_pe.upper())
+            if expected_rev is not None and rev_designator != expected_rev:
+                raise ValueError(
+                    f"Reverse phase-encoded b=0 PhaseEncodingDirection ({rev_designator}, raw {raw_pe!r} in "
+                    f"{sidecar_path.name}) is not opposite to main DWI PhaseEncodingDirection ({forward_pe}); "
+                    f"Topup requires {expected_rev}."
+                )
+    elif payload.get("PhaseEncodingAxis") is not None:
+        raw_axis = payload.get("PhaseEncodingAxis")
+        if not isinstance(raw_axis, str) or not _is_axis_code(raw_axis.strip().lower()):
+            raise ValueError(
+                f"Reverse phase-encoded b=0 sidecar {sidecar_path.name} has invalid PhaseEncodingAxis: {raw_axis!r}."
+            )
+        if reverse_affine is not None and forward_pe is not None:
+            axis_desig = axis_code_to_designator(raw_axis.strip().rstrip("-"), reverse_affine)
+            if axis_desig is not None and designator_axis(axis_desig) != designator_axis(forward_pe.upper()):
+                raise ValueError(
+                    f"Reverse phase-encoded b=0 PhaseEncodingAxis ({raw_axis!r} -> {axis_desig} axis in "
+                    f"{sidecar_path.name}) is incompatible with main DWI PhaseEncodingDirection ({forward_pe})."
+                )
+
+
+def validate_topup_and_eddy_inputs(
+    raw: RawInputBundle,
+    config: DwiPreprocessingConfig,
+    acquisition: AcquisitionMetadata,
+    *,
+    backend: Optional[dict[str, Any]] = None,
+    env: Optional[dict[str, str]] = None,
+) -> None:
+    """Validate PE direction, readout time, and forward/reverse b=0 spatial grids before merge/Topup/Eddy."""
+    if not _effective_run_eddy(config):
+        return
+    if config.readout_time is not None:
+        if isinstance(config.readout_time, bool):
+            raise ValueError("TotalReadoutTime (readout_time) must be a positive finite number of seconds.")
+        try:
+            ro_val = float(config.readout_time)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"TotalReadoutTime (readout_time) must be a positive finite number: {config.readout_time!r}.") from exc
+        if not math.isfinite(ro_val) or ro_val <= 0.0:
+            raise ValueError(
+                f"TotalReadoutTime (readout_time) must be positive and finite (received {config.readout_time!r})."
+            )
+    if config.phase_encoding_direction is not None and str(config.phase_encoding_direction).strip():
+        if acquisition.phase_encoding is None:
+            raise ValueError(
+                f"Invalid phase_encoding_direction {config.phase_encoding_direction!r}: must be AP, PA, LR, RL, IS, SI "
+                "or a non-oblique NIfTI axis code (i, i-, j, j-, k, k-)."
+            )
+    forward_pe = acquisition.require_phase_encoding()
+    if acquisition.readout_time is not None:
+        if not math.isfinite(float(acquisition.readout_time)) or float(acquisition.readout_time) <= 0.0:
+            raise ValueError(f"Resolved TotalReadoutTime must be positive and finite (got {acquisition.readout_time!r}).")
+
+    effective_reverse = _effective_reverse_phase_b0(config)
+    if effective_reverse is None:
+        return
+    reverse_path = effective_reverse.expanduser().resolve()
+    if not reverse_path.is_file():
+        raise FileNotFoundError(f"Reverse phase-encoded b=0 image not found: {reverse_path}")
+
+    import nibabel as nib
+    import numpy as np
+
+    fwd_img = nib.load(str(raw.dwi_path))
+    fwd_shape = fwd_img.shape
+    fwd_affine = np.asarray(fwd_img.affine, dtype=float)
+    rev_name_lower = reverse_path.name.lower()
+    rev_affine: Any = None
+
+    if rev_name_lower.endswith((".nrrd", ".nhdr")):
+        rev_shape3d, rev_affine = _read_nrrd_spatial_grid_aligned(reverse_path, fwd_affine)
+        validate_reverse_b0_spatial_grid(
+            fwd_shape,
+            fwd_affine,
+            rev_shape3d,
+            rev_affine,
+            forward_label="main DWI",
+            reverse_label=f"reverse phase-encoded b=0 ({reverse_path.name})",
+        )
+    elif rev_name_lower.endswith((".mif", ".mif.gz")):
+        from preprocessing.fsl_native import validate_b0_pair_headers
+
+        mrinfo_cmd = ((backend or {}).get("commands") or {}).get("mrinfo") or _resolve_command("mrinfo", config)
+        if mrinfo_cmd and Path(mrinfo_cmd).is_file():
+            eff_env = env if env is not None else _external_command_environment(config)
+            fwd_hdr = _mrinfo_header_dict(raw.dwi_path, str(mrinfo_cmd), eff_env)
+            rev_hdr = _mrinfo_header_dict(reverse_path, str(mrinfo_cmd), eff_env)
+            validate_b0_pair_headers(fwd_hdr, rev_hdr)
+            rev_spacing = np.asarray(rev_hdr["spacing"][:3], dtype=float)
+            rev_tf = np.asarray(rev_hdr["transform"][:3], dtype=float)
+            rev_affine = np.eye(4)
+            rev_affine[:3, :3] = rev_tf[:3, :3] * rev_spacing[None, :]
+            rev_affine[:3, 3] = rev_tf[:3, 3]
+        else:
+            mif_hdr = _read_mif_header_dict(reverse_path)
+            if mif_hdr is not None:
+                rev_spacing = np.asarray(mif_hdr["spacing"][:3], dtype=float)
+                rev_tf = np.asarray(mif_hdr["transform"][:3], dtype=float)
+                rev_affine = np.eye(4)
+                rev_affine[:3, :3] = rev_tf[:3, :3] * rev_spacing[None, :]
+                rev_affine[:3, 3] = rev_tf[:3, 3]
+                # Compare in MRtrix's RAS canonical representation against forward DWI.
+                fwd_can = nib.as_closest_canonical(fwd_img)
+                validate_reverse_b0_spatial_grid(
+                    fwd_can.shape,
+                    fwd_can.affine,
+                    tuple(mif_hdr["size"][:3]),
+                    rev_affine,
+                    forward_label="main DWI",
+                    reverse_label=f"reverse phase-encoded b=0 ({reverse_path.name})",
+                )
+    else:
+        try:
+            rev_img = nib.load(str(reverse_path))
+        except Exception as exc:
+            raise ValueError(f"Unable to read reverse phase-encoded b=0 image: {reverse_path}") from exc
+        rev_affine = np.asarray(rev_img.affine, dtype=float)
+        validate_reverse_b0_spatial_grid(
+            fwd_shape,
+            fwd_affine,
+            rev_img.shape,
+            rev_affine,
+            forward_label="main DWI",
+            reverse_label=f"reverse phase-encoded b=0 ({reverse_path.name})",
+        )
+
+    _validate_reverse_b0_sidecar_metadata(reverse_path, rev_affine, forward_pe)
 
 
 def _reverse_b0_nifti_volume_index(image_path: Path, volume_count: int, b0_threshold: float) -> int:
@@ -1357,6 +1721,30 @@ def _execute_preprocessing_backend(
         if command[0] == "optional-output":
             idx += 1
             continue
+        if Path(command[0]).stem.lower() == "mrcat" and len(command) >= 4:
+            if acquisition is None:
+                acquisition = resolve_acquisition_for(raw, config)
+            validate_topup_and_eddy_inputs(raw, config, acquisition, backend=backend, env=env)
+            # Also verify the exact two inputs about to be concatenated when they are real images on disk.
+            fwd_in, rev_in = Path(command[1]), Path(command[2])
+            if fwd_in.is_file() and rev_in.is_file():
+                if fwd_in.name.lower().endswith((".nii", ".nii.gz")) and rev_in.name.lower().endswith((".nii", ".nii.gz")):
+                    import nibabel as nib
+
+                    try:
+                        fwd_loaded = nib.load(str(fwd_in))
+                        rev_loaded = nib.load(str(rev_in))
+                    except Exception:
+                        fwd_loaded = rev_loaded = None
+                    if fwd_loaded is not None and rev_loaded is not None:
+                        validate_reverse_b0_spatial_grid(
+                            fwd_loaded.shape,
+                            fwd_loaded.affine,
+                            rev_loaded.shape,
+                            rev_loaded.affine,
+                            forward_label=f"forward b=0 ({fwd_in.name})",
+                            reverse_label=f"reverse b=0 ({rev_in.name})",
+                        )
         if command[0] == "native-fsl-correction":
             from preprocessing.fsl_native import run_fsl_correction
 
@@ -1519,8 +1907,9 @@ def run_dwi_preprocessing(
             "Provide a reverse-PE b=0 image or disable Topup."
         )
     if config.execute and not config.skip and _effective_run_eddy(config):
-        # Rule 4 (T1 D1): no direction, no run. Fails before the manifest, the scratch folder or any stage.
-        acquisition.require_phase_encoding()
+        # Rule 4 (T1 D1) + pre-merge Topup geometry & PE/readout validation:
+        # fails fast before the manifest, the scratch folder, denoising, or mrcat.
+        validate_topup_and_eddy_inputs(raw, config, acquisition, backend=backend)
     commands = _build_commands(raw, config, paths, backend, acquisition)
     command_records = [{"argv": command} for command in commands]
     try:

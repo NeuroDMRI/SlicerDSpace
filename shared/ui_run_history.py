@@ -3514,7 +3514,7 @@ def _populate_manifest_output_items(
     """
 
     import qt
-    from shared.result_scene import native_tract_stem_key, result_candidates
+    from shared.result_scene import manifest_output_status, native_tract_stem_key, result_candidates
 
     if memo is not None:
         manifest = _without_repeated_tasks(manifest, memo)
@@ -3571,6 +3571,7 @@ def _populate_manifest_output_items(
                 and path.is_absolute()
                 and path.is_file()
                 and not _is_internal_cache_path(path, subject_root, output_root=output_root)
+                and manifest_output_status(manifest, path, kind="output") != "superseded"
             ):
                 groups.setdefault(str(task.get("name") or "qc"), {})[str(path.resolve())] = False
 

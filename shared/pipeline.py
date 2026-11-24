@@ -21,7 +21,18 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from shared.external_process import find_pythonslicer, merged_startup_environment, text_subprocess_kwargs, slicer_runtime_roots
+from shared.external_process import (
+    copy_file_atomic,
+    find_pythonslicer,
+    link_or_copy_file,
+    merged_startup_environment,
+    needs_windows_ascii_staging,
+    normalize_slicer_python_launch,
+    slicer_runtime_roots,
+    subprocess_no_window_kwargs,
+    text_subprocess_kwargs,
+    windows_ascii_temp_dir,
+)
 from shared.brain_mask import BrainMaskConfig, generate_brain_mask
 from shared.cache_lock import cache_lock
 
@@ -816,12 +827,16 @@ def _conversion_implementation(pin: Callable[[str], str] = lambda digest: digest
 
 def _run_cli(cmd: list[str], log: Optional[Callable[[str], None]] = None) -> None:
     _emit(f"[Shared] Running: {' '.join(cmd)}", log)
+    exec_cmd = list(cmd)
+    if exec_cmd:
+        program, norm_args = normalize_slicer_python_launch(exec_cmd[0], exec_cmd[1:])
+        exec_cmd = [program, *norm_args]
     process = subprocess.Popen(
-        cmd,
+        exec_cmd,
         env=merged_startup_environment(build_cli_environment(cmd[0])),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        **text_subprocess_kwargs(bufsize=1),
+        **subprocess_no_window_kwargs(**text_subprocess_kwargs(bufsize=1)),
     )
     last_nonempty_line = ""
 
@@ -1411,8 +1426,25 @@ def _registered_outputs_complete(bundle: RegisteredDTIBundle) -> bool:
     return _artifacts_current(bundle.bundle_dir, required)
 
 
+def _path_image_suffix(path: Path) -> str:
+    lower = path.name.lower()
+    for compound in (".nii.gz", ".mif.gz", ".raw.gz", ".tar.gz"):
+        if lower.endswith(compound):
+            return path.name[-len(compound):]
+    return path.suffix
+
+
 def _write_inverse_transform(forward_path: Path, inverse_path: Path) -> None:
     if SIMPLEITK_IMPORT_ERROR is not None or sitk is None:
+        return
+    if needs_windows_ascii_staging(forward_path, inverse_path):
+        with windows_ascii_temp_dir(prefix="sitk_") as stage_dir:
+            staged_in = link_or_copy_file(forward_path, stage_dir / f"forward{_path_image_suffix(forward_path)}")
+            staged_out = stage_dir / f"inverse{_path_image_suffix(inverse_path)}"
+            transform = sitk.ReadTransform(str(staged_in))
+            inverse = transform.GetInverse()
+            sitk.WriteTransform(inverse, str(staged_out))
+            copy_file_atomic(staged_out, inverse_path)
         return
     transform = sitk.ReadTransform(str(forward_path))
     inverse = transform.GetInverse()
@@ -1473,21 +1505,6 @@ def _ensure_registered_dti_bundle(raw, native, atlas_t2, fit_method, reuse, log,
     brainsfit_cli = _get_cli_executable("brainsfit")
     resample_cli = _get_cli_executable("resamplescalarvectordwivolume")
 
-    _run_cli(
-        [
-            brainsfit_cli,
-            "--fixedVolume",
-            atlas_t2.as_posix(),
-            "--movingVolume",
-            native.b0_nrrd_path.as_posix(),
-            "--linearTransform",
-            bundle.transform_path.as_posix(),
-            "--useRigid",
-            "--useAffine",
-        ],
-        log,
-    )
-
     resample_jobs = [
         (native.fa_nii_path, bundle.fa_reg_path, "linear"),
         (native.trace_nii_path, bundle.trace_reg_path, "linear"),
@@ -1503,21 +1520,80 @@ def _ensure_registered_dti_bundle(raw, native, atlas_t2, fit_method, reuse, log,
                              (native.fa_nrrd_path, native.trace_nrrd_path, native.mean_diffusivity_nrrd_path,
                               native.min_eig_nrrd_path, native.mid_eig_nrrd_path, native.max_eig_nrrd_path)))
         resample_jobs = [(originals.get(source, source), target, mode) for source, target, mode in resample_jobs]
-    for input_path, output_path, interpolation in resample_jobs:
+
+    if needs_windows_ascii_staging(
+        atlas_t2,
+        native.b0_nrrd_path,
+        bundle.transform_path,
+        *(path for pair in resample_jobs for path in pair[:2]),
+    ):
+        with windows_ascii_temp_dir(prefix="reg_dti_") as stage_dir:
+            staged_atlas = link_or_copy_file(atlas_t2, stage_dir / f"atlas{_path_image_suffix(atlas_t2)}")
+            staged_b0 = link_or_copy_file(native.b0_nrrd_path, stage_dir / f"b0{_path_image_suffix(native.b0_nrrd_path)}")
+            staged_tx = stage_dir / f"transform{_path_image_suffix(bundle.transform_path)}"
+            _run_cli(
+                [
+                    brainsfit_cli,
+                    "--fixedVolume",
+                    staged_atlas.as_posix(),
+                    "--movingVolume",
+                    staged_b0.as_posix(),
+                    "--linearTransform",
+                    staged_tx.as_posix(),
+                    "--useRigid",
+                    "--useAffine",
+                ],
+                log,
+            )
+            copy_file_atomic(staged_tx, bundle.transform_path)
+            for idx, (input_path, output_path, interpolation) in enumerate(resample_jobs):
+                staged_in = link_or_copy_file(input_path, stage_dir / f"in_{idx}{_path_image_suffix(input_path)}")
+                staged_out = stage_dir / f"out_{idx}{_path_image_suffix(output_path)}"
+                _run_cli(
+                    [
+                        resample_cli,
+                        "-i",
+                        interpolation,
+                        staged_in.as_posix(),
+                        "--Reference",
+                        staged_atlas.as_posix(),
+                        "--transformationFile",
+                        staged_tx.as_posix(),
+                        staged_out.as_posix(),
+                    ],
+                    log,
+                )
+                copy_file_atomic(staged_out, output_path)
+    else:
         _run_cli(
             [
-                resample_cli,
-                "-i",
-                interpolation,
-                input_path.as_posix(),
-                "--Reference",
+                brainsfit_cli,
+                "--fixedVolume",
                 atlas_t2.as_posix(),
-                "--transformationFile",
+                "--movingVolume",
+                native.b0_nrrd_path.as_posix(),
+                "--linearTransform",
                 bundle.transform_path.as_posix(),
-                output_path.as_posix(),
+                "--useRigid",
+                "--useAffine",
             ],
             log,
         )
+        for input_path, output_path, interpolation in resample_jobs:
+            _run_cli(
+                [
+                    resample_cli,
+                    "-i",
+                    interpolation,
+                    input_path.as_posix(),
+                    "--Reference",
+                    atlas_t2.as_posix(),
+                    "--transformationFile",
+                    bundle.transform_path.as_posix(),
+                    output_path.as_posix(),
+                ],
+                log,
+            )
 
     _write_inverse_transform(bundle.transform_path, bundle.inverse_transform_path)
     if expected_manifest != _registered_manifest(raw, native, bundle):

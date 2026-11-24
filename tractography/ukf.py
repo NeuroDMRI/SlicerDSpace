@@ -267,20 +267,20 @@ def _host_supports_avx2():
 def _standalone_requires_avx2(executable):
     """True when a bundled standalone UKF binary was compiled with AVX2 instructions."""
     path = Path(executable)
-    try:
-        runtime_json = path.parent.parent / "runtime.json"
-        if runtime_json.is_file():
-            payload = json.loads(runtime_json.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                if isinstance(payload.get("requires_avx2"), bool):
-                    return payload["requires_avx2"]
-                arch = str(payload.get("arch") or "").strip().lower()
-                if arch in {"arm64", "aarch64"}:
-                    return False
-                if arch in {"x86_64", "amd64", "x64"}:
-                    return True
-    except Exception:
-        pass
+    for runtime_json in (path.parent.parent / "runtime.json", path.parent / "runtime.json"):
+        try:
+            if runtime_json.is_file():
+                payload = json.loads(runtime_json.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    if isinstance(payload.get("requires_avx2"), bool):
+                        return payload["requires_avx2"]
+                    arch = str(payload.get("arch") or "").strip().lower()
+                    if arch in {"arm64", "aarch64"}:
+                        return False
+                    if arch in {"x86_64", "amd64", "x64"}:
+                        return True
+        except Exception:
+            pass
     parts = [part.lower() for part in path.parts]
     if any(("arm64" in part or "aarch64" in part) for part in parts if part.startswith("ukf-")):
         return False
@@ -292,9 +292,14 @@ def _standalone_requires_avx2(executable):
     return False
 
 
+def _ukf_avx2_incompatible(executable):
+    """True when ``executable`` requires AVX2 and the host CPU reports no AVX2 support."""
+    return _standalone_requires_avx2(executable) and _host_supports_avx2() is False
+
+
 def _ukf_avx2_error(rejected_avx2):
     lines = [
-        "Bundled standalone UKFTractography requires CPU AVX2 instructions, which this processor does not support. "
+        "Selected standalone UKFTractography requires CPU AVX2 instructions, which this processor does not support. "
         "Install the standard UKFTractography extension through Slicer Extension Manager or pass --ukf-executable "
         "pointing to a non-AVX2 build."
     ]
@@ -311,15 +316,21 @@ def resolve_executable(explicit=None, name="UKFTractography"):
         candidate = os.environ.get("SLICERDSPACE_DWICONVERT_EXECUTABLE")
     if candidate:
         path = Path(candidate).expanduser().resolve()
-        if path.is_file():
-            return path
-        raise FileNotFoundError(str(path))
+        if not path.is_file():
+            raise FileNotFoundError(str(path))
+        if name == "UKFTractography" and _ukf_avx2_incompatible(path):
+            raise RuntimeError(_ukf_avx2_error([path]))
+        return path
     rejected = []
     rejected_avx2 = []
 
     def usable(path):
         if name != "UKFTractography":
             return True
+        if _ukf_avx2_incompatible(path):
+            if str(path) not in [str(p) for p in rejected_avx2]:
+                rejected_avx2.append(path)
+            return False
         mismatch = ukf_vtk_mismatch(path)
         if mismatch is None:
             return True
@@ -356,11 +367,8 @@ def resolve_executable(explicit=None, name="UKFTractography"):
                 for path in sorted(root.glob(pattern)):
                     if path.is_file() and path.name.lower() in standalone_names_lower:
                         resolved_standalone = path.resolve()
-                        if _standalone_requires_avx2(resolved_standalone) and _host_supports_avx2() is False:
-                            if str(resolved_standalone) not in [str(p) for p in rejected_avx2]:
-                                rejected_avx2.append(resolved_standalone)
-                            continue
-                        return resolved_standalone
+                        if usable(resolved_standalone):
+                            return resolved_standalone
     found = shutil.which(name)
     if found and usable(Path(found).resolve()):
         return Path(found).resolve()
@@ -888,15 +896,21 @@ def _load_validated_vtk_polydata(path):
     path = Path(path)
     if not path.is_file() or path.stat().st_size == 0 or path.suffix.lower() != ".vtk":
         raise ValueError("UKF output is empty or malformed")
-    reader = vtk.vtkPolyDataReader()
-    errors = []
-    reader.AddObserver("ErrorEvent", lambda *_: errors.append(True))
-    reader.AddObserver("WarningEvent", lambda *_: errors.append(True))
-    reader.SetFileName(str(path))
-    reader.Update()
-    if errors or reader.GetErrorCode():
-        raise ValueError("UKF output is empty or malformed")
-    data = reader.GetOutput()
+    from contextlib import nullcontext
+    from shared.external_process import link_or_copy_file, needs_windows_ascii_staging, windows_ascii_temp_dir
+
+    stage_vtk = needs_windows_ascii_staging(path)
+    with (windows_ascii_temp_dir(prefix="ukf_vtk_") if stage_vtk else nullcontext(None)) as stage_dir:
+        reader_path = link_or_copy_file(path, stage_dir / "tracts.vtk") if stage_vtk else path
+        reader = vtk.vtkPolyDataReader()
+        errors = []
+        reader.AddObserver("ErrorEvent", lambda *_: errors.append(True))
+        reader.AddObserver("WarningEvent", lambda *_: errors.append(True))
+        reader.SetFileName(str(reader_path))
+        reader.Update()
+        if errors or reader.GetErrorCode():
+            raise ValueError("UKF output is empty or malformed")
+        data = reader.GetOutput()
     with path.open("rb") as stream:
         head_bytes = stream.read(65536)
     header = head_bytes.split(b"\n", 4)
@@ -1575,11 +1589,35 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
             for warning in inputs['warnings']:
                 log('[UKF] '+warning)
         converter_env = merged_startup_environment(build_cli_environment(str(converter)))
-        with tempfile.TemporaryDirectory(prefix=".ukf-", dir=products["manifest"].parent) as temporary:
+        from shared.external_process import (
+            copy_file_atomic,
+            needs_windows_ascii_staging,
+            windows_ascii_temp_dir,
+        )
+
+        use_ascii_work = needs_windows_ascii_staging(
+            products["manifest"].parent,
+            raw.bval_path,
+            raw.bvec_path,
+        )
+        work_ctx = (
+            windows_ascii_temp_dir(prefix="ukf_")
+            if use_ascii_work
+            else tempfile.TemporaryDirectory(prefix=".ukf-", dir=products["manifest"].parent)
+        )
+        with work_ctx as temporary:
             work = Path(temporary)
             dwi, mask, tracts = work / "DWI.nrrd", work / "Mask.nrrd", work / "tracts.vtk"
             probe_path, converted_probe = work / "geometry_probe.nii.gz", work / "geometry_probe.nrrd"
             probe = write_conversion_probe(raw, probe_path)
+            if use_ascii_work:
+                cli_bval = work / "input.bval"
+                cli_bvec = work / "input.bvec"
+                shutil.copyfile(raw.bval_path, cli_bval)
+                shutil.copyfile(raw.bvec_path, cli_bvec)
+            else:
+                cli_bval = raw.bval_path
+                cli_bvec = raw.bvec_path
             conversion = [
                 str(converter),
                 "--conversionMode",
@@ -1587,9 +1625,9 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
                 "--inputVolume",
                 str(probe_path),
                 "--inputBValues",
-                str(raw.bval_path),
+                str(cli_bval),
                 "--inputBVectors",
-                str(raw.bvec_path),
+                str(cli_bvec),
                 "--outputVolume",
                 str(converted_probe),
             ]
@@ -1654,7 +1692,7 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
             qc['effective_mask'] = record['effective_mask']
             if not qc["automatic_qc_passed"]:
                 products["qc"].write_text(json.dumps(qc, indent=2) + "\n", encoding="utf-8")
-                failed = work.with_name(work.name + "-failed.vtk")
+                failed = products["manifest"].parent / (work.name + "-failed.vtk")
                 shutil.copyfile(tracts, failed)
                 record["failed_tractogram"] = str(failed)
                 raise RuntimeError("UKF geometry/native-mask QC failed; see " + str(failed))
@@ -1662,8 +1700,12 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
             qc["vtk_trk_verified_streamlines"] = verify_trk(tracts, work / "tracts.trk", _polydata_bundle=polydata_bundle)
             if signature(raw, options, binary, converter) != before:
                 raise RuntimeError("UKF inputs or executable changed during execution")
-            shutil.move(tracts, products["tractogram"])
-            shutil.move(work / "tracts.trk", products["tractogram_trk"])
+            if use_ascii_work:
+                copy_file_atomic(tracts, products["tractogram"])
+                copy_file_atomic(work / "tracts.trk", products["tractogram_trk"])
+            else:
+                shutil.move(tracts, products["tractogram"])
+                shutil.move(work / "tracts.trk", products["tractogram_trk"])
         products["qc"].write_text(json.dumps(qc, indent=2) + "\n", encoding="utf-8")
         record.update(
             status="completed",

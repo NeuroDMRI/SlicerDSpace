@@ -30,6 +30,7 @@ NON_PARAMETER_KEYS = frozenset({
     "wall_time_seconds", "wall_time_scope", "report_paths", "report_error", "output_tree_report_paths",
     "output_tree_report_error", "output_tree_audit_path", "output_tree_warnings", "output_tree_semantics_path",
     "output_tree_semantics_summary", "brain_mask_path", "failure", "ended_at", "status",
+    "run_id", "archived", "archive_revision", "output_fingerprints", "qc_fingerprints",
 })
 PACKAGES = ("numpy", "scipy", "nibabel", "dipy", "SimpleITK", "torch", "amico")
 
@@ -394,7 +395,8 @@ def asset_versions(manifest: dict, repo_root: Optional[Path] = None) -> dict:
 # Child keys that always differ between tracking variants and say nothing about the settings.
 PER_CHILD_NOISE_KEYS = frozenset({"run_name", "run_plan_path", "run_plan_summary", "previous_run_records",
                                   "started_at", "input_validation_path", "archived_development_outputs",
-                                  "run_manifest_path"})
+                                  "run_manifest_path", "run_id", "archived", "archive_revision",
+                                  "output_fingerprints", "qc_fingerprints"})
 
 
 # Keys that only a finished child manifest holds. A child that crashed has the checkpoint manifest shape without them

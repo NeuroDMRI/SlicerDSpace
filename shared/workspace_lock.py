@@ -13,7 +13,7 @@ status, token). Supports:
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import ctypes
 from datetime import datetime, timezone
 import json
@@ -398,3 +398,44 @@ def workspace_lock(
                     lock_path.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def is_workspace_lock_held(lock_dir: Path) -> bool:
+    """Return True if the current thread holds (or inherited) the lock under ``lock_dir``."""
+    lock_path = Path(lock_dir).expanduser().resolve() / LOCK_FILENAME
+    key = _lock_key(lock_path)
+    this_thread = threading.get_ident()
+    with _IN_PROCESS_GUARD:
+        entry = _ACTIVE_LOCKS.get(key)
+        if entry is not None and entry.get("thread_id") == this_thread:
+            return True
+    meta = _read_lock_metadata(lock_path, retries=1)
+    return _is_inherited_lock(key, meta, socket.gethostname())
+
+
+@contextmanager
+def subject_workspace_lock(
+    layout: Any,
+    *,
+    subject_id: str,
+    run_name: str,
+    status: str = "running",
+) -> Iterator[Path]:
+    """Acquire the canonical workspace lock shared across ``<W>`` and ``<W>/outputs`` aliases.
+
+    Locks ``layout.workspace_lock_dir`` (``<workspace_root>/cache``) first so processes
+    passing ``<W>``, ``<W>/outputs``, ``<W>/output``, symlinks/junctions, or case variants
+    always contend on the exact same lock file. Also acquires ``layout.run_metadata`` for
+    backward compatibility with direct ``workspace_lock(layout.run_metadata)`` callers.
+    """
+    canonical_dir = Path(layout.workspace_lock_dir).expanduser().resolve()
+    metadata_dir = Path(layout.run_metadata).expanduser().resolve()
+    with ExitStack() as stack:
+        canonical_lock = stack.enter_context(
+            workspace_lock(canonical_dir, subject_id=subject_id, run_name=run_name, status=status)
+        )
+        if _lock_key(metadata_dir / LOCK_FILENAME) != _lock_key(canonical_dir / LOCK_FILENAME):
+            stack.enter_context(
+                workspace_lock(metadata_dir, subject_id=subject_id, run_name=run_name, status=status)
+            )
+        yield canonical_lock

@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from shared.fiber_display import streamline_kind
-from shared.result_scene import result_candidates, result_file_suffix, record_qc_state
+from shared.result_scene import manifest_output_status, result_candidates, result_file_suffix, record_qc_state
 
 
 DISPLAY_STREAMLINE_LIMIT = 30_000
@@ -232,10 +232,12 @@ def _role(candidate):
     return None
 
 
-def _qc_state(task):
+def _qc_state(task, manifest=None):
     outputs = task.get("outputs") or {}
     value = task.get("qc_path") or next((value for key, value in outputs.items()
         if key == "qc" or key.endswith("_qc") or key.endswith("_qc_path")), None)
+    if value and manifest is not None and manifest_output_status(manifest, value, kind="qc") == "superseded":
+        return "unavailable"
     record = _read_record(value) if value and Path(str(value)).is_absolute() else {}
     return record_qc_state(record)
 
@@ -256,7 +258,7 @@ def automatic_result_candidates(manifest: dict, *, per_product_caps: dict | None
         if role is None:
             deferred.append({**candidate, "reason": "Not a representative automatic product"})
             continue
-        candidate = {**candidate, "display_role": role, "qc_state": _qc_state(tasks.get(candidate["product"], {})),
+        candidate = {**candidate, "display_role": role, "qc_state": _qc_state(tasks.get(candidate["product"], {}), manifest),
                      "human_review_state": "pending"}
         if candidate['product'] == 'tractography.regions' and candidate['key'] == 'display_preview':
             candidate['quantitative_source_path'] = tasks[candidate['product']]['outputs'].get('tractogram', candidate['path'])

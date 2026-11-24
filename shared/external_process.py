@@ -11,10 +11,10 @@ import shutil
 import struct
 import tempfile
 import time
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Iterator, Mapping, Optional
 
 
 def resolve_external_command(name: str, bin_dir: Optional[Path] = None, *, require_executable=False) -> Optional[str]:
@@ -406,6 +406,141 @@ def subprocess_no_window_kwargs(**overrides: Any) -> dict[str, Any]:
         if flag:
             kwargs["creationflags"] = int(kwargs.get("creationflags", 0) or 0) | flag
     return kwargs
+
+
+def needs_windows_ascii_staging(*paths: Path | str | None) -> bool:
+    """True on Windows when any supplied path contains non-ASCII characters.
+
+    Native C/C++ libraries built without UTF-8 manifests (Teem ``nrrdLoad``/``nrrdSave``,
+    ITK/SimpleITK ``fopen``, MRtrix3, DWIConvert, VTK legacy readers) interpret ``const char*``
+    in the active ANSI code page on Windows, corrupting UTF-8 non-ASCII paths such as Chinese
+    or accented folder names. Staging inputs/outputs through a pure-ASCII temp directory works
+    even when NTFS 8.3 short names are disabled and for outputs that do not yet exist.
+    """
+    if sys.platform != "win32":
+        return False
+    for item in paths:
+        if item is None:
+            continue
+        text = str(item)
+        if text and not text.isascii():
+            return True
+    return False
+
+
+def _windows_short_path(path: Path) -> Optional[Path]:
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        get_short = ctypes.windll.kernel32.GetShortPathNameW
+        get_short.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+        get_short.restype = ctypes.c_uint32
+        raw = str(path)
+        size = get_short(raw, None, 0)
+        if size <= 0:
+            return None
+        buf = ctypes.create_unicode_buffer(size)
+        written = get_short(raw, buf, size)
+        if 0 < written < size and buf.value.isascii():
+            return Path(buf.value)
+    except Exception:
+        return None
+    return None
+
+
+@contextmanager
+def windows_ascii_temp_dir(prefix: str = "sdspace_") -> Iterator[Path]:
+    """Create and clean up a guaranteed pure-ASCII temporary directory on Windows."""
+    created: Optional[Path] = None
+    candidates: list[Path] = []
+    default_tmp = Path(tempfile.gettempdir())
+    if str(default_tmp).isascii():
+        candidates.append(default_tmp)
+    if sys.platform == "win32":
+        public = os.environ.get("PUBLIC")
+        if public:
+            candidates.append(Path(public) / "Temp")
+        program_data = os.environ.get("ProgramData")
+        if program_data:
+            candidates.append(Path(program_data) / "SlicerDSpace" / "tmp")
+        sys_root = os.environ.get("SystemRoot")
+        if sys_root:
+            candidates.append(Path(sys_root) / "Temp")
+        sys_drive = os.environ.get("SystemDrive") or "C:"
+        candidates.append(Path(f"{sys_drive}\\Temp"))
+
+    seen: set[str] = set()
+    for base in candidates:
+        key = os.path.normcase(str(base))
+        if key in seen or not str(base).isascii():
+            continue
+        seen.add(key)
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            cand = Path(tempfile.mkdtemp(prefix=prefix, dir=str(base)))
+            if str(cand).isascii():
+                created = cand
+                break
+            shutil.rmtree(cand, ignore_errors=True)
+        except OSError:
+            continue
+
+    if created is None:
+        fallback = Path(tempfile.mkdtemp(prefix=prefix))
+        short = _windows_short_path(fallback)
+        if short is not None and str(short).isascii():
+            created = short
+            cleanup_target = fallback
+        else:
+            created = fallback
+            cleanup_target = fallback
+    else:
+        cleanup_target = created
+
+    try:
+        yield created
+    finally:
+        shutil.rmtree(cleanup_target, ignore_errors=True)
+
+
+def link_or_copy_file(src: Path | str, dst: Path | str) -> Path:
+    """Hardlink ``src`` to ``dst`` when on the same volume, else copy file contents."""
+    source = Path(src)
+    target = Path(dst)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.unlink(missing_ok=True)
+    try:
+        os.link(source, target)
+        return target
+    except OSError:
+        shutil.copyfile(source, target)
+        return target
+
+
+def copy_file_atomic(src: Path | str, dst: Path | str) -> Path:
+    """Copy ``src`` onto ``dst`` atomically (safe across volumes and Unicode destinations)."""
+    source = Path(src)
+    target = Path(dst)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=".stage-", suffix=target.suffix or ".tmp", dir=str(target.parent))
+    os.close(fd)
+    temporary = Path(tmp_name)
+    try:
+        shutil.copyfile(source, temporary)
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                os.replace(temporary, target)
+                break
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
+        return target
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def external_python_environment(

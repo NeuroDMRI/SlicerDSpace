@@ -1218,7 +1218,7 @@ def main(argv: list[str] | None = None) -> int:
 
     from contextlib import ExitStack
     from shared.io_layout import normalize_run_name, subject_layout
-    from shared.workspace_lock import WorkspaceLockError, workspace_lock
+    from shared.workspace_lock import WorkspaceLockError, subject_workspace_lock
 
     with ExitStack() as cli_lock_stack:
         if args.execute:
@@ -1227,8 +1227,8 @@ def main(argv: list[str] | None = None) -> int:
             if raw_subject.exists() or (config.output_root is not None and config.output_root.expanduser().exists()):
                 try:
                     cli_lock_stack.enter_context(
-                        workspace_lock(
-                            subject_layout(lock_base.resolve(), output_root=config.output_root).run_metadata,
+                        subject_workspace_lock(
+                            subject_layout(lock_base.resolve(), output_root=config.output_root),
                             subject_id=config.subject_id,
                             run_name=normalize_run_name(config.run_name),
                         )

@@ -649,13 +649,9 @@ def _noddi_fork_bucket_worker(d: int):
 def _is_linux_fork_safe() -> bool:
     if not sys.platform.startswith("linux"):
         return False
-    torch_mod = sys.modules.get("torch")
-    if torch_mod is not None:
-        try:
-            if torch_mod.cuda.is_initialized():
-                return False
-        except Exception:
-            pass
+    # Never fork() once PyTorch (libgomp / libtorch / CUDA runtime) is loaded in this process.
+    if sys.modules.get("torch") is not None:
+        return False
     return True
 
 

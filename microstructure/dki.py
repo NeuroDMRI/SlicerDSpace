@@ -791,13 +791,11 @@ def _resolve_dki_fork_workers(config: DkiConfig) -> int:
     """Resolve Linux fork worker count for CPU dense DKI fitting (bit-exact with serial path)."""
     if not sys.platform.startswith("linux"):
         return 1
-    torch_mod = sys.modules.get("torch")
-    if torch_mod is not None:
-        try:
-            if torch_mod.cuda.is_initialized():
-                return 1
-        except Exception:
-            pass
+    # Never fork() once PyTorch (libgomp / libtorch / CUDA runtime) is loaded in this process;
+    # even torch.cuda.is_available() can leave torch.cuda.is_initialized() False while causing
+    # POSIX fork() futex deadlocks in forked children. Fall back to spawn workers instead.
+    if sys.modules.get("torch") is not None:
+        return 1
     try:
         avail = len(os.sched_getaffinity(0))
     except (AttributeError, OSError):
@@ -840,8 +838,8 @@ def _resolve_dki_fork_workers(config: DkiConfig) -> int:
 
 
 def _resolve_dki_spawn_workers(config: DkiConfig) -> int:
-    """Resolve RAM-safe ``spawn`` worker count on Windows/macOS for CPU dense DKI fitting."""
-    if sys.platform not in ("win32", "darwin"):
+    """Resolve RAM-safe ``spawn`` worker count on Windows/macOS (and Linux when fork is unsafe)."""
+    if sys.platform not in ("win32", "darwin", "linux"):
         return 1
     main_file = getattr(sys.modules.get("__main__"), "__file__", None)
     if (
@@ -850,7 +848,19 @@ def _resolve_dki_spawn_workers(config: DkiConfig) -> int:
         or not Path(main_file).is_file()
     ):
         return 1
-    avail = os.cpu_count() or 1
+    try:
+        avail = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        avail = os.cpu_count() or 1
+    max_spawn = 4
+    if sys.platform.startswith("linux"):
+        try:
+            from shared.hardware_adapt import host_total_ram_gib
+
+            if (host_total_ram_gib() or 0.0) > 48.0 and avail >= 8:
+                max_spawn = min(16, max(4, avail // 4))
+        except Exception:
+            max_spawn = 4
     if config.num_threads is not None:
         req = max(1, min(int(config.num_threads), avail))
     else:
@@ -858,7 +868,7 @@ def _resolve_dki_spawn_workers(config: DkiConfig) -> int:
         if env_stage.isdigit() and int(env_stage) > 0:
             req = max(1, min(int(env_stage), avail))
         else:
-            req = max(1, min(4, max(1, avail // 2)))
+            req = max(1, min(max_spawn, max(1, avail // 2)))
     if req <= 1:
         return 1
     try:
@@ -871,7 +881,7 @@ def _resolve_dki_spawn_workers(config: DkiConfig) -> int:
                     req,
                     per_worker_ram_gib=1.0,
                     reserve_ram_gib=4.0,
-                    max_workers=4,
+                    max_workers=max_spawn,
                 )
             ),
         )

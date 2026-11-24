@@ -798,6 +798,15 @@ class FreeWaterDeviceAttrTests(unittest.TestCase):
         self.assertIn("with _single_thread_blas_for_fork(), ctx_mp.Pool(", dki_src)
         self.assertIn("with _single_thread_blas(), ctx_mp.Pool(", noddi_src)
         self.assertIn("global _ORIG_DKI_FIT, _DKI_FORK_CTX", dki_src)
+        # Verify fork is refused whenever torch is imported on Linux
+        with patch.object(dki.sys, "platform", "linux"), patch.dict(dki.sys.modules, {"torch": SimpleNamespace()}):
+            cfg = dki.DkiConfig(
+                subject_id="sub-01",
+                raw_input_bundle=SimpleNamespace(),
+                output_dir=Path("/tmp/dki"),
+            )
+            self.assertEqual(dki._resolve_dki_fork_workers(cfg), 1)
+            self.assertFalse(noddi_accel._is_linux_fork_safe())
 
 
 if __name__ == "__main__":

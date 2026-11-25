@@ -13,6 +13,7 @@ installer script and the graphical Setup module (SETUP_MODULE_PY). The installed
 
 from __future__ import annotations
 
+import importlib.util
 import io
 import json
 import os
@@ -21,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -130,7 +132,16 @@ class _Project:
 
 
 class _Isolated:
-    """Process state that the installer code changes: sys.path, sys.modules and the environment."""
+    """Process state that the installer code changes: sys.path, sys.modules and the environment.
+
+    Finding PRUNE-ORDER (CI run 45531342001): a daemon thread that an earlier test module leaves behind (the
+    StageMonitor sampler of test_cohort_granularity; every 0.2 s it runs ``from shared.hardware_adapt import ...``,
+    shared/cohort_profile.py:308) imports the REPO's ``shared`` package whenever ``sys.modules`` has no ``shared`` entry.
+    The old harness deleted ``shared`` and then waited (node build, payload exec) until the installer imported it, and
+    ``patch.dict(sys.modules)`` clears the whole dict on exit. Both gaps let the thread re-import the repo package, so a
+    release_package=True case ran on the repo code (or died with KeyError: 'shared'). Now ``sys.modules['shared']`` is
+    never absent: for release_package=True one assignment swaps in the stub package of module_root (a thread that asks
+    the stub for a repo-only module gets ModuleNotFoundError), and the exit restores entries one by one."""
 
     def __init__(self, project: _Project, *, release_package: bool) -> None:
         self.project = project
@@ -145,18 +156,35 @@ class _Isolated:
         patches = [
             patch.dict(os.environ, env),
             patch.object(sys, "path", list(sys.path)),
-            patch.dict(sys.modules),
         ]
         for p in patches:
             p.start()
             self._stack.append(p)
+        self._modules = dict(sys.modules)
         if self.release_package:
-            for name in [n for n in sys.modules if n == "shared" or n.startswith("shared.")]:
-                del sys.modules[name]
-        sys.modules["shared.environment"] = _stub_environment_module()
+            pkg_dir = self.project.module_root / "shared"
+            spec = importlib.util.spec_from_file_location(
+                "shared", pkg_dir / "__init__.py", submodule_search_locations=[str(pkg_dir)])
+            stub_pkg = importlib.util.module_from_spec(spec)
+            sys.modules["shared"] = stub_pkg  # one assignment: 'shared' is never absent, and it is not the repo package
+            for name in [n for n in list(sys.modules) if n.startswith("shared.")]:
+                sys.modules.pop(name, None)
+            sys.modules["shared.environment"] = _stub_environment_module()
+            spec.loader.exec_module(stub_pkg)
+        else:
+            sys.modules["shared.environment"] = _stub_environment_module()
         return self
 
     def __exit__(self, *exc):
+        saved = self._modules
+        # Restore entry by entry (no clear()): a foreign thread never sees sys.modules without the saved 'shared'.
+        for name in [n for n in ("shared",) if n in saved]:
+            sys.modules[name] = saved[name]
+        for name, module in saved.items():
+            if sys.modules.get(name) is not module:
+                sys.modules[name] = module
+        for name in [n for n in list(sys.modules) if n not in saved]:
+            sys.modules.pop(name, None)
         for p in reversed(self._stack):
             p.stop()
         return False
@@ -191,9 +219,12 @@ def _run_script_main(ns: dict, project: _Project, *, network: dict | None = None
     return logs
 
 
-def _run_setup_module(project: _Project, *, network: dict | None = None) -> list:
-    """Run the graphical Setup module's phase C (the post-download install and config step)."""
-    ns = load_setup_module()
+def _run_setup_module(project: _Project, *, network: dict | None = None, ns: dict | None = None) -> list:
+    """Run the graphical Setup module's phase C (the post-download install and config step).
+
+    ``ns`` is a namespace that the caller loaded before it entered _Isolated: load_setup_module() builds the source
+    with node and patches sys.modules, a long gap in which a foreign thread can import the repo package (_Isolated)."""
+    ns = ns if ns is not None else load_setup_module()
     ns["CONFIG"] = dict(ns["CONFIG"], model_assets_dir=str(project.assets), selected_packs=[])
     events: list = []
     info = {
@@ -224,6 +255,7 @@ class PruneFallbackTests(unittest.TestCase):
         cls.js_payload = _js_payload("linux") if shutil.which("node") is not None else None
 
     def _runners(self):
+        """Yield (label, run(project)); other test modules (test_b2_setup_core_only) use this form."""
         yield "python_builder", lambda project: _run_script_main(_load(self.python_payload), project)
         if self.js_payload is not None:
             yield "js_script", lambda project: _run_script_main(_load(self.js_payload), project)
@@ -232,11 +264,32 @@ class PruneFallbackTests(unittest.TestCase):
             yield "js_script", None
             yield "js_setup_module", None
 
+    def _factories(self):
+        """Yield (label, factory). factory() runs BEFORE _Isolated is entered and returns run(project): the payload exec
+        and the node build of the Setup module stay out of the isolated window (finding PRUNE-ORDER)."""
+        def script(payload):
+            def factory():
+                ns = _load(payload)
+                return lambda project: _run_script_main(ns, project)
+            return factory
+
+        def setup_module():
+            ns = load_setup_module()
+            return lambda project: _run_setup_module(project, ns=ns)
+
+        yield "python_builder", script(self.python_payload)
+        if self.js_payload is not None:
+            yield "js_script", script(self.js_payload)
+            yield "js_setup_module", setup_module
+        else:
+            yield "js_script", None
+            yield "js_setup_module", None
+
     def _run_case(self, *, release_package: bool, make_deps, check) -> None:
         """Run every copy in its own temp project; check(project, deps, logs) runs before the temp folder is removed."""
-        for label, run in self._runners():
+        for label, factory in self._factories():
             with self.subTest(copy=label, release_package=release_package):
-                if run is None:
+                if factory is None:
                     if _on_ci():
                         self.fail("node is required on CI for the JS installer copies (node is not in PATH)")
                     self.skipTest("node is not installed in PATH: the JS installer copy is not tested")
@@ -244,9 +297,23 @@ class PruneFallbackTests(unittest.TestCase):
                     project = _Project(Path(td), release_package=release_package)
                     deps = make_deps(project)
                     project.write_config(deps)
+                    run = factory()
                     with _Isolated(project, release_package=release_package):
                         logs = run(project)
                     check(project, deps, logs)
+
+    def _assert_deps(self, project: _Project, expected: dict) -> None:
+        """Compare the written dependencies. model_assets_dir is compared as a real path: the installer writes what the
+        installed package's configured_model_assets_root() returns. The current package resolves it (macOS
+        /var -> /private/var, Windows 8.3 names such as RUNNER~1), the v0.1.1 stand-in does not. The test must not
+        depend on which package answers. Every other value is compared as written."""
+        def norm(deps: dict) -> dict:
+            out = dict(deps)
+            if "model_assets_dir" in out:
+                out["model_assets_dir"] = os.path.realpath(out["model_assets_dir"])
+            return out
+
+        self.assertEqual(norm(project.read_deps()), norm(expected))
 
     def test_prune_release_package_without_the_prune_function_keeps_dependencies(self) -> None:
         # The release package has no prune function: dependencies stay as they are, and nothing is logged about pruning.
@@ -254,16 +321,23 @@ class PruneFallbackTests(unittest.TestCase):
             return {"mrtrix_bin_dir": str(project.root / "mrtrix" / "bin"), "postprocess_runtime": str(project.stale_dependency())}
 
         def check(project, deps, logs):
-            self.assertEqual(project.read_deps(), {**deps, "model_assets_dir": str(project.assets)})
+            self._assert_deps(project, {**deps, "model_assets_dir": str(project.assets)})
             self.assertFalse([line for line in logs if "stale bundled dependency" in line], logs)
 
         self._run_case(release_package=True, make_deps=make, check=check)
 
     def test_prune_release_package_still_sets_the_model_assets_dir(self) -> None:
         def check(project, deps, logs):
-            self.assertEqual(project.read_deps(), {"model_assets_dir": str(project.assets)})
+            self._assert_deps(project, {"model_assets_dir": str(project.assets)})
 
         self._run_case(release_package=True, make_deps=lambda project: {"wma_atlas_dir": "x"}, check=check)
+
+    def test_prune_current_package_still_sets_the_model_assets_dir(self) -> None:
+        # The current package answers (it resolves the path): the same write, compared as a real path.
+        def check(project, deps, logs):
+            self._assert_deps(project, {"model_assets_dir": str(project.assets)})
+
+        self._run_case(release_package=False, make_deps=lambda project: {"wma_atlas_dir": "x"}, check=check)
 
     def test_prune_current_package_still_prunes_a_stale_bundled_path(self) -> None:
         def make(project):
@@ -358,6 +432,109 @@ class PruneGuardTests(unittest.TestCase):
         self.assertEqual(len(result.skipped), 2, "both JS copies must be reported as skipped, not dropped")
         for _, reason in result.skipped:
             self.assertIn("node is not installed", reason)
+
+
+def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp: bool):
+    """Run the behaviour tests of PruneFallbackTests (not PruneGuardTests or this class: no recursion) with unittest.
+
+    leaked_sampler: another thread runs the lazy import of the StageMonitor sampler that test_cohort_granularity leaves
+    behind (shared/cohort_profile.py:308, ``from shared.hardware_adapt import ...``) at two points that the old harness
+    left open: right after the harness removed ``shared`` from sys.modules, and during the node build of the Setup
+    module. The real thread does this every 0.2 s at a random time; here it happens at fixed points, in the same order.
+    symlinked_tmp: temp folders are reached through a symlink (macOS /var -> /private/var is the same shape).
+    Returns (TestResult, process state before, process state after)."""
+    from shared import cohort_profile  # the repo module; its function object keeps working after the harness drops it
+
+    sampler = cohort_profile._default_system_memory_snapshot
+    real_run = subprocess.run
+    real_stub = globals()["_stub_environment_module"]
+
+    def tick() -> None:
+        thread = threading.Thread(target=sampler, name="leaked-stage-monitor-sampler")
+        thread.start()
+        thread.join()
+
+    def run_with_tick(*args, **kwargs):
+        # Only the node build (the sampler itself runs subprocesses: ticking on those would recurse).
+        cmd = args[0] if args else kwargs.get("args")
+        if (threading.current_thread() is threading.main_thread() and isinstance(cmd, (list, tuple)) and cmd
+                and Path(str(cmd[0])).stem.lower() == "node"):
+            tick()
+        return real_run(*args, **kwargs)
+
+    def stub_with_tick():
+        tick()
+        return real_stub()
+
+    def state():
+        return {"shared": sys.modules.get("shared"), "path": list(sys.path), "environ": dict(os.environ),
+                "tempdir": tempfile.tempdir, "threads": threading.active_count()}
+
+    names = [n for n in unittest.defaultTestLoader.getTestCaseNames(PruneFallbackTests)
+             if n != "test_prune_stub_matches_the_release_package_shape"]
+    tempfile.gettempdir()  # fill the cache first: the first call sets tempfile.tempdir, which is not a leak
+    before = state()
+    with tempfile.TemporaryDirectory() as real_root:
+        patches = []
+        if symlinked_tmp:
+            link = Path(real_root) / "tmp-link"
+            real_dir = Path(real_root) / "real"
+            real_dir.mkdir()
+            os.symlink(real_dir, link, target_is_directory=True)
+            patches.append(patch.object(tempfile, "tempdir", str(link)))
+        if leaked_sampler:
+            patches.append(patch.object(subprocess, "run", run_with_tick))
+            patches.append(patch.dict(globals(), {"_stub_environment_module": stub_with_tick}))
+        for p in patches:
+            p.start()
+        try:
+            suite = unittest.TestSuite([PruneFallbackTests(n) for n in names])
+            result = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+    return result, before, state()
+
+
+class PruneOrderIndependenceTests(unittest.TestCase):
+    """Finding PRUNE-ORDER: the prune tests failed on CI only (KeyError: 'shared', a repo package in a release_package
+    case, a /private/var path) and passed alone. Cause: a sampler thread left by test_cohort_granularity imports the repo's
+    ``shared`` whenever sys.modules has no such entry; see _Isolated."""
+
+    def _assert_clean(self, result) -> None:
+        problems = [text for _, text in result.failures + result.errors]
+        self.assertEqual(problems, [], "\n".join(problems)[:3000])
+        self.assertGreater(result.testsRun, 0)
+
+    def test_prune_order_leaked_sampler_cannot_reach_the_release_package_cases(self) -> None:
+        result, before, after = _run_prune_cases_under_ci_conditions(leaked_sampler=True, symlinked_tmp=False)
+        self._assert_clean(result)
+        self.assertEqual(before, after)
+
+    def test_prune_order_symlinked_temp_root_with_a_leaked_sampler(self) -> None:
+        # Both CI conditions at once. The path compare works on real paths (macOS /private/var, Windows RUNNER~1).
+        try:
+            result, before, after = _run_prune_cases_under_ci_conditions(leaked_sampler=True, symlinked_tmp=True)
+        except OSError as exc:  # Windows without the symlink privilege
+            self.skipTest(f"cannot create a symlink here: {exc}")
+        self._assert_clean(result)
+        self.assertEqual(before, after)
+
+    def test_prune_order_current_package_path_check_survives_a_symlinked_temp_root(self) -> None:
+        # No sampler: only the path case. The current package resolves model_assets_dir; the test compares real paths.
+        try:
+            result, before, after = _run_prune_cases_under_ci_conditions(leaked_sampler=False, symlinked_tmp=True)
+        except OSError as exc:
+            self.skipTest(f"cannot create a symlink here: {exc}")
+        self._assert_clean(result)
+        self.assertEqual(before, after)
+
+    def test_prune_order_harness_leaves_the_process_state_as_it_found_it(self) -> None:
+        # No leaked patches: sys.modules['shared'], sys.path, os.environ, tempfile.tempdir and the thread count.
+        result, before, after = _run_prune_cases_under_ci_conditions(leaked_sampler=False, symlinked_tmp=False)
+        self._assert_clean(result)
+        self.assertIs(before["shared"], after["shared"])
+        self.assertEqual(before, after)
 
 
 class PruneWorkflowSyncTests(unittest.TestCase):

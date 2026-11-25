@@ -497,15 +497,16 @@ def show_cuda_pytorch_setup_dialog(owner: Any) -> bool:
         else "Install CUDA PyTorch (Enable NVIDIA GPU)"
     )
     try:
-        from shared.ui_styles import ui_stylesheet
+        from shared.ui_styles import apply_placeholder_palette, ui_stylesheet
 
         dialog.setStyleSheet(ui_stylesheet(widget=getattr(owner, "_uiWidget", None)))
+        apply_placeholder_palette(dialog)
     except Exception:
         pass
 
     layout = qt.QVBoxLayout(dialog)
-    layout.setContentsMargins(16, 14, 16, 14)
-    layout.setSpacing(10)
+    layout.setContentsMargins(18, 16, 18, 16)
+    layout.setSpacing(12)
 
     body = qt.QLabel(summary["summary_html"])
     body.setWordWrap(True)
@@ -542,6 +543,11 @@ def show_cuda_pytorch_setup_dialog(owner: Any) -> bool:
             if zh
             else f"Install CUDA PyTorch (~{CUDA_DOWNLOAD_SIZE_RANGE})"
         )
+        try:
+            ok_btn.setProperty("primaryAction", True)
+            ok_btn.setDefault(True)
+        except Exception:
+            pass
         if summary["driver_too_old"]:
             ok_btn.setEnabled(False)
     if cancel_btn is not None:

@@ -18,8 +18,22 @@ def choose_license(owner):
 
     dialog = qt.QDialog(slicer.util.mainWindow())
     dialog.setObjectName('surfaceLicenseDialog')
+    dialog.setProperty('popupCard', True)
     dialog.setWindowTitle(_text(owner, 'Surface postprocessing license', '表面后处理许可证'))
+    try:
+        from shared.ui_styles import apply_placeholder_palette, ui_stylesheet
+
+        dialog.setStyleSheet(ui_stylesheet(widget=getattr(owner, '_uiWidget', None)))
+        apply_placeholder_palette(dialog)
+    except Exception:
+        pass
+    try:
+        dialog.setMinimumWidth(460)
+    except Exception:
+        pass
     layout = qt.QVBoxLayout(dialog)
+    layout.setContentsMargins(18, 16, 18, 16)
+    layout.setSpacing(12)
     label = qt.QLabel(_text(owner,
         'Import your FreeSurfer license.txt once, or register for a free license. SlicerDSpace copies it to '
         'your private user configuration and sets FS_LICENSE automatically for future runs and upgrades. '
@@ -29,12 +43,24 @@ def choose_license(owner):
     label.wordWrap = True
     layout.addWidget(label)
     selected = []
+    btn_row = qt.QHBoxLayout()
+    btn_row.setContentsMargins(0, 4, 0, 0)
+    btn_row.setSpacing(8)
     register = qt.QPushButton(_text(owner, 'Get a free license', '免费申请'))
     register.setObjectName('surfaceLicenseRegisterButton')
     register.connect('clicked()', lambda: qt.QDesktopServices.openUrl(qt.QUrl(REGISTRATION_URL)))
-    layout.addWidget(register)
+    btn_row.addWidget(register)
+    btn_row.addStretch(1)
+    cancel = qt.QPushButton(_text(owner, 'Cancel', '取消'))
+    cancel.connect('clicked()', dialog.reject)
+    btn_row.addWidget(cancel)
     button = qt.QPushButton(_text(owner, 'Import license', '导入许可证'))
     button.setObjectName('surfaceLicenseImportButton')
+    try:
+        button.setProperty('primaryAction', True)
+        button.setDefault(True)
+    except Exception:
+        pass
 
     def browse():
         path = qt.QFileDialog.getOpenFileName(dialog, _text(owner, 'Select your license', '选择个人许可证'),
@@ -49,10 +75,8 @@ def choose_license(owner):
         dialog.accept()
 
     button.connect('clicked()', browse)
-    layout.addWidget(button)
-    cancel = qt.QPushButton(_text(owner, 'Cancel', '取消'))
-    cancel.connect('clicked()', dialog.reject)
-    layout.addWidget(cancel)
+    btn_row.addWidget(button)
+    layout.addLayout(btn_row)
     dialog.exec_()
     dialog.deleteLater()
     return selected[0] if selected else None

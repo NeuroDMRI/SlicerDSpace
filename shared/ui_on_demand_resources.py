@@ -528,15 +528,16 @@ def maybe_prompt_on_demand_install(owner: Any, *, force: bool = False) -> bool:
     dialog.setProperty("popupCard", True)
     dialog.setWindowTitle(_text(zh, "On-Demand Resource Supplement", "按需补装模型与图谱"))
     try:
-        from shared.ui_styles import ui_stylesheet
+        from shared.ui_styles import apply_placeholder_palette, ui_stylesheet
 
         dialog.setStyleSheet(ui_stylesheet(widget=getattr(owner, "_uiWidget", None)))
+        apply_placeholder_palette(dialog)
     except Exception:
         pass
 
     layout = qt.QVBoxLayout(dialog)
-    layout.setContentsMargins(14, 12, 14, 12)
-    layout.setSpacing(10)
+    layout.setContentsMargins(18, 16, 18, 16)
+    layout.setSpacing(12)
 
     bullets = _missing_bullets_html(missing, zh)
     sub_note = (
@@ -568,6 +569,10 @@ def maybe_prompt_on_demand_install(owner: Any, *, force: bool = False) -> bool:
         qt.QDialogButtonBox.RejectRole,
     )
     install_btn.setDefault(True)
+    try:
+        install_btn.setProperty("primaryAction", True)
+    except Exception:
+        pass
     buttons.accepted.connect(dialog.accept)
     buttons.rejected.connect(dialog.reject)
     layout.addWidget(buttons)

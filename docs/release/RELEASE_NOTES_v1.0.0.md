@@ -1,17 +1,37 @@
 # SlicerDSpace v1.0.0
 
-## Highlights
+**Supported 3D Slicer versions:** **3D Slicer 5.10.x / 5.12.x**
 
-- **Modular Cross-Platform Model Weight Architecture**: Deep-learning model weights are now cleanly decoupled from the platform-specific OS runtime bundles into five standalone, SHA-256-verified cross-platform archives (`DDSurfer`, `DDSeg`, `DDParcel`, `PNL-CNN`, `TractCloud`), shrinking each OS Base runtime archive from ~1.5 GB down to ~500–650 MB while laying the foundation for future selective plugin-style model installation.
-- **Unchanged Out-of-the-Box Setup Experience**: `SlicerDSpaceSetup-{Windows,Linux,macOS}.zip` and the generated CLI installers automatically install the slimmed OS runtime archive together with all five core model-weight packs and the upstream NITRC IIT template, preserving the exact same zero-configuration experience as `v0.1.1`. Optional WMA white-matter atlases remain on-demand inside Slicer when WMA is selected.
-- **Updated DDSurfer Weights**: Incorporates the updated DDSurfer cortical surface reconstruction checkpoints from `NeuroDMRI/DDSurfer@7d28dbddd7` (`ddsurfer_{lh,rh}_{wm,pial}.pt` and `SHA256SUMS`), packaged together with the surface templates and FreeSurfer post-processing atlas in `SlicerDSpace-v1.0.0-Model-DDSurfer.tar.gz`.
-- **In-Slicer Guided CUDA PyTorch Setup**: When an NVIDIA GPU is detected on a system with CPU-only PyTorch, CUDA device entries appear with a guided `?` setup prompt that previews the CUDA wheel download size, installs CUDA PyTorch into Slicer's environment, and guides a clean restart.
+SlicerDSpace is a unified 3D Slicer extension for T1-weighted-image-free anatomical reconstruction, diffusion MRI microstructural mapping, tractography, white-matter fiber bundle analysis, and structural connectomics—bringing preprocessing, deep-learning anatomical priors, tracking, and scene-native visualization into a single module.
 
----
+## Overview
 
-## 更新亮点（中文）
+- **Input Preparation & Brain Masking**: DICOM, NIfTI, and NRRD/NHDR import with gradient checks, PNL CNN / BET / Otsu brain masking, and optional DWI denoising, Gibbs ringing removal, and Eddy/Topup correction.
+- **Microstructural Mapping**: DTI (FA, MD, AD, RD, color FA), Free-Water / iFW, AMICO NODDI, and DKI (Python MK-Curve).
+- **Anatomical Reconstruction (T1w-Free)**: DDSeg tissue segmentation, DDParcel 101-ROI brain parcellation, DDSurfer white/pial cortical surface reconstruction, and optional FreeSurfer surface postprocessing.
+- **Tractography, Bundles & Connectome**: DTI deterministic tracking, UKFTractography, MRtrix3 CSD/ACT with SIFT2, SAF short association fibers, WMQL / WMA / TractCloud bundle extraction, and structural connectivity matrices.
+- **Cross-Platform & Modular Delivery**: Supports Windows (`x64`), Linux (`x64`), and macOS (Apple Silicon `arm64`) with slimmed OS runtime archives, shared cross-platform model-weight packs, and guided in-Slicer CUDA PyTorch setup on NVIDIA GPU systems.
 
-- **跨平台模型权重模块化拆包**：将五大深度学习模型权重（`DDSurfer`、`DDSeg`、`DDParcel`、`PNL-CNN`、`TractCloud`）从三平台系统底座包中解耦为独立、跨平台复用、带 SHA-256 校验的模型分包；各平台系统底座包体积由约 1.5 GB 精简至约 500–650 MB，为后续“按需拉取/一切皆插件”扩展形态奠定基础。
-- **保持与 v0.1.1 一致的开箱即用体验**：`SlicerDSpaceSetup-{Windows,Linux,macOS}.zip` 图形安装引导包及命令行安装脚本仍默认一键安装系统底座包、全部 5 个核心模型权重分包及 NITRC IIT 参考模板，安装完成即可使用全部核心功能；大型 WMA 白质图谱保持按需在插件内拉取。
-- **更新 DDSurfer 模型权重**：同步更新至 `NeuroDMRI/DDSurfer@7d28dbddd7` 最新版皮层表面重建权重（`ddsurfer_{lh,rh}_{wm,pial}.pt` 与 `SHA256SUMS`），打包于 `SlicerDSpace-v1.0.0-Model-DDSurfer.tar.gz`。
-- **Slicer 内置 CUDA 版 PyTorch 引导安装**：在检测到 NVIDIA 独立显卡但当前为 CPU 版 PyTorch 时，设备下拉列表置灰并附带 `?` 引导按钮，安装前提示体积并自动安装 CUDA 版 PyTorch 及引导重启。
+## Installation
+
+### Option A: One-Click Graphical Setup Extension (Recommended)
+
+1. Download the Setup `.zip` archive for your operating system from **Assets** below (or customize mirror / proxy / offline directory on the [SlicerDSpace website](https://neurodmri.github.io/SlicerDSpace/#start)):
+   - **Windows (`x86_64`)**: `SlicerDSpaceSetup-Windows.zip`
+   - **Linux (`x86_64`)**: `SlicerDSpaceSetup-Linux.zip`
+   - **macOS (Apple Silicon `arm64`)**: `SlicerDSpaceSetup-macOS.zip`
+2. Open **3D Slicer 5.10.x / 5.12.x**, go to **Extensions Manager -> Install Extension from File...**, select the downloaded `.zip` file, and restart Slicer when prompted.
+3. After restarting, the **SlicerDSpace Setup** window opens automatically. Click **Start Install** to download and verify the OS runtime archive, core model packs, and required templates. Once complete, restart Slicer and open **Modules -> Diffusion -> SlicerDSpace**.
+
+### Option B: Standalone OS Base Archives + Modular Model Packs
+
+- **OS Base Packages (`depends NA`, bundled Python 3.12 + PyTorch + UKF + native MRtrix3 / FSLcpu / FreeSurfer Surface Runtime)**:
+  - **Windows (`x86_64`)**: `SlicerDSpace-v1.0.0-Windows-x64.zip`
+  - **Linux (`x86_64`)**: `SlicerDSpace-v1.0.0-Linux-x64.tar.gz`
+  - **macOS (Apple Silicon `arm64`)**: `SlicerDSpace-v1.0.0-macOS-arm64.tar.gz`
+- **Cross-Platform Model Weight Packs**:
+  - `SlicerDSpace-v1.0.0-Model-DDSurfer.tar.gz`, `SlicerDSpace-v1.0.0-Model-DDSeg.tar.gz`, `SlicerDSpace-v1.0.0-Model-DDParcel.tar.gz`, `SlicerDSpace-v1.0.0-Model-PNL-CNN.tar.gz`, and `SlicerDSpace-v1.0.0-Model-TractCloud.tar.gz`.
+- **Optional Assets & Incremental Updates**:
+  - Optional WMA white-matter atlases (`ORG`, `NABA`, `East-West`) and the NITRC `IITmean_b0_256.nii.gz` template can be downloaded on demand inside Slicer.
+  - Existing installations can apply code updates from **Modules -> Diffusion -> SlicerDSpace -> Update -> Check for updates** (`SlicerDSpace-v1.0.0-CodeOverlay.tar.gz`).
+  - Verify archive integrity against `SHA256SUMS.txt`.

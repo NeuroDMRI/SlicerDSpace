@@ -399,8 +399,28 @@ QLineEdit QToolButton:disabled {
 QDialog[popupCard="true"] {
   background: #FFFFFF;
   color: #1E293B;
-  border: 1px solid #9BAEBB;
+  border: 1px solid #CBD5E1;
+  border-radius: 8px;
+}
+QDialog[popupCard="true"] QPushButton[primaryAction="true"],
+QPushButton[primaryAction="true"] {
+  background: #2B627E;
+  color: #FFFFFF;
+  border: 1px solid #24536B;
   border-radius: 6px;
+  padding: 5px 14px;
+  font-weight: 600;
+}
+QDialog[popupCard="true"] QPushButton[primaryAction="true"]:hover:!disabled,
+QPushButton[primaryAction="true"]:hover:!disabled {
+  background: #23526A;
+  border-color: #1C4357;
+}
+QDialog[popupCard="true"] QPushButton[primaryAction="true"]:disabled,
+QPushButton[primaryAction="true"]:disabled {
+  background: #E2E8F0;
+  color: #94A3B8;
+  border-color: #CBD5E1;
 }
 QLabel#algorithmPickerTitle {
   color: #1E293B;
@@ -866,7 +886,27 @@ QDialog[popupCard="true"] {
   background: #303030;
   color: #E6EDF3;
   border: 1px solid #4C5662;
+  border-radius: 8px;
+}
+QDialog[popupCard="true"] QPushButton[primaryAction="true"],
+QPushButton[primaryAction="true"] {
+  background: #2F6B8A;
+  color: #FFFFFF;
+  border: 1px solid #4889AB;
   border-radius: 6px;
+  padding: 5px 14px;
+  font-weight: 600;
+}
+QDialog[popupCard="true"] QPushButton[primaryAction="true"]:hover:!disabled,
+QPushButton[primaryAction="true"]:hover:!disabled {
+  background: #387DA0;
+  border-color: #63A4C7;
+}
+QDialog[popupCard="true"] QPushButton[primaryAction="true"]:disabled,
+QPushButton[primaryAction="true"]:disabled {
+  background: #272C33;
+  color: #6E7681;
+  border-color: #3D444D;
 }
 QLabel#algorithmPickerTitle {
   color: #F0F6FC;
@@ -1142,105 +1182,603 @@ DARK_RUN_STATUS_TABLE_STYLE = (
     "QHeaderView::section { background: #2D333B; color: #E6EDF3; font-weight: 700; padding: 5px; border: 0; }"
 )
 
-ENVIRONMENT_RESULTS_DIALOG_STYLE = """
-QDialog {
-  background: #F4F7F6;
-}
-QLabel#environmentSummaryLabel {
-  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #EEF6F1, stop:1 #F7FBF9);
-  color: #173126;
-  padding: 14px 16px;
-  border: 1px solid #CADCD1;
-  border-radius: 10px;
-  font-weight: 600;
-}
-QFrame#environmentItemFrame {
-  border: 1px solid #D5DEDC;
-  border-radius: 10px;
+_DIALOG_FONT_STACK = '"Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Helvetica Neue", "Noto Sans", sans-serif'
+_DIALOG_MONO_STACK = '"Cascadia Mono", "Consolas", "SF Mono", "DejaVu Sans Mono", monospace'
+
+ENVIRONMENT_RESULTS_DIALOG_STYLE = f"""
+QDialog {{
   background: #FFFFFF;
-}
-QLabel#environmentItemText {
-  color: #223238;
+  color: #0F172A;
+  font-family: {_DIALOG_FONT_STACK};
+  font-size: 13px;
+}}
+QWidget {{
+  font-family: {_DIALOG_FONT_STACK};
+}}
+QLabel#environmentSummaryLabel {{
+  background: #FEF2F2;
+  color: #7F1D1D;
+  padding: 12px 14px;
+  border: 1px solid #F3C6C6;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+}}
+QLabel#environmentSummaryLabel[severity="warning"] {{
+  background: #FFFBEB;
+  color: #78350F;
+  border: 1px solid #F2D79B;
+}}
+QLabel#environmentSummaryLabel[severity="ready"] {{
+  background: #F0FDF4;
+  color: #14532D;
+  border: 1px solid #BBF7D0;
+}}
+QFrame#environmentListContainer {{
+  background: #FFFFFF;
+  border: 1px solid #E2E8F0;
+  border-radius: 8px;
+}}
+QFrame#environmentItemFrame {{
+  border: none;
+  border-bottom: 1px solid #EDF2F7;
+  border-radius: 0;
   background: transparent;
-}
-QPushButton {
-  min-height: 30px;
-  padding: 6px 14px;
-  border: 1px solid #C8D4D1;
-  border-radius: 8px;
+}}
+QFrame#environmentItemFrame[lastRow="true"] {{
+  border-bottom: none;
+}}
+QLabel#environmentItemTitle {{
+  color: #0F172A;
+  font-size: 13px;
+  font-weight: 600;
+  background: transparent;
+}}
+QLabel#environmentItemBadge {{
+  border-radius: 4px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 600;
+}}
+QLabel#environmentItemBadge[severity="required"] {{
+  background: #FEE2E2;
+  color: #B91C1C;
+}}
+QLabel#environmentItemBadge[severity="optional"] {{
+  background: #F1F5F9;
+  color: #475569;
+}}
+QLabel#environmentItemMeta {{
+  color: #64748B;
+  font-size: 11.5px;
+  background: transparent;
+}}
+QLabel#environmentItemText {{
+  color: #334155;
+  font-size: 12.5px;
+  background: transparent;
+}}
+QToolButton#environmentItemDetailsToggle {{
+  color: #64748B;
+  background: transparent;
+  border: none;
+  padding: 1px 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  text-align: left;
+}}
+QToolButton#environmentItemDetailsToggle:hover {{
+  color: #0F172A;
+}}
+QLabel#environmentItemTechnicalDetails {{
+  background: #F8FAFC;
+  color: #475569;
+  border: 1px solid #E2E8F0;
+  border-radius: 5px;
+  padding: 8px 10px;
+  font-family: {_DIALOG_MONO_STACK};
+  font-size: 11px;
+}}
+QFrame#dialogFooterSeparator {{
+  background: #E2E8F0;
+  border: none;
+  min-height: 1px;
+  max-height: 1px;
+}}
+QPushButton {{
+  min-height: 28px;
+  padding: 4px 13px;
+  border: 1px solid #CBD5E1;
+  border-radius: 6px;
   background: #FFFFFF;
-  color: #173126;
-}
-QPushButton:hover {
-  background: #F1F6F4;
-}
-QPushButton:pressed {
-  background: #E3EEE8;
-}
-QPlainTextEdit {
-  background: #FFFFFF;
-  color: #4A5C5F;
-  border: 1px solid #D7E0DE;
-  border-radius: 8px;
-  padding: 6px;
-}
-QScrollArea {
+  color: #1E293B;
+  font-size: 12.5px;
+  font-weight: 500;
+}}
+QPushButton:hover:!disabled {{
+  background: #F8FAFC;
+  border-color: #94A3B8;
+}}
+QPushButton:pressed:!disabled {{
+  background: #F1F5F9;
+}}
+QPushButton:disabled {{
+  background: #F8FAFC;
+  border-color: #E2E8F0;
+  color: #94A3B8;
+}}
+QPushButton#environmentInstallAllButton,
+QPushButton[primaryAction="true"] {{
+  background: #2B627E;
+  border: 1px solid #24536B;
+  color: #FFFFFF;
+  font-weight: 600;
+}}
+QPushButton#environmentInstallAllButton:hover:!disabled,
+QPushButton[primaryAction="true"]:hover:!disabled {{
+  background: #23526A;
+  border-color: #1C4357;
+}}
+QPushButton#environmentInstallAllButton:pressed:!disabled,
+QPushButton[primaryAction="true"]:pressed:!disabled {{
+  background: #1B4255;
+}}
+QPushButton#environmentInstallAllButton:disabled,
+QPushButton[primaryAction="true"]:disabled {{
+  background: #E2E8F0;
+  border-color: #CBD5E1;
+  color: #94A3B8;
+}}
+QPushButton#environmentItemActionButton {{
+  min-height: 26px;
+  padding: 4px 12px;
+  border: 1px solid #CBD5E1;
+  border-radius: 6px;
+  background: #F8FAFC;
+  color: #1E293B;
+  font-size: 12px;
+  font-weight: 500;
+}}
+QPushButton#environmentItemActionButton:hover:!disabled {{
+  background: #EFF6FA;
+  border-color: #2B627E;
+  color: #1D4B63;
+}}
+QPushButton#environmentManualNotesButton,
+QPushButton#environmentSummaryDetailsButton {{
+  background: transparent;
+  border: 1px solid transparent;
+  color: #475569;
+  padding: 4px 10px;
+  font-size: 12px;
+}}
+QPushButton#environmentManualNotesButton:hover:!disabled,
+QPushButton#environmentSummaryDetailsButton:hover:!disabled {{
+  background: #F1F5F9;
+  color: #0F172A;
+}}
+QPushButton#environmentManualNotesButton:disabled,
+QPushButton#environmentSummaryDetailsButton:disabled {{
+  background: transparent;
+  border-color: transparent;
+  color: #CBD5E1;
+}}
+QPlainTextEdit {{
+  background: #F8FAFC;
+  color: #334155;
+  border: 1px solid #E2E8F0;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: {_DIALOG_MONO_STACK};
+  font-size: 11.5px;
+}}
+QScrollArea {{
   border: none;
   background: transparent;
-}
+}}
 """
 
-DARK_ENVIRONMENT_RESULTS_DIALOG_STYLE = """
-QDialog {
-  background: #22272E;
-  color: #E6EDF3;
-}
-QLabel#environmentSummaryLabel {
-  background: #283430;
-  color: #D2F4E0;
-  padding: 14px 16px;
-  border: 1px solid #3B5E4C;
-  border-radius: 10px;
-  font-weight: 600;
-}
-QFrame#environmentItemFrame {
-  border: 1px solid #444C56;
-  border-radius: 10px;
-  background: #2A3038;
-}
-QLabel#environmentItemText {
-  color: #E6EDF3;
-  background: transparent;
-}
-QPushButton {
-  min-height: 30px;
-  padding: 6px 14px;
-  border: 1px solid #525C68;
-  border-radius: 8px;
-  background: #323842;
-  color: #E6EDF3;
-}
-QPushButton:hover {
-  background: #3C4450;
-}
-QPushButton:pressed {
-  background: #464F5D;
-}
-QPlainTextEdit {
+DARK_ENVIRONMENT_RESULTS_DIALOG_STYLE = f"""
+QDialog {{
   background: #1E2228;
-  color: #D2DEE8;
-  border: 1px solid #444C56;
+  color: #E6EDF3;
+  font-family: {_DIALOG_FONT_STACK};
+  font-size: 13px;
+}}
+QWidget {{
+  font-family: {_DIALOG_FONT_STACK};
+}}
+QLabel#environmentSummaryLabel {{
+  background: #2D1F22;
+  color: #FCA5A5;
+  padding: 12px 14px;
+  border: 1px solid #6E333A;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+}}
+QLabel#environmentSummaryLabel[severity="warning"] {{
+  background: #2E2517;
+  color: #FCD34D;
+  border: 1px solid #665024;
+}}
+QLabel#environmentSummaryLabel[severity="ready"] {{
+  background: #1B2B22;
+  color: #86EFAC;
+  border: 1px solid #2E5940;
+}}
+QFrame#environmentListContainer {{
+  background: #242930;
+  border: 1px solid #373E47;
   border-radius: 8px;
-  padding: 6px;
-}
-QScrollArea {
+}}
+QFrame#environmentItemFrame {{
+  border: none;
+  border-bottom: 1px solid #323842;
+  border-radius: 0;
+  background: transparent;
+}}
+QFrame#environmentItemFrame[lastRow="true"] {{
+  border-bottom: none;
+}}
+QLabel#environmentItemTitle {{
+  color: #F0F6FC;
+  font-size: 13px;
+  font-weight: 600;
+  background: transparent;
+}}
+QLabel#environmentItemBadge {{
+  border-radius: 4px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 600;
+}}
+QLabel#environmentItemBadge[severity="required"] {{
+  background: #3F2024;
+  color: #FFA8A8;
+}}
+QLabel#environmentItemBadge[severity="optional"] {{
+  background: #2D333B;
+  color: #9BA7B4;
+}}
+QLabel#environmentItemMeta {{
+  color: #8B949E;
+  font-size: 11.5px;
+  background: transparent;
+}}
+QLabel#environmentItemText {{
+  color: #C9D1D9;
+  font-size: 12.5px;
+  background: transparent;
+}}
+QToolButton#environmentItemDetailsToggle {{
+  color: #8B949E;
+  background: transparent;
+  border: none;
+  padding: 1px 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  text-align: left;
+}}
+QToolButton#environmentItemDetailsToggle:hover {{
+  color: #F0F6FC;
+}}
+QLabel#environmentItemTechnicalDetails {{
+  background: #1B1F24;
+  color: #9BA7B4;
+  border: 1px solid #353C45;
+  border-radius: 5px;
+  padding: 8px 10px;
+  font-family: {_DIALOG_MONO_STACK};
+  font-size: 11px;
+}}
+QFrame#dialogFooterSeparator {{
+  background: #353C45;
+  border: none;
+  min-height: 1px;
+  max-height: 1px;
+}}
+QPushButton {{
+  min-height: 28px;
+  padding: 4px 13px;
+  border: 1px solid #4C5662;
+  border-radius: 6px;
+  background: #2B313A;
+  color: #E6EDF3;
+  font-size: 12.5px;
+  font-weight: 500;
+}}
+QPushButton:hover:!disabled {{
+  background: #353D48;
+  border-color: #6B7785;
+}}
+QPushButton:pressed:!disabled {{
+  background: #3E4754;
+}}
+QPushButton:disabled {{
+  background: #232830;
+  border-color: #353C45;
+  color: #6E7681;
+}}
+QPushButton#environmentInstallAllButton,
+QPushButton[primaryAction="true"] {{
+  background: #2F6B8A;
+  border: 1px solid #4889AB;
+  color: #FFFFFF;
+  font-weight: 600;
+}}
+QPushButton#environmentInstallAllButton:hover:!disabled,
+QPushButton[primaryAction="true"]:hover:!disabled {{
+  background: #387DA0;
+  border-color: #63A4C7;
+}}
+QPushButton#environmentInstallAllButton:pressed:!disabled,
+QPushButton[primaryAction="true"]:pressed:!disabled {{
+  background: #265973;
+}}
+QPushButton#environmentInstallAllButton:disabled,
+QPushButton[primaryAction="true"]:disabled {{
+  background: #272C33;
+  border-color: #3B424B;
+  color: #6E7681;
+}}
+QPushButton#environmentItemActionButton {{
+  min-height: 26px;
+  padding: 4px 12px;
+  border: 1px solid #48515C;
+  border-radius: 6px;
+  background: #2D333B;
+  color: #E6EDF3;
+  font-size: 12px;
+  font-weight: 500;
+}}
+QPushButton#environmentItemActionButton:hover:!disabled {{
+  background: #2B4252;
+  border-color: #63A4C7;
+  color: #FFFFFF;
+}}
+QPushButton#environmentManualNotesButton,
+QPushButton#environmentSummaryDetailsButton {{
+  background: transparent;
+  border: 1px solid transparent;
+  color: #9BA7B4;
+  padding: 4px 10px;
+  font-size: 12px;
+}}
+QPushButton#environmentManualNotesButton:hover:!disabled,
+QPushButton#environmentSummaryDetailsButton:hover:!disabled {{
+  background: #2D333B;
+  color: #F0F6FC;
+}}
+QPushButton#environmentManualNotesButton:disabled,
+QPushButton#environmentSummaryDetailsButton:disabled {{
+  background: transparent;
+  border-color: transparent;
+  color: #545D68;
+}}
+QPlainTextEdit {{
+  background: #1B1F24;
+  color: #C9D1D9;
+  border: 1px solid #353C45;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: {_DIALOG_MONO_STACK};
+  font-size: 11.5px;
+}}
+QScrollArea {{
   border: none;
   background: transparent;
-}
+}}
 """
 
-ENVIRONMENT_READY_LABEL_STYLE = "QLabel { color: #2E7D32; padding: 12px; }"
-DARK_ENVIRONMENT_READY_LABEL_STYLE = "QLabel { color: #66BB6A; padding: 12px; }"
+ACTIONABLE_ERROR_DIALOG_STYLE = f"""
+QDialog {{
+  background: #FFFFFF;
+  color: #0F172A;
+  font-family: {_DIALOG_FONT_STACK};
+  font-size: 13px;
+}}
+QWidget {{
+  font-family: {_DIALOG_FONT_STACK};
+}}
+QLabel#errorDialogBadge {{
+  background: #FEE2E2;
+  color: #B91C1C;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 20px;
+  max-width: 20px;
+  min-height: 20px;
+  max-height: 20px;
+}}
+QLabel#errorDialogTitle {{
+  color: #0F172A;
+  font-size: 15px;
+  font-weight: 600;
+  background: transparent;
+}}
+QLabel#errorDialogLead {{
+  color: #334155;
+  font-size: 13px;
+  background: transparent;
+}}
+QFrame#errorDialogInfoCard {{
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  border-radius: 7px;
+}}
+QLabel#errorSectionHeading {{
+  color: #64748B;
+  font-size: 11px;
+  font-weight: 600;
+  background: transparent;
+}}
+QLabel#errorSectionBody {{
+  color: #1E293B;
+  font-size: 12.5px;
+  background: transparent;
+}}
+QFrame#errorDialogDivider {{
+  background: #E2E8F0;
+  border: none;
+  min-height: 1px;
+  max-height: 1px;
+}}
+QPlainTextEdit#errorTechnicalDetails {{
+  background: #F8FAFC;
+  color: #334155;
+  border: 1px solid #E2E8F0;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: {_DIALOG_MONO_STACK};
+  font-size: 11.5px;
+}}
+QPushButton {{
+  min-height: 28px;
+  padding: 4px 13px;
+  border: 1px solid #CBD5E1;
+  border-radius: 6px;
+  background: #FFFFFF;
+  color: #1E293B;
+  font-size: 12.5px;
+  font-weight: 500;
+}}
+QPushButton:hover:!disabled {{
+  background: #F8FAFC;
+  border-color: #94A3B8;
+}}
+QPushButton[primaryAction="true"] {{
+  background: #2B627E;
+  border: 1px solid #24536B;
+  color: #FFFFFF;
+  font-weight: 600;
+}}
+QPushButton[primaryAction="true"]:hover:!disabled {{
+  background: #23526A;
+  border-color: #1C4357;
+}}
+QPushButton[ghostButton="true"] {{
+  background: transparent;
+  border: 1px solid transparent;
+  color: #475569;
+  padding: 4px 10px;
+  font-size: 12px;
+}}
+QPushButton[ghostButton="true"]:hover:!disabled {{
+  background: #F1F5F9;
+  color: #0F172A;
+}}
+"""
+
+DARK_ACTIONABLE_ERROR_DIALOG_STYLE = f"""
+QDialog {{
+  background: #1E2228;
+  color: #E6EDF3;
+  font-family: {_DIALOG_FONT_STACK};
+  font-size: 13px;
+}}
+QWidget {{
+  font-family: {_DIALOG_FONT_STACK};
+}}
+QLabel#errorDialogBadge {{
+  background: #3F2024;
+  color: #FFA8A8;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  min-width: 20px;
+  max-width: 20px;
+  min-height: 20px;
+  max-height: 20px;
+}}
+QLabel#errorDialogTitle {{
+  color: #F0F6FC;
+  font-size: 15px;
+  font-weight: 600;
+  background: transparent;
+}}
+QLabel#errorDialogLead {{
+  color: #C9D1D9;
+  font-size: 13px;
+  background: transparent;
+}}
+QFrame#errorDialogInfoCard {{
+  background: #242930;
+  border: 1px solid #373E47;
+  border-radius: 7px;
+}}
+QLabel#errorSectionHeading {{
+  color: #8B949E;
+  font-size: 11px;
+  font-weight: 600;
+  background: transparent;
+}}
+QLabel#errorSectionBody {{
+  color: #E6EDF3;
+  font-size: 12.5px;
+  background: transparent;
+}}
+QFrame#errorDialogDivider {{
+  background: #353C45;
+  border: none;
+  min-height: 1px;
+  max-height: 1px;
+}}
+QPlainTextEdit#errorTechnicalDetails {{
+  background: #1B1F24;
+  color: #C9D1D9;
+  border: 1px solid #353C45;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: {_DIALOG_MONO_STACK};
+  font-size: 11.5px;
+}}
+QPushButton {{
+  min-height: 28px;
+  padding: 4px 13px;
+  border: 1px solid #4C5662;
+  border-radius: 6px;
+  background: #2B313A;
+  color: #E6EDF3;
+  font-size: 12.5px;
+  font-weight: 500;
+}}
+QPushButton:hover:!disabled {{
+  background: #353D48;
+  border-color: #6B7785;
+}}
+QPushButton[primaryAction="true"] {{
+  background: #2F6B8A;
+  border: 1px solid #4889AB;
+  color: #FFFFFF;
+  font-weight: 600;
+}}
+QPushButton[primaryAction="true"]:hover:!disabled {{
+  background: #387DA0;
+  border-color: #63A4C7;
+}}
+QPushButton[ghostButton="true"] {{
+  background: transparent;
+  border: 1px solid transparent;
+  color: #9BA7B4;
+  padding: 4px 10px;
+  font-size: 12px;
+}}
+QPushButton[ghostButton="true"]:hover:!disabled {{
+  background: #2D333B;
+  color: #F0F6FC;
+}}
+"""
+
+ENVIRONMENT_READY_LABEL_STYLE = (
+    f"QLabel {{ color: #2E7D32; background: #F0FDF4; border: 1px solid #BBF7D0; "
+    f"border-radius: 7px; padding: 14px 16px; font-family: {_DIALOG_FONT_STACK}; font-size: 13px; }}"
+)
+DARK_ENVIRONMENT_READY_LABEL_STYLE = (
+    f"QLabel {{ color: #66BB6A; background: #1B2B22; border: 1px solid #2E5940; "
+    f"border-radius: 7px; padding: 14px 16px; font-family: {_DIALOG_FONT_STACK}; font-size: 13px; }}"
+)
 
 INPUT_FORMAT_POPOVER_STYLE = """
 QFrame#inputFormatHelpPopover {
@@ -1569,6 +2107,13 @@ def environment_results_dialog_style(*, dark: bool | None = None, widget: Any = 
 
     use_dark = is_dark_mode(widget) if dark is None else bool(dark)
     return DARK_ENVIRONMENT_RESULTS_DIALOG_STYLE if use_dark else ENVIRONMENT_RESULTS_DIALOG_STYLE
+
+
+def actionable_error_dialog_style(*, dark: bool | None = None, widget: Any = None) -> str:
+    """Return the actionable-error dialog stylesheet for the active light or dark theme."""
+
+    use_dark = is_dark_mode(widget) if dark is None else bool(dark)
+    return DARK_ACTIONABLE_ERROR_DIALOG_STYLE if use_dark else ACTIONABLE_ERROR_DIALOG_STYLE
 
 
 def environment_ready_label_style(*, dark: bool | None = None, widget: Any = None) -> str:

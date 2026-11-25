@@ -316,6 +316,25 @@ class UIEnvironmentPanelTest(unittest.TestCase):
         self.assertIn("Default root:", present_text)
         self.assertIn("SLICERDSPACE_MODEL_ASSETS_DIR", present_text)
 
+    def test_environment_item_display_and_summary_parts_format_cleanly(self) -> None:
+        from shared.ui_environment_panel import environment_item_display, environment_summary_parts
+
+        result = self._sample_result()
+        severity, headline, subtitle = environment_summary_parts(result, zh=False)
+        self.assertEqual(severity, "blocked")
+        self.assertIn("3 required items", headline)
+        self.assertIn("0 runnable", subtitle)
+        self.assertIn("1 optional missing", subtitle)
+
+        command_item = next(item for item in result.statuses if item.key == "command:dwi2fod")
+        disp = environment_item_display(command_item, zh=False)
+        self.assertEqual(disp.title, "Command: dwi2fod")
+        self.assertEqual(disp.badge_text, "Required")
+        self.assertEqual(disp.badge_severity, "required")
+        self.assertIn("Tractography", disp.meta_text)
+        self.assertIn("Install MRtrix3.", disp.guidance_text)
+        self.assertIn("Key: command:dwi2fod", disp.technical_details)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -34,8 +34,22 @@ def install_selected_runtimes(owner, profiles=None):
     plan = install_plan(profiles)
     dialog = qt.QDialog(slicer.util.mainWindow())
     dialog.setObjectName("managedRuntimeConfirmationDialog")
+    dialog.setProperty("popupCard", True)
     dialog.setWindowTitle("配置所选计算工具" if language else "Set up selected computation tools")
+    try:
+        from shared.ui_styles import apply_placeholder_palette, ui_stylesheet
+
+        dialog.setStyleSheet(ui_stylesheet(widget=getattr(owner, "_uiWidget", None)))
+        apply_placeholder_palette(dialog)
+    except Exception:
+        pass
+    try:
+        dialog.setMinimumWidth(460)
+    except Exception:
+        pass
     layout = qt.QVBoxLayout(dialog)
+    layout.setContentsMargins(18, 16, 18, 16)
+    layout.setSpacing(10)
     label = qt.QLabel(("将下载到用户目录，成功后自动填写路径。不会修改 Slicer Python、驱动或系统配置。\n" if language else
                       "Downloads go to your user directory; verified paths are saved automatically.\n"
                       "Slicer Python, GPU drivers and shell configuration are not changed.\n") +
@@ -63,8 +77,13 @@ def install_selected_runtimes(owner, profiles=None):
     buttons = qt.QDialogButtonBox(dialog)
     buttons.setStandardButtons(qt.QDialogButtonBox.Ok | qt.QDialogButtonBox.Cancel)
     buttons.setObjectName("managedRuntimeDialogButtons")
-    buttons.button(qt.QDialogButtonBox.Ok).setText("安装并自动配置" if language else "Install and configure")
-    buttons.button(qt.QDialogButtonBox.Ok).enabled = accepted is None
+    ok_btn = buttons.button(qt.QDialogButtonBox.Ok)
+    ok_btn.setText("安装并自动配置" if language else "Install and configure")
+    try:
+        ok_btn.setProperty("primaryAction", True)
+    except Exception:
+        pass
+    ok_btn.enabled = accepted is None
     if accepted is not None:
         accepted.connect("toggled(bool)", lambda value: setattr(buttons.button(qt.QDialogButtonBox.Ok), "enabled", value))
     buttons.connect("accepted()", dialog.accept)

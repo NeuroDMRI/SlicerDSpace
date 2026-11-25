@@ -92,6 +92,45 @@ class EnvironmentDialogState:
     ready_text: str = "All selected targets are runnable with the currently detected environment."
 
 
+@dataclass(frozen=True)
+class EnvironmentItemDisplay:
+    """Clean, user-facing display fields for one missing dependency row."""
+
+    title: str
+    badge_text: str
+    badge_severity: str  # "required" | "optional"
+    meta_text: str
+    guidance_text: str
+    technical_details: str
+
+
+_TARGET_DISPLAY_LABELS: dict[str, tuple[str, str]] = {
+    "preprocessing": ("Preprocessing", "预处理"),
+    "microstructure": ("Microstructure", "微结构指标"),
+    "segmentation": ("Tissue Segmentation", "组织分割"),
+    "parcellation": ("Brain Parcellation", "脑区分区"),
+    "surface": ("Cortical Surface", "皮层表面重建"),
+    "surface_postprocess": ("Surface Postprocess", "表面后处理"),
+    "tractography": ("Tractography", "纤维追踪"),
+    "bundles": ("Bundle Extraction", "白质纤维束提取"),
+    "tractcloud": ("TractCloud", "TractCloud 纤维束"),
+    "wma": ("WMA Fiber Clustering", "WMA 纤维束聚类"),
+    "connectome": ("Connectome", "结构连接组"),
+    "saf": ("SAF", "浅层联合纤维 (SAF)"),
+    "validation": ("Input Validation", "输入校验"),
+}
+
+
+def format_target_name(target: str, *, zh: bool = False) -> str:
+    """Return a readable display label for one pipeline target key."""
+
+    key = str(target or "").strip()
+    if key in _TARGET_DISPLAY_LABELS:
+        en_name, zh_name = _TARGET_DISPLAY_LABELS[key]
+        return zh_name if zh else en_name
+    return key.replace("_", " ").strip().title() if key else ""
+
+
 PATH_STATUS_DEPENDENCY_KEYS = {
     "postprocess_runtime": {"surface_postprocess_runtime"},
     "postprocess_license_file": {"surface_postprocess_license"},
@@ -654,6 +693,162 @@ def environment_item_text(item: Any, zh: bool = False) -> str:
             preview += f", ... ({len(checked_locations)} checked)"
         lines.append(f"Checked locations: {preview}")
     return "\n".join(line for line in lines if line)
+
+
+def environment_item_display(item: Any, zh: bool = False) -> EnvironmentItemDisplay:
+    """Build clean, user-friendly structured fields for one missing dependency row."""
+
+    details = getattr(item, "details", None) or {}
+    required = bool(getattr(item, "required", False))
+    badge_severity = "required" if required else "optional"
+    badge_text = ("必需" if required else "可选") if zh else ("Required" if required else "Optional")
+
+    raw_targets = tuple(getattr(item, "targets", ()) or ())
+    target_names = [format_target_name(t, zh=zh) for t in raw_targets if str(t or "").strip()]
+    targets_joined = ("、".join(target_names) if zh else ", ".join(target_names)) if target_names else ""
+
+    kind = str(getattr(item, "kind", "") or "")
+    label = str(getattr(item, "label", "") or "").strip()
+    meta_parts: list[str] = []
+
+    if is_cuda_device_item(item):
+        req_dev = str(details.get("requested_device") or "cuda").strip()
+        if target_names:
+            title = (
+                f"{targets_joined} — CUDA GPU 加速"
+                if zh
+                else f"{targets_joined} — CUDA GPU acceleration"
+            )
+        else:
+            title = "CUDA GPU 加速" if zh else "CUDA GPU acceleration"
+        meta_parts.append((f"请求设备：{req_dev}" if zh else f"Requested device: {req_dev}"))
+        meta_parts.append(("当前运行时：CPU 版 PyTorch" if zh else "Active runtime: CPU-only PyTorch"))
+        guidance = (
+            "当前步骤指定了 CUDA 显卡，但 3D Slicer 内置为 CPU 版 PyTorch。可将计算设备切换为“自动 / CPU”，"
+            "或在 Slicer 内直接安装 CUDA 版 PyTorch（约 2.5–2.7 GB 下载）。"
+            if zh
+            else "This step requests CUDA while Slicer currently runs CPU-only PyTorch. "
+            "Switch Compute device to Auto/CPU, or install CUDA PyTorch directly inside 3D Slicer (~2.5–2.7 GB)."
+        )
+    else:
+        if kind == "python":
+            pkg = str(details.get("package") or "").strip()
+            title = (
+                f"Python 依赖包：{pkg}" if (zh and pkg) else
+                f"Python package: {pkg}" if pkg else
+                label
+            )
+        elif kind == "command":
+            cmd = str(details.get("command") or label).strip()
+            title = f"外部命令：{cmd}" if zh else f"Command: {cmd}"
+        else:
+            title = label
+
+        if target_names:
+            meta_parts.append((f"影响模块：{targets_joined}" if zh else f"Affects: {targets_joined}"))
+        detected_src = format_detected_source(str(details.get("detected_source") or ""))
+        if detected_src:
+            if zh and detected_src == "not found":
+                meta_parts.append("状态：未检测到")
+            else:
+                meta_parts.append((f"状态：{detected_src}" if zh else f"Status: {detected_src}"))
+        if kind == "path" and details.get("path"):
+            p_str = str(details.get("path"))
+            meta_parts.append((f"路径：{p_str}" if zh else f"Path: {p_str}"))
+        elif kind == "device" and details.get("requested_device"):
+            dev_str = str(details.get("requested_device"))
+            meta_parts.append((f"请求设备：{dev_str}" if zh else f"Device: {dev_str}"))
+
+        reason, hint = _item_reason_and_hint(item, zh)
+        parts_g: list[str] = []
+        if reason.strip():
+            parts_g.append(reason.strip())
+        if hint.strip() and hint.strip() != reason.strip():
+            parts_g.append(hint.strip())
+        if not parts_g:
+            parts_g.append(
+                "运行所选分析前需要先完成此项配置。"
+                if zh
+                else "Configure or install this dependency before running the selected analysis."
+            )
+        guidance = " ".join(parts_g)
+
+    return EnvironmentItemDisplay(
+        title=title or label,
+        badge_text=badge_text,
+        badge_severity=badge_severity,
+        meta_text="  ·  ".join(meta_parts),
+        guidance_text=guidance,
+        technical_details=environment_item_text(item, zh=zh),
+    )
+
+
+def environment_summary_parts(result: Any, *, zh: bool = False) -> tuple[str, str, str]:
+    """Return ``(severity, headline, subtitle)`` for the environment-results banner."""
+
+    try:
+        missing_items = environment_missing_items(result)
+    except Exception:
+        return ("ready", "", "")
+
+    if not missing_items:
+        return (
+            "ready",
+            "环境已就绪，所选分析均可直接运行" if zh else "Environment ready — all selected targets can run",
+            "已检测到所有必需运行时与模型依赖。" if zh else "All required runtimes and model assets were detected.",
+        )
+
+    raw_blocker = getattr(result, "blocker_count", 0)
+    blocker_count = raw_blocker if isinstance(raw_blocker, int) else sum(1 for i in missing_items if getattr(i, "required", False))
+    optional_count = sum(1 for item in missing_items if not getattr(item, "required", False))
+    runnable_raw = getattr(result, "runnable_targets", ())
+    blocked_raw = getattr(result, "blocked_targets", ())
+    runnable_n = len(runnable_raw) if isinstance(runnable_raw, (list, tuple, set)) else 0
+    blocked_list = list(blocked_raw) if isinstance(blocked_raw, (list, tuple, set)) else []
+    blocked_n = len(blocked_list)
+
+    severity = "blocked" if blocker_count > 0 else "warning"
+    if blocker_count > 0:
+        if should_route_prepare_all_to_cuda_setup(result):
+            headline = (
+                f"{blocker_count} 项分析请求 CUDA 显卡加速，需先安装 CUDA 版 PyTorch 或切回 CPU"
+                if zh
+                else f"{blocker_count} target{'s' if blocker_count != 1 else ''} request CUDA GPU — install CUDA PyTorch or switch to CPU"
+            )
+        else:
+            headline = (
+                f"运行前需先处理 {blocker_count} 项必需依赖"
+                if zh
+                else f"{blocker_count} required item{'s' if blocker_count != 1 else ''} need setup before running"
+            )
+    else:
+        headline = (
+            f"存在 {optional_count} 项可选依赖未安装"
+            if zh
+            else f"{optional_count} optional item{'s' if optional_count != 1 else ''} not installed"
+        )
+
+    sub_parts: list[str] = []
+    if zh:
+        sub_parts.append(f"{runnable_n} 项已就绪")
+        if blocked_n:
+            names = "、".join(format_target_name(t, zh=True) for t in blocked_list[:4])
+            if blocked_n > 4:
+                names += f" 等 {blocked_n} 项"
+            sub_parts.append(f"{blocked_n} 项待配置（{names}）")
+        if optional_count and blocker_count > 0:
+            sub_parts.append(f"另有 {optional_count} 项可选缺失")
+    else:
+        sub_parts.append(f"{runnable_n} runnable")
+        if blocked_n:
+            names = ", ".join(format_target_name(t, zh=False) for t in blocked_list[:4])
+            if blocked_n > 4:
+                names += f", +{blocked_n - 4} more"
+            sub_parts.append(f"{blocked_n} need setup ({names})")
+        if optional_count and blocker_count > 0:
+            sub_parts.append(f"{optional_count} optional missing")
+
+    return (severity, headline, "  ·  ".join(sub_parts))
 
 
 def is_cuda_device_item(item: Any) -> bool:

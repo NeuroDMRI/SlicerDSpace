@@ -63,10 +63,16 @@ jobs:
             echo "::error::Refusing to mutate immutable legacy release $TARGET_RELEASE_TAG"
             exit 1
           fi
+          NOTES_FILE="docs/release/RELEASE_NOTES_${TARGET_RELEASE_TAG}.md"
           if gh release view "$TARGET_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $TARGET_RELEASE_TAG already exists."
+            if [ -f "$NOTES_FILE" ]; then
+              gh release edit "$TARGET_RELEASE_TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --title "SlicerDSpace $TARGET_RELEASE_TAG" \
+                --notes-file "$NOTES_FILE"
+            fi
           else
-            NOTES_FILE="docs/release/RELEASE_NOTES_${TARGET_RELEASE_TAG}.md"
             if [ -f "$NOTES_FILE" ]; then
               gh release create "$TARGET_RELEASE_TAG" \
                 --repo "$GITHUB_REPOSITORY" \
@@ -409,6 +415,13 @@ jobs:
             --sha256sums-out "${{ runner.temp }}/SHA256SUMS.txt" \
             --release-tag "$TARGET_RELEASE_TAG" \
             --repo "${GITHUB_REPOSITORY}"
+          NOTES_FILE="docs/release/RELEASE_NOTES_${TARGET_RELEASE_TAG}.md"
+          if [ -f "$NOTES_FILE" ]; then
+            gh release edit "$TARGET_RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "SlicerDSpace $TARGET_RELEASE_TAG" \
+              --notes-file "$NOTES_FILE"
+          fi
           if [ -n "$(git status --porcelain docs/website/installer_artifacts.json)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

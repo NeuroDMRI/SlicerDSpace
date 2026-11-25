@@ -192,14 +192,15 @@ def _confirm(owner, plan):
     dialog.setProperty("popupCard", True)
     dialog.setWindowTitle(_text(owner, "Prepare selected analysis", "准备所选分析环境"))
     try:
-        from shared.ui_styles import ui_stylesheet
+        from shared.ui_styles import apply_placeholder_palette, ui_stylesheet
 
         dialog.setStyleSheet(ui_stylesheet(widget=getattr(owner, "_uiWidget", None)))
+        apply_placeholder_palette(dialog)
     except Exception:
         pass
     layout = qt.QVBoxLayout(dialog)
-    layout.setContentsMargins(14, 12, 14, 12)
-    layout.setSpacing(10)
+    layout.setContentsMargins(18, 16, 18, 16)
+    layout.setSpacing(12)
 
     components = plan_components(plan)
     required = required_licences(components)
@@ -320,8 +321,14 @@ def _confirm(owner, plan):
     dialog.setMaximumWidth(580)
     buttons = qt.QDialogButtonBox(dialog)
     buttons.setStandardButtons(qt.QDialogButtonBox.Ok | qt.QDialogButtonBox.Cancel)
-    buttons.button(qt.QDialogButtonBox.Ok).setText(
+    ok_btn = buttons.button(qt.QDialogButtonBox.Ok)
+    ok_btn.setText(
         _text(owner, "Accept licences and install", "接受许可并安装") if pending else _text(owner, "Prepare", "开始准备"))
+    try:
+        ok_btn.setProperty("primaryAction", True)
+        ok_btn.setDefault(True)
+    except Exception:
+        pass
     buttons.connect("accepted()", dialog.accept)
     buttons.connect("rejected()", dialog.reject)
     layout.addWidget(buttons)

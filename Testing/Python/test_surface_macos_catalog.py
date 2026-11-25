@@ -28,6 +28,6 @@ class SurfaceMacCatalogTests(unittest.TestCase):
                     self.assertEqual(record['machine'], 'arm64')
                     self.assertEqual(record['min_macos'], '13.0')
                     self.assertEqual(record['asset'], 'runtime/surface/surface-runtime-darwin-arm64-macos13.tar.gz')
-                    self.assertTrue(record['url'].endswith('/v0.1.1/surface-runtime-darwin-arm64-macos13.tar.gz'))
+                    self.assertTrue(record['url'].endswith('/assets/surface-runtime-darwin-arm64-macos13.tar.gz'))
                     self.assertTrue(record['published'])
                     self.assertFalse(record['activation_key_included'])

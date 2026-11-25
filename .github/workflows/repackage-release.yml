@@ -29,10 +29,10 @@ on:
         type: string
         default: "v1.0.0"
       source_release_tag:
-        description: "Source release tag for OS Base runtime bootstrap (default v0.1.1)"
+        description: "Source release tag for OS Base runtime bootstrap (default v1.0.0)"
         required: false
         type: string
-        default: "v0.1.1"
+        default: "v1.0.0"
       os_targets:
         description: "JSON array of OS targets when phase is 'full-release' or 'os-bases'"
         required: false
@@ -45,11 +45,11 @@ permissions:
 
 env:
   TARGET_RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag || 'v1.0.0' }}
-  SOURCE_RELEASE_TAG: ${{ inputs.source_release_tag || 'v0.1.1' }}
+  SOURCE_RELEASE_TAG: ${{ inputs.source_release_tag || 'v1.0.0' }}
 
 jobs:
   ensure-assets-release:
-    if: (github.event_name == 'push' && github.ref_name == 'assets') || (github.event_name == 'workflow_dispatch' && inputs.phase == 'migrate-assets')
+    if: (github.event_name == 'push' && github.ref_name == 'assets') || (github.event_name == 'workflow_dispatch' && (inputs.phase == 'migrate-assets' || inputs.phase == 'model-packs' || inputs.phase == 'atlases' || inputs.phase == 'standalone-ukf' || inputs.phase == 'macos-ukf'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -160,6 +160,7 @@ jobs:
 
   build-standalone-ukf:
     if: github.event_name == 'workflow_dispatch' && inputs.phase == 'standalone-ukf'
+    needs: [ensure-assets-release]
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -189,13 +190,14 @@ jobs:
       - name: Build standalone CPU UKF (${{ matrix.target }})
         run: python scripts/build_ukf_standalone.py --target "${{ matrix.target == 'macos-arm64' && 'darwin-arm64' || matrix.target }}" --work-dir "${{ runner.temp }}/ukf-work" --out-dir "${{ runner.temp }}/ukf-out"
 
-      - name: Upload standalone CPU UKF (${{ matrix.target }}) to model-assets-v0.1.1
+      - name: Upload standalone CPU UKF (${{ matrix.target }}) to assets
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload model-assets-v0.1.1 --repo "${{ github.repository }}" --clobber "${{ runner.temp }}/ukf-out/${{ matrix.target == 'windows-x64' && 'ukf-standalone-windows-x64.zip' || (matrix.target == 'linux-x64' && 'ukf-standalone-linux-x64.tar.gz' || 'ukf-standalone-darwin-arm64.tar.gz') }}" "${{ runner.temp }}/ukf-out/${{ matrix.target == 'windows-x64' && 'ukf-standalone-windows-x64.zip' || (matrix.target == 'linux-x64' && 'ukf-standalone-linux-x64.tar.gz' || 'ukf-standalone-darwin-arm64.tar.gz') }}.sha256"
+        run: gh release upload assets --repo "${{ github.repository }}" --clobber "${{ runner.temp }}/ukf-out/${{ matrix.target == 'windows-x64' && 'ukf-standalone-windows-x64.zip' || (matrix.target == 'linux-x64' && 'ukf-standalone-linux-x64.tar.gz' || 'ukf-standalone-darwin-arm64.tar.gz') }}" "${{ runner.temp }}/ukf-out/${{ matrix.target == 'windows-x64' && 'ukf-standalone-windows-x64.zip' || (matrix.target == 'linux-x64' && 'ukf-standalone-linux-x64.tar.gz' || 'ukf-standalone-darwin-arm64.tar.gz') }}.sha256"
 
   build-macos-ukf:
     if: github.event_name == 'workflow_dispatch' && inputs.phase == 'macos-ukf'
+    needs: [ensure-assets-release]
     runs-on: macos-15
     timeout-minutes: 90
     steps:
@@ -213,22 +215,22 @@ jobs:
           cmake --version
           which cmake ninja
 
-      - name: Build standalone arm64 UKFTractography & upload to model-assets-v0.1.1
+      - name: Build standalone arm64 UKFTractography & upload to assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 scripts/build_macos_ukf_standalone.py \
             --work-dir "${{ runner.temp }}/ukf-work" \
             --out-dir "${{ runner.temp }}/ukf-out"
-          gh release upload model-assets-v0.1.1 \
+          gh release upload assets \
             --repo "$GITHUB_REPOSITORY" \
             --clobber \
             "${{ runner.temp }}/ukf-out/ukf-standalone-darwin-arm64.tar.gz" \
             "${{ runner.temp }}/ukf-out/ukf-standalone-darwin-arm64.tar.gz.sha256"
 
   model-packs:
-    if: (github.event_name == 'push' && startsWith(github.ref_name, 'v')) || inputs.phase == 'full-release' || inputs.phase == 'model-packs'
-    needs: [ensure-release]
+    if: github.event_name == 'workflow_dispatch' && inputs.phase == 'model-packs'
+    needs: [ensure-assets-release]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -244,13 +246,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build & upload modular model weight pack (${{ matrix.pack }})
+      - name: Build & upload modular model weight pack (${{ matrix.pack }}) to assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python .github/scripts/repackage_release_assets.py build-model-pack \
             --pack "${{ matrix.pack }}" \
-            --release-tag "$TARGET_RELEASE_TAG" \
+            --assets-tag "assets" \
             --repo "$GITHUB_REPOSITORY" \
             --work-dir "${{ runner.temp }}/model-work" \
             --out-dir "${{ runner.temp }}/model-out"
@@ -263,6 +265,7 @@ jobs:
 
   atlases:
     if: github.event_name == 'workflow_dispatch' && inputs.phase == 'atlases'
+    needs: [ensure-assets-release]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:

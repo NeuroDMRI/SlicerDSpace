@@ -18,16 +18,16 @@
       "status": "active",
       "access": "public",
       "public": true,
-      "description": "Legacy split-archive mirror superseded by NeuroDMRI/SlicerDSpace Release v0.1.1 packs in models/release_packs_manifest.json (SlicerDSpace-v0.1.1-WMA-{ORG,NABA,EastWest}.tar.gz*; no Git LFS).",
-      "url_template": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/{filename}"
+      "description": "Legacy split-archive mirror superseded by NeuroDMRI/SlicerDSpace permanent 'assets' Release packs in models/release_packs_manifest.json (SlicerDSpace-WMA-{ORG,NABA,EastWest}-v1.tar.gz*; no Git LFS).",
+      "url_template": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/{filename}"
     },
     "optional_models_mirror": {
       "kind": "url-template",
       "status": "active",
       "access": "public",
       "public": true,
-      "description": "Official NeuroDMRI/SlicerDSpace GitHub Release mirror for optional model resources (no Git LFS); every downloaded file requires size and SHA256 verification.",
-      "url_template": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/model-assets-v0.1.1/{sha256}-{filename}"
+      "description": "Official NeuroDMRI/SlicerDSpace permanent GitHub Release 'assets' mirror for optional model resources (no Git LFS); every downloaded file requires size and SHA256 verification.",
+      "url_template": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/{sha256}-{filename}"
     }
   },
   "asset_records": {

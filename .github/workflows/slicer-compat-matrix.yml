@@ -8,7 +8,7 @@ name: Slicer compatibility matrix (real stock Slicer)
 #                the documented manifest (exit 0, task blocked for missing packages that the versions
 #                check proves absent); any other outcome fails (see judge_blocked_task in
 #                Testing/Python/slicer_ci_compat_smoke.py).
-#   full-install stock Slicer + the released v0.1.1 base asset installed by the website installer, then
+#   full-install stock Slicer + the released v1.0.0 base asset installed by the website installer, then
 #                this checkout overlaid on the installed layout (heavy, about 1.5 GB download).
 #                The DTI worker run is required to pass. Linux also scans ELF files for GLIBC (X8);
 #                the scan limit is the documented Linux floor, glibc 2.34 (Ubuntu 22.04+, Debian 12+,
@@ -279,7 +279,7 @@ jobs:
           SLICER_EXE: ${{ steps.slicer.outputs.slicer_exe }}
         run: python .github/scripts/ci_debug_state.py --label pre-install --slicer-exe "$SLICER_EXE"
 
-      - name: Install SlicerDSpace v0.1.1 with the website installer, then overlay this checkout
+      - name: Install SlicerDSpace v1.0.0 with the website installer, then overlay this checkout
         id: dspace
         shell: bash
         env:

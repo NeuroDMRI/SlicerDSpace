@@ -6,7 +6,8 @@
     String(document.documentElement.lang || '').toLowerCase().indexOf('zh') === 0;
   var RELEASE_TAG = 'v1.0.0';
   var RELEASE_BASE = 'https://github.com/NeuroDMRI/SlicerDSpace/releases/download/' + RELEASE_TAG;
-  var WMA_RELEASE_BASE = 'https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1';
+  var ASSETS_RELEASE_BASE = 'https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets';
+  var WMA_RELEASE_BASE = ASSETS_RELEASE_BASE;
   var IIT_BYTES = 7830929;
   var DEFAULT_MODEL_PACKS = ['ddsurfer', 'ddseg', 'ddparcel', 'pnl_cnn', 'tractcloud'];
 
@@ -23,40 +24,40 @@
     model_packs: {
       ddsurfer: {
         id: 'ddsurfer',
-        filename: 'SlicerDSpace-v1.0.0-Model-DDSurfer.tar.gz',
-        url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Model-DDSurfer.tar.gz',
+        filename: 'SlicerDSpace-Model-DDSurfer-v1.tar.gz',
+        url: ASSETS_RELEASE_BASE + '/SlicerDSpace-Model-DDSurfer-v1.tar.gz',
         size_bytes: 220436307,
         sha256: 'b7efeea47aa736301f569622c461fd8d032d4e8734c6174b7aadcd86f58f8277',
         parts: []
       },
       ddseg: {
         id: 'ddseg',
-        filename: 'SlicerDSpace-v1.0.0-Model-DDSeg.tar.gz',
-        url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Model-DDSeg.tar.gz',
+        filename: 'SlicerDSpace-Model-DDSeg-v1.tar.gz',
+        url: ASSETS_RELEASE_BASE + '/SlicerDSpace-Model-DDSeg-v1.tar.gz',
         size_bytes: 280945320,
         sha256: 'f0146b958ac8a9ba35bd4fb7f4e2b334b7f7f3d324639428fa7d0f3b8adc19d4',
         parts: []
       },
       ddparcel: {
         id: 'ddparcel',
-        filename: 'SlicerDSpace-v1.0.0-Model-DDParcel.tar.gz',
-        url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Model-DDParcel.tar.gz',
+        filename: 'SlicerDSpace-Model-DDParcel-v1.tar.gz',
+        url: ASSETS_RELEASE_BASE + '/SlicerDSpace-Model-DDParcel-v1.tar.gz',
         size_bytes: 391935821,
         sha256: '4f6e265f282c210647ed3c287fcfb7c2473b061c1802aac3c88db4c3d9ff50a6',
         parts: []
       },
       pnl_cnn: {
         id: 'pnl_cnn',
-        filename: 'SlicerDSpace-v1.0.0-Model-PNL-CNN.tar.gz',
-        url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Model-PNL-CNN.tar.gz',
+        filename: 'SlicerDSpace-Model-PNL-CNN-v1.tar.gz',
+        url: ASSETS_RELEASE_BASE + '/SlicerDSpace-Model-PNL-CNN-v1.tar.gz',
         size_bytes: 200140589,
         sha256: 'cf8b677106604ae10fc14f83639aa95d3709b585c81e2f39ca7fac581b3cbd65',
         parts: []
       },
       tractcloud: {
         id: 'tractcloud',
-        filename: 'SlicerDSpace-v1.0.0-Model-TractCloud.tar.gz',
-        url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Model-TractCloud.tar.gz',
+        filename: 'SlicerDSpace-Model-TractCloud-v1.tar.gz',
+        url: ASSETS_RELEASE_BASE + '/SlicerDSpace-Model-TractCloud-v1.tar.gz',
         size_bytes: 8225793,
         sha256: '3f3a3a5e17c7e022736e7eb5ec20bc5c43247bc3135a858096eb9717583a3640',
         parts: []
@@ -66,81 +67,81 @@
     packs: {
       wma_org: {
         id: 'wma_org',
-        filename: 'SlicerDSpace-v0.1.1-WMA-ORG.tar.gz',
-        url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-ORG.tar.gz',
+        filename: 'SlicerDSpace-WMA-ORG-v1.tar.gz',
+        url: ASSETS_RELEASE_BASE + '/SlicerDSpace-WMA-ORG-v1.tar.gz',
         size_bytes: 1804334817,
         sha256: 'e1bb6f42218c80705746bc677ba7962468801585af31f9ce712b2164c298e6cd',
         parts: []
       },
       wma_naba: {
         id: 'wma_naba',
-        filename: 'SlicerDSpace-v0.1.1-WMA-NABA.tar.gz',
+        filename: 'SlicerDSpace-WMA-NABA-v1.tar.gz',
         url: '',
         size_bytes: 3365003883,
         sha256: '88a810213c5c3a047e712eb2f1a2a49f3de98000c6e7ca056ffe9dac43dacbc8',
         parts: [
           {
-            filename: 'SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.001',
+            filename: 'SlicerDSpace-WMA-NABA-v1.tar.gz.001',
             size_bytes: 1900000000,
             sha256: 'a948e9d82eedcb3daec6ed7a0c5e5ec866d10d4070373aa7cbf4baeb2e3cf0c1',
-            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.001'
+            url: ASSETS_RELEASE_BASE + '/SlicerDSpace-WMA-NABA-v1.tar.gz.001'
           },
           {
-            filename: 'SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.002',
+            filename: 'SlicerDSpace-WMA-NABA-v1.tar.gz.002',
             size_bytes: 1465003883,
             sha256: 'bdc60b267630cd737a6a9e8cf22db771147a5daba6c9e623998d0b5f4c5985c1',
-            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.002'
+            url: ASSETS_RELEASE_BASE + '/SlicerDSpace-WMA-NABA-v1.tar.gz.002'
           }
         ]
       },
       wma_east_west: {
         id: 'wma_east_west',
-        filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz',
+        filename: 'SlicerDSpace-WMA-EastWest-v1.tar.gz',
         url: '',
         size_bytes: 11405353584,
         sha256: '506cf84e1608a5975e72b83af4d5e25f7986849d12159d7a94d2def9681e33c1',
         parts: [
           {
-            filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.001',
+            filename: 'SlicerDSpace-WMA-EastWest-v1.tar.gz.001',
             size_bytes: 1900000000,
             sha256: '6daf10aba6b3bc530dc136c67e4da2d8b45f7b89d8cd4203de28bdf71b703d8f',
-            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.001'
+            url: ASSETS_RELEASE_BASE + '/SlicerDSpace-WMA-EastWest-v1.tar.gz.001'
           },
           {
-            filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.002',
+            filename: 'SlicerDSpace-WMA-EastWest-v1.tar.gz.002',
             size_bytes: 1900000000,
             sha256: '805e74a323dac63573759c362c3de81296ac1712482858d021dff8d986b2b670',
-            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.002'
+            url: ASSETS_RELEASE_BASE + '/SlicerDSpace-WMA-EastWest-v1.tar.gz.002'
           },
           {
-            filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.003',
+            filename: 'SlicerDSpace-WMA-EastWest-v1.tar.gz.003',
             size_bytes: 1900000000,
             sha256: '24c27591a46c54f387fd86045a564ee4241abf9a51d4cd8f30066a7b712e0071',
-            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.003'
+            url: ASSETS_RELEASE_BASE + '/SlicerDSpace-WMA-EastWest-v1.tar.gz.003'
           },
           {
-            filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.004',
+            filename: 'SlicerDSpace-WMA-EastWest-v1.tar.gz.004',
             size_bytes: 1900000000,
             sha256: '4a060647f641c12309953bb3ba887a23ba51ef4dac9d911ac42428fdda1f3932',
-            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.004'
+            url: ASSETS_RELEASE_BASE + '/SlicerDSpace-WMA-EastWest-v1.tar.gz.004'
           },
           {
-            filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.005',
+            filename: 'SlicerDSpace-WMA-EastWest-v1.tar.gz.005',
             size_bytes: 1900000000,
             sha256: '4fd4650b67bc51d49869e10363dba988fcad2e071ffce5fea6e1c3254680fb95',
-            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.005'
+            url: ASSETS_RELEASE_BASE + '/SlicerDSpace-WMA-EastWest-v1.tar.gz.005'
           },
           {
-            filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.006',
+            filename: 'SlicerDSpace-WMA-EastWest-v1.tar.gz.006',
             size_bytes: 1900000000,
             sha256: '5ad69210366044801eb3be30ad26a1744c3bf658f8b1388ec3dfe0a607039a44',
-            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.006'
+            url: ASSETS_RELEASE_BASE + '/SlicerDSpace-WMA-EastWest-v1.tar.gz.006'
           },
           {
-            filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.007',
+            filename: 'SlicerDSpace-WMA-EastWest-v1.tar.gz.007',
             size_bytes: 5353584,
             sha256: '2663479e6cd9fddaa0df5360646c86e7b2a31643c78c5a0eae3af715370cb455',
-            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.007'
+            url: ASSETS_RELEASE_BASE + '/SlicerDSpace-WMA-EastWest-v1.tar.gz.007'
           }
         ]
       }

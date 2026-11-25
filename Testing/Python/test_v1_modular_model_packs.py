@@ -180,7 +180,7 @@ class V1ModularManifestAndPackTests(unittest.TestCase):
 
             idx_html = (fake_repo / "docs" / "site" / "index.html").read_text(encoding="utf-8")
             self.assertIn("https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-Linux-x64.tar.gz", idx_html)
-            self.assertIn("https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-Example-HCP-100307-NIfTI.zip", idx_html)
+            self.assertIn("https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/SlicerDSpace-Example-HCP-100307-NIfTI.zip", idx_html)
             self.assertIn("SlicerDSpace-v1.0.0-Windows-x64.zip", idx_html)
             self.assertIn("SlicerDSpace-v1.0.0-macOS-arm64.tar.gz", idx_html)
             self.assertNotIn("SlicerDSpace-v0.1.1-Linux-x64.tar.gz", idx_html)
@@ -223,7 +223,7 @@ class V1InstallerModularPackFlowTests(unittest.TestCase):
             model_packs[pid] = {
                 "id": pid,
                 "filename": fn,
-                "url": f"https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/{fn}",
+                "url": f"https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/{fn}",
                 "size_bytes": sz,
                 "sha256": sha,
                 "published": True,

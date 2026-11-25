@@ -79,14 +79,14 @@ class ModelAssetsTest(unittest.TestCase):
         self.assertEqual(sources["slicerdsurfer_models_release"]["status"], "active")
         self.assertEqual(
             sources["slicerdsurfer_models_release"]["url_template"],
-            "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/model-assets-v0.1.1/{sha256}-{filename}",
+            "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/{sha256}-{filename}",
         )
 
     def test_external_resource_mirror_uses_new_repository_and_retains_pinned_revision(self) -> None:
         manifest = json.loads((REPO_ROOT / 'models/external_assets_manifest.json').read_text(encoding='utf-8'))
         source = manifest['asset_sources']['optional_models_mirror']
         self.assertEqual(source['url_template'],
-                         'https://github.com/NeuroDMRI/SlicerDSpace/releases/download/model-assets-v0.1.1/'
+                         'https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/'
                          '{sha256}-{filename}')
         self.assertEqual(source['status'], 'active')
 

@@ -23,15 +23,15 @@ SlicerDSpace is a unified 3D Slicer extension for T1-weighted-image-free anatomi
 2. Open **3D Slicer 5.10.x / 5.12.x**, go to **Extensions Manager -> Install Extension from File...**, select the downloaded `.zip` file, and restart Slicer when prompted.
 3. After restarting, the **SlicerDSpace Setup** window opens automatically. Click **Start Install** to download and verify the OS runtime archive, core model packs, and required templates. Once complete, restart Slicer and open **Modules -> Diffusion -> SlicerDSpace**.
 
-### Option B: Standalone OS Base Archives + Modular Model Packs
+### Option B: Standalone OS Base Archives + Shared Model & Atlas Packs
 
 - **OS Base Packages (`depends NA`, bundled Python 3.12 + PyTorch + UKF + native MRtrix3 / FSLcpu / FreeSurfer Surface Runtime)**:
   - **Windows (`x86_64`)**: `SlicerDSpace-v1.0.0-Windows-x64.zip`
   - **Linux (`x86_64`)**: `SlicerDSpace-v1.0.0-Linux-x64.tar.gz`
   - **macOS (Apple Silicon `arm64`)**: `SlicerDSpace-v1.0.0-macOS-arm64.tar.gz`
-- **Cross-Platform Model Weight Packs**:
-  - `SlicerDSpace-v1.0.0-Model-DDSurfer.tar.gz`, `SlicerDSpace-v1.0.0-Model-DDSeg.tar.gz`, `SlicerDSpace-v1.0.0-Model-DDParcel.tar.gz`, `SlicerDSpace-v1.0.0-Model-PNL-CNN.tar.gz`, and `SlicerDSpace-v1.0.0-Model-TractCloud.tar.gz`.
-- **Optional Assets & Incremental Updates**:
-  - Optional WMA white-matter atlases (`ORG`, `NABA`, `East-West`) and the NITRC `IITmean_b0_256.nii.gz` template can be downloaded on demand inside Slicer.
+- **Shared Cross-Platform Model Packs, Atlases & Example Data**:
+  - Cross-platform modular model weight packs (`SlicerDSpace-Model-DDSurfer-v1.tar.gz`, `SlicerDSpace-Model-DDSeg-v1.tar.gz`, `SlicerDSpace-Model-DDParcel-v1.tar.gz`, `SlicerDSpace-Model-PNL-CNN-v1.tar.gz`, `SlicerDSpace-Model-TractCloud-v1.tar.gz`), optional WMA white-matter atlases (`ORG`, `NABA`, `East-West`), prebuilt runtimes, and the preprocessed HCP example DWI dataset are hosted in the shared [`assets`](https://github.com/NeuroDMRI/SlicerDSpace/releases/tag/assets) release.
+  - Option A downloads and verifies all core model packs and the NITRC `IITmean_b0_256.nii.gz` template automatically; optional WMA atlases can be downloaded on demand inside Slicer.
+- **Incremental Updates & Verification**:
   - Existing installations can apply code updates from **Modules -> Diffusion -> SlicerDSpace -> Update -> Check for updates** (`SlicerDSpace-v1.0.0-CodeOverlay.tar.gz`).
-  - Verify archive integrity against `SHA256SUMS.txt`.
+  - Verify release archive integrity against `SHA256SUMS.txt`.

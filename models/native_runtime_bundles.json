@@ -82,8 +82,8 @@
         "bin/5ttgen"
       ],
       "license_url": "https://github.com/MRtrix3/mrtrix3/blob/master/LICENCE.txt",
-      "unified_artifact": "SlicerDSpace-v0.1.1-Windows-x64.zip",
-      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-Windows-x64.zip",
+      "unified_artifact": "SlicerDSpace-v1.0.0-Windows-x64.zip",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-Windows-x64.zip",
       "published": true,
       "scientifically_accepted": true
     },
@@ -168,8 +168,8 @@
         "bin/5ttgen"
       ],
       "license_url": "https://github.com/MRtrix3/mrtrix3/blob/master/LICENCE.txt",
-      "unified_artifact": "SlicerDSpace-v0.1.1-Linux-x64.tar.gz",
-      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-Linux-x64.tar.gz",
+      "unified_artifact": "SlicerDSpace-v1.0.0-Linux-x64.tar.gz",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-Linux-x64.tar.gz",
       "published": true,
       "scientifically_accepted": true
     },
@@ -189,8 +189,8 @@
         "bin/applytopup.exe"
       ],
       "license_url": "https://fsl.fmrib.ox.ac.uk/fsl/docs/license.html",
-      "unified_artifact": "SlicerDSpace-v0.1.1-Windows-x64.zip",
-      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-Windows-x64.zip",
+      "unified_artifact": "SlicerDSpace-v1.0.0-Windows-x64.zip",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-Windows-x64.zip",
       "published": true,
       "scientifically_accepted": true
     },
@@ -210,8 +210,8 @@
         "bin/applytopup"
       ],
       "license_url": "https://fsl.fmrib.ox.ac.uk/fsl/docs/license.html",
-      "unified_artifact": "SlicerDSpace-v0.1.1-Linux-x64.tar.gz",
-      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-Linux-x64.tar.gz",
+      "unified_artifact": "SlicerDSpace-v1.0.0-Linux-x64.tar.gz",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-Linux-x64.tar.gz",
       "published": true,
       "scientifically_accepted": true
     },
@@ -295,8 +295,8 @@
         "bin/5ttgen"
       ],
       "license_url": "https://github.com/MRtrix3/mrtrix3/blob/master/LICENCE.txt",
-      "unified_artifact": "SlicerDSpace-v0.1.1-macOS-arm64.tar.gz",
-      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz",
+      "unified_artifact": "SlicerDSpace-v1.0.0-macOS-arm64.tar.gz",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-macOS-arm64.tar.gz",
       "published": true,
       "scientifically_accepted": true
     },
@@ -399,8 +399,8 @@
         "bin/applytopup"
       ],
       "license_url": "https://fsl.fmrib.ox.ac.uk/fsl/docs/license.html",
-      "unified_artifact": "SlicerDSpace-v0.1.1-macOS-arm64.tar.gz",
-      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz",
+      "unified_artifact": "SlicerDSpace-v1.0.0-macOS-arm64.tar.gz",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-macOS-arm64.tar.gz",
       "published": true,
       "scientifically_accepted": true
     }

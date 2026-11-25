@@ -2,7 +2,7 @@
   "kind": "slicerdsurfer_model_asset_manifest",
   "version": 1,
   "default_profile": "core",
-  "asset_source_policy": "Verified model assets are hosted on NeuroDMRI/SlicerDSpace GitHub Releases (model-assets-v0.1.1 for core/optional weights and v0.1.1 for WMA atlases), requiring zero Git LFS. Git LFS support is retained only as a legacy compatibility fallback.",
+  "asset_source_policy": "Verified model assets and WMA atlases are hosted in the permanent NeuroDMRI/SlicerDSpace GitHub Release 'assets', decoupled from software release tags and requiring zero Git LFS. Git LFS support is retained only as a legacy compatibility fallback.",
   "default_asset_source_ids": [
     "slicerdsurfer_models_release",
     "github_lfs",
@@ -18,16 +18,16 @@
     "slicerdsurfer_models_git": {
       "kind": "url-template",
       "status": "legacy",
-      "description": "Retired Git LFS source alias redirected to NeuroDMRI/SlicerDSpace GitHub Release model-assets-v0.1.1.",
-      "base_url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/model-assets-v0.1.1",
-      "url_template": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/model-assets-v0.1.1/{sha256}-{filename}"
+      "description": "Retired Git LFS source alias redirected to NeuroDMRI/SlicerDSpace permanent GitHub Release 'assets'.",
+      "base_url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets",
+      "url_template": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/{sha256}-{filename}"
     },
     "slicerdsurfer_models_release": {
       "kind": "url-template",
       "status": "active",
-      "description": "Official NeuroDMRI/SlicerDSpace GitHub Release mirror for verified model weights and templates (no Git LFS required).",
-      "base_url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/model-assets-v0.1.1",
-      "url_template": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/model-assets-v0.1.1/{sha256}-{filename}"
+      "description": "Official NeuroDMRI/SlicerDSpace permanent GitHub Release 'assets' mirror for verified model weights and templates (no Git LFS required).",
+      "base_url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets",
+      "url_template": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/{sha256}-{filename}"
     },
     "huggingface": {
       "kind": "url-template",

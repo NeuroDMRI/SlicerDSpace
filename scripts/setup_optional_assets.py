@@ -29,6 +29,9 @@ PROFILES = ("pnl-cnn", "tractcloud", "wma", "wma-east-west", "wma-naba", "surfac
 PATH_SETTINGS = {"pnl-cnn": "pnl_mask_model_dir", "tractcloud": "tractcloud_data_dir", "wma": "wma_atlas_dir",
                  "wma-east-west": "wma_atlas_dir", "wma-naba": "wma_atlas_dir"}
 _RELEASE_PACK_BY_PROFILE = {
+    "pnl-cnn": "pnl_cnn",
+    "tractcloud": "tractcloud",
+    "surface-postprocess": "ddsurfer",
     "wma": "wma_org",
     "wma-naba": "wma_naba",
     "wma-east-west": "wma_east_west",
@@ -36,7 +39,7 @@ _RELEASE_PACK_BY_PROFILE = {
 
 
 def _try_prepare_from_release_pack(profile: str, root: Path, *, offline_root=None) -> bool:
-    """Install a WMA atlas from a published single/split GitHub Release archive or offline pack."""
+    """Install a modular model or WMA atlas pack from a published GitHub Release archive or offline folder."""
     pack_id = _RELEASE_PACK_BY_PROFILE.get(profile)
     if not pack_id:
         return False
@@ -87,7 +90,7 @@ def _try_prepare_from_release_pack(profile: str, root: Path, *, offline_root=Non
             if merged is None:
                 return False
             downloaded_files.append(merged)
-            print(f"[Resources] Extracting merged atlas pack {merged.name} -> {root}", flush=True)
+            print(f"[Resources] Extracting merged resource pack {merged.name} -> {root}", flush=True)
             extract_modular_pack(merged, root, expected_sha256=expected_sha)
         elif pack.get("url"):
             dest = cache_dir / filename
@@ -98,10 +101,12 @@ def _try_prepare_from_release_pack(profile: str, root: Path, *, offline_root=Non
                 expected_size=int(pack.get("size_bytes") or 0),
             )
             downloaded_files.append(dest)
-            print(f"[Resources] Extracting atlas pack {dest.name} -> {root}", flush=True)
+            print(f"[Resources] Extracting resource pack {dest.name} -> {root}", flush=True)
             extract_modular_pack(dest, root, expected_sha256=expected_sha)
         else:
             return False
+        # Note: for pnl-cnn the modular weight pack intentionally excludes upstream-only IITmean_b0_256.nii.gz,
+        # so returning False here lets the subsequent download_asset_plan step fetch only the 7.8 MB NITRC template.
         return verified_resource_directory(profile, asset_root=root) is not None
     except Exception as exc:
         print(f"[Resources] Release pack acquisition fallback ({filename}: {exc})", file=sys.stderr, flush=True)

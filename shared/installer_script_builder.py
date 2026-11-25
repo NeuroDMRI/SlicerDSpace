@@ -17,6 +17,7 @@ RELEASE_BASE_URL = f"https://github.com/NeuroDMRI/SlicerDSpace/releases/download
 SUPPORTED_OS = ("windows", "macos", "linux")
 SUPPORTED_MODES = ("base", "modular", "all_in_one")
 PACK_ORDER = ("wma_org", "wma_naba", "wma_east_west")
+CORE_MODEL_PACK_ORDER = ("ddsurfer", "ddseg", "ddparcel", "pnl_cnn", "tractcloud")
 
 DEFAULT_IIT_TEMPLATE: dict[str, Any] = {
     "relpath": "brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz",
@@ -1328,6 +1329,23 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 pass
         return status or "failed"
 
+    _CORE_MODEL_PACK_ORDER = ("ddsurfer", "ddseg", "ddparcel", "pnl_cnn", "tractcloud")
+
+    def _selected_model_specs(artifacts: dict, cfg: dict) -> list:
+        mpacks = artifacts.get("model_packs") or {}
+        wanted = cfg.get("selected_model_packs")
+        if wanted is None:
+            wanted = list(_CORE_MODEL_PACK_ORDER)
+        wset = set(wanted)
+        out = []
+        for pid in _CORE_MODEL_PACK_ORDER:
+            if pid not in wset:
+                continue
+            sp = mpacks.get(pid)
+            if isinstance(sp, dict) and sp.get("filename") and (sp.get("url") or sp.get("parts")):
+                out.append(sp)
+        return out
+
     def main() -> int:
         slicer_exe = str(os.environ.get("SLICERDSPACE_RESOLVED_SLICER") or CONFIG.get("slicer_path") or "").strip()
         if not slicer_exe or not Path(slicer_exe).exists():
@@ -1347,7 +1365,12 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             "macos": "macos_arm64_base",
         }[os_name]
         ext_spec = artifacts["bundles"][bundle_key]
-        need_b = int(ext_spec.get("size_bytes") or 0) + int((artifacts.get("iit_template") or {}).get("size_bytes") or 0)
+        model_specs = _selected_model_specs(artifacts, CONFIG)
+        need_b = (
+            int(ext_spec.get("size_bytes") or 0)
+            + sum(int(s.get("size_bytes") or 0) for s in model_specs)
+            + int((artifacts.get("iit_template") or {}).get("size_bytes") or 0)
+        )
         work_dir = _pick_cache_dir(int(need_b * 1.15) + 536870912 if need_b else 0)
         ext_archive, ext_temps = _acquire_spec(ext_spec, work_dir)
         receipt = _install_extension_in_slicer(slicer_exe, ext_archive)
@@ -1382,8 +1405,13 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         if CONFIG.get("offline_dir"):
             os.environ["SLICERDSPACE_OFFLINE_DIR"] = str(CONFIG["offline_dir"]).strip()
 
+        cfg = load_user_config()
         custom_assets_dir = str(CONFIG.get("model_assets_dir") or "").strip()
-        asset_root = configured_model_assets_root(custom_assets_dir or None)
+        saved_assets_dir = str((cfg.get("external_dependencies") or {}).get("model_assets_dir") or "").strip()
+        effective_assets_dir = custom_assets_dir or (
+            saved_assets_dir if (saved_assets_dir and Path(saved_assets_dir).expanduser().is_dir()) else ""
+        )
+        asset_root = configured_model_assets_root(effective_assets_dir or None)
         asset_root.mkdir(parents=True, exist_ok=True)
         bundled_assets = module_root.parents[2] / "bundled-model-assets"
 
@@ -1402,6 +1430,12 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                 except OSError:
                     shutil.copy2(src_file, dst)
 
+        for mspec in model_specs:
+            archive, model_temps = _acquire_spec(mspec, work_dir)
+            _log(f"Extracting {mspec['filename']} -> {asset_root}")
+            extract_modular_pack(archive, asset_root, expected_sha256="")
+            _cleanup_temp_files(model_temps)
+
         _sync_iit_template(artifacts.get("iit_template") or {}, work_dir, bundled_assets, asset_root)
 
         selected_packs = [p for p in ("wma_org", "wma_naba", "wma_east_west") if p in set(CONFIG.get("selected_packs") or ())]
@@ -1415,7 +1449,6 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             extract_modular_pack(archive, asset_root, expected_sha256="")
             _cleanup_temp_files(pack_temps)
 
-        cfg = load_user_config()
         ui_cfg = cfg.setdefault("ui", {})
         ui_cfg["language"] = ui_cfg.get("language") or str(CONFIG.get("language") or "en")
         if prune_stale_bundled_dependencies is None:
@@ -1477,7 +1510,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                     targets=tuple(defaults["targets"]),
                     wma_atlas=defaults.get("wma_atlas", "org"),
                     brain_mask_backend="pnl_cnn",
-                    model_assets_dir=asset_root if custom_assets_dir else None,
+                    model_assets_dir=asset_root,
                     python_executable=Path(sys.executable),
                     slicer_executable=Path(slicer_exe),
                 )
@@ -1502,38 +1535,51 @@ def load_installer_artifacts(
     packs_manifest_path: Path | None = None,
     artifacts_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Load merged WMA atlas pack & OS base bundle metadata for script generation."""
+    """Load merged modular model-weight, WMA atlas pack & OS base bundle metadata for script generation."""
 
     packs_manifest = load_release_packs_manifest(packs_manifest_path or RELEASE_PACKS_MANIFEST)
-    packs = dict(packs_manifest.get("packs") or {})
+    raw_packs = dict(packs_manifest.get("packs") or {})
+    packs = {pid: spec for pid, spec in raw_packs.items() if pid in PACK_ORDER or spec.get("tier") == "optional"}
+    model_packs: dict[str, Any] = {
+        pid: spec
+        for pid, spec in raw_packs.items()
+        if pid in CORE_MODEL_PACK_ORDER and bool(spec.get("published"))
+    }
     bundles = dict(packs_manifest.get("bundles") or {})
 
     art_file = artifacts_path or INSTALLER_ARTIFACTS_JSON
     if art_file.is_file():
         extra = json.loads(art_file.read_text(encoding="utf-8"))
         bundles.update(extra.get("bundles") or {})
+        for pid, spec in (extra.get("model_packs") or {}).items():
+            if isinstance(spec, dict) and spec.get("published", True) and (spec.get("url") or spec.get("parts")):
+                model_packs[pid] = spec
         iit_template = dict(extra.get("iit_template") or DEFAULT_IIT_TEMPLATE)
+        rel_tag = str(extra.get("release_tag") or packs_manifest.get("release_tag") or RELEASE_TAG)
+        rel_base = str(extra.get("release_base_url") or packs_manifest.get("release_base_url") or RELEASE_BASE_URL)
     else:
         iit_template = dict(DEFAULT_IIT_TEMPLATE)
+        rel_tag = str(packs_manifest.get("release_tag") or RELEASE_TAG)
+        rel_base = str(packs_manifest.get("release_base_url") or RELEASE_BASE_URL)
 
     bundle_defaults = {
         "windows_x64_base": {
-            "filename": f"SlicerDSpace-{RELEASE_TAG}-Windows-x64.zip",
-            "url": f"{RELEASE_BASE_URL}/SlicerDSpace-{RELEASE_TAG}-Windows-x64.zip",
+            "filename": f"SlicerDSpace-{rel_tag}-Windows-x64.zip",
+            "url": f"{rel_base}/SlicerDSpace-{rel_tag}-Windows-x64.zip",
             "size_bytes": 0,
             "sha256": "",
             "parts": [],
         },
         "linux_x64_base": {
-            "filename": f"SlicerDSpace-{RELEASE_TAG}-Linux-x64.tar.gz",
-            "url": f"{RELEASE_BASE_URL}/SlicerDSpace-{RELEASE_TAG}-Linux-x64.tar.gz",
+            "filename": f"SlicerDSpace-{rel_tag}-Linux-x64.tar.gz",
+            "url": f"{rel_base}/SlicerDSpace-{rel_tag}-Linux-x64.tar.gz",
             "size_bytes": 0,
             "sha256": "",
             "parts": [],
         },
         "macos_arm64_base": {
-            "filename": f"SlicerDSpace-{RELEASE_TAG}-macOS-arm64.tar.gz",
-            "url": f"{RELEASE_BASE_URL}/SlicerDSpace-{RELEASE_TAG}-macOS-arm64.tar.gz",
+            "filename": f"SlicerDSpace-{rel_tag}-macOS-arm64.tar.gz",
+            "url": f"{rel_base}/SlicerDSpace-{rel_tag}-macOS-arm64.tar.gz",
             "size_bytes": 0,
             "sha256": "",
             "parts": [],
@@ -1543,9 +1589,10 @@ def load_installer_artifacts(
         bundles.setdefault(key, val)
 
     return {
-        "release_tag": packs_manifest.get("release_tag", RELEASE_TAG),
-        "release_base_url": packs_manifest.get("release_base_url", RELEASE_BASE_URL),
+        "release_tag": rel_tag,
+        "release_base_url": rel_base,
         "iit_template": iit_template,
+        "model_packs": model_packs,
         "packs": packs,
         "bundles": bundles,
     }
@@ -1554,23 +1601,27 @@ def load_installer_artifacts(
 def _compact_artifacts(artifacts: dict[str, Any]) -> dict[str, Any]:
     """Strip file-hash maps not required at runtime to keep generated installer scripts compact."""
 
-    compact_packs = {}
-    for pid, spec in (artifacts.get("packs") or {}).items():
-        entry: dict[str, Any] = {
-            "id": pid,
-            "filename": spec["filename"],
-            "url": spec.get("url", ""),
-            "size_bytes": int(spec.get("size_bytes") or 0),
-            "sha256": spec.get("sha256", ""),
-        }
-        if spec.get("parts"):
-            entry["parts"] = list(spec["parts"])
-        compact_packs[pid] = entry
+    def _compact_pack_map(raw_map: dict[str, Any]) -> dict[str, Any]:
+        out = {}
+        for pid, spec in (raw_map or {}).items():
+            entry: dict[str, Any] = {
+                "id": pid,
+                "filename": spec["filename"],
+                "url": spec.get("url", ""),
+                "size_bytes": int(spec.get("size_bytes") or 0),
+                "sha256": spec.get("sha256", ""),
+            }
+            if spec.get("parts"):
+                entry["parts"] = list(spec["parts"])
+            out[pid] = entry
+        return out
+
     return {
         "release_tag": artifacts.get("release_tag", RELEASE_TAG),
         "release_base_url": artifacts.get("release_base_url", RELEASE_BASE_URL),
         "iit_template": dict(artifacts.get("iit_template") or DEFAULT_IIT_TEMPLATE),
-        "packs": compact_packs,
+        "model_packs": _compact_pack_map(artifacts.get("model_packs") or {}),
+        "packs": _compact_pack_map(artifacts.get("packs") or {}),
         "bundles": artifacts.get("bundles") or {},
     }
 
@@ -1582,6 +1633,7 @@ def _build_python_payload(
     slicer_path: str,
     model_assets_dir: str,
     selected_packs: Iterable[str],
+    selected_model_packs: Iterable[str] | None,
     mirror_prefix: str,
     proxy_url: str,
     offline_dir: str,
@@ -1589,12 +1641,18 @@ def _build_python_payload(
     language: str,
     artifacts: dict[str, Any],
 ) -> str:
+    chosen_models = (
+        list(CORE_MODEL_PACK_ORDER)
+        if selected_model_packs is None
+        else [p for p in CORE_MODEL_PACK_ORDER if p in set(selected_model_packs)]
+    )
     cfg = {
         "os": target_os,
         "mode": mode,
         "slicer_path": slicer_path.strip(),
         "model_assets_dir": model_assets_dir.strip(),
         "selected_packs": [p for p in PACK_ORDER if p in set(selected_packs)],
+        "selected_model_packs": chosen_models,
         "mirror_prefix": mirror_prefix.strip(),
         "proxy_url": proxy_url.strip(),
         "offline_dir": offline_dir.strip(),
@@ -1627,6 +1685,7 @@ def generate_installer_script(
     slicer_path: str = "",
     model_assets_dir: str = "",
     selected_packs: Iterable[str] = (),
+    selected_model_packs: Iterable[str] | None = None,
     mirror_prefix: str = "",
     proxy_url: str = "",
     offline_dir: str = "",
@@ -1649,6 +1708,7 @@ def generate_installer_script(
         slicer_path=slicer_path,
         model_assets_dir=model_assets_dir,
         selected_packs=selected_packs,
+        selected_model_packs=selected_model_packs,
         mirror_prefix=mirror_prefix,
         proxy_url=proxy_url,
         offline_dir=offline_dir,

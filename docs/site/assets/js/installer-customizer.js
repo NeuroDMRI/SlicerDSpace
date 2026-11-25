@@ -6,7 +6,9 @@
     String(document.documentElement.lang || '').toLowerCase().indexOf('zh') === 0;
   var RELEASE_TAG = 'v0.1.1';
   var RELEASE_BASE = 'https://github.com/NeuroDMRI/SlicerDSpace/releases/download/' + RELEASE_TAG;
+  var WMA_RELEASE_BASE = 'https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1';
   var IIT_BYTES = 7830929;
+  var DEFAULT_MODEL_PACKS = ['ddsurfer', 'ddseg', 'ddparcel', 'pnl_cnn', 'tractcloud'];
 
   var ARTIFACTS = {
     release_tag: RELEASE_TAG,
@@ -17,11 +19,15 @@
       size_bytes: IIT_BYTES,
       urls: ['https://www.nitrc.org/frs/download.php/11290/IITmean_b0_256.nii.gz']
     },
+    // __ARTIFACTS_MODEL_PACKS_BEGIN__
+    model_packs: {
+    },
+    // __ARTIFACTS_MODEL_PACKS_END__
     packs: {
       wma_org: {
         id: 'wma_org',
         filename: 'SlicerDSpace-v0.1.1-WMA-ORG.tar.gz',
-        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-ORG.tar.gz',
+        url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-ORG.tar.gz',
         size_bytes: 1804334817,
         sha256: 'e1bb6f42218c80705746bc677ba7962468801585af31f9ce712b2164c298e6cd',
         parts: []
@@ -37,13 +43,13 @@
             filename: 'SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.001',
             size_bytes: 1900000000,
             sha256: 'a948e9d82eedcb3daec6ed7a0c5e5ec866d10d4070373aa7cbf4baeb2e3cf0c1',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.001'
+            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.001'
           },
           {
             filename: 'SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.002',
             size_bytes: 1465003883,
             sha256: 'bdc60b267630cd737a6a9e8cf22db771147a5daba6c9e623998d0b5f4c5985c1',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.002'
+            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.002'
           }
         ]
       },
@@ -58,43 +64,43 @@
             filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.001',
             size_bytes: 1900000000,
             sha256: '6daf10aba6b3bc530dc136c67e4da2d8b45f7b89d8cd4203de28bdf71b703d8f',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.001'
+            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.001'
           },
           {
             filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.002',
             size_bytes: 1900000000,
             sha256: '805e74a323dac63573759c362c3de81296ac1712482858d021dff8d986b2b670',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.002'
+            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.002'
           },
           {
             filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.003',
             size_bytes: 1900000000,
             sha256: '24c27591a46c54f387fd86045a564ee4241abf9a51d4cd8f30066a7b712e0071',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.003'
+            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.003'
           },
           {
             filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.004',
             size_bytes: 1900000000,
             sha256: '4a060647f641c12309953bb3ba887a23ba51ef4dac9d911ac42428fdda1f3932',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.004'
+            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.004'
           },
           {
             filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.005',
             size_bytes: 1900000000,
             sha256: '4fd4650b67bc51d49869e10363dba988fcad2e071ffce5fea6e1c3254680fb95',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.005'
+            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.005'
           },
           {
             filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.006',
             size_bytes: 1900000000,
             sha256: '5ad69210366044801eb3be30ad26a1744c3bf658f8b1388ec3dfe0a607039a44',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.006'
+            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.006'
           },
           {
             filename: 'SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.007',
             size_bytes: 5353584,
             sha256: '2663479e6cd9fddaa0df5360646c86e7b2a31643c78c5a0eae3af715370cb455',
-            url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.007'
+            url: WMA_RELEASE_BASE + '/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.007'
           }
         ]
       }
@@ -968,13 +974,27 @@
     '            if p.is_file() and (win or sys.platform == "win32" or os.access(p, os.X_OK)):',
     '                return p',
     '    return None',
+    '_CORE_MODEL_PACK_ORDER = ("ddsurfer", "ddseg", "ddparcel", "pnl_cnn", "tractcloud")',
+    'def _selected_model_specs(artifacts, cfg):',
+    '    mpacks = artifacts.get("model_packs") or {}',
+    '    wanted = cfg.get("selected_model_packs")',
+    '    if wanted is None: wanted = list(_CORE_MODEL_PACK_ORDER)',
+    '    wset = set(wanted)',
+    '    out = []',
+    '    for pid in _CORE_MODEL_PACK_ORDER:',
+    '        if pid not in wset: continue',
+    '        sp = mpacks.get(pid)',
+    '        if isinstance(sp, dict) and sp.get("filename") and (sp.get("url") or sp.get("parts")):',
+    '            out.append(sp)',
+    '    return out',
     'def _run_phase_a_core(sel_packs, mirror, proxy, offdir, emit, cancel):',
     '    def log_cb(msg): emit("log", str(msg))',
     '    try:',
     '        artifacts = CONFIG["artifacts"]; bkey = _host_bundle_key()',
     '        ext_spec = artifacts["bundles"][bkey]; iit_spec = artifacts.get("iit_template") or {}; packs = artifacts.get("packs") or {}',
+    '        model_specs = _selected_model_specs(artifacts, CONFIG)',
     '        sel_specs = [packs[p] for p in sel_packs if p in packs]',
-    '        total_all = int(ext_spec.get("size_bytes") or 0) + int(iit_spec.get("size_bytes") or 0) + sum(int(s.get("size_bytes") or 0) for s in sel_specs)',
+    '        total_all = int(ext_spec.get("size_bytes") or 0) + sum(int(s.get("size_bytes") or 0) for s in model_specs) + int(iit_spec.get("size_bytes") or 0) + sum(int(s.get("size_bytes") or 0) for s in sel_specs)',
     '        completed_base = [0]; t_prev = [time.monotonic()]; b_prev = [None]; spd_mb = [0.0]',
     '        def prog_cb(file_done, _file_tot, fname):',
     '            overall = min(total_all, completed_base[0] + int(file_done or 0))',
@@ -996,6 +1016,11 @@
     '        work_dir = _pick_cache_dir((int(total_all * 1.15) + 536870912) if total_all else 0)',
     '        ext_arc, ext_temps = _acquire_spec(ext_spec, work_dir, offline_dir=offdir, mirror_prefix=mirror, proxy_url=proxy, progress_cb=prog_cb, cancel_event=cancel, log_cb=log_cb)',
     '        completed_base[0] += int(ext_spec.get("size_bytes") or 0)',
+    '        model_arcs = []; asset_temps = []',
+    '        for ms in model_specs:',
+    '            marc, mtemps = _acquire_spec(ms, work_dir, offline_dir=offdir, mirror_prefix=mirror, proxy_url=proxy, progress_cb=prog_cb, cancel_event=cancel, log_cb=log_cb)',
+    '            model_arcs.append((ms, marc)); asset_temps.extend(mtemps)',
+    '            completed_base[0] += int(ms.get("size_bytes") or 0)',
     '        iit_file = None',
     '        if iit_spec:',
     '            try:',
@@ -1009,12 +1034,12 @@
     '            except InterruptedError: raise',
     '            except Exception as exc: log_cb(f"[WARN] NITRC IIT template skipped ({exc})")',
     '        completed_base[0] += int(iit_spec.get("size_bytes") or 0)',
-    '        pack_arcs = []; asset_temps = []',
+    '        pack_arcs = []',
     '        for ps in sel_specs:',
     '            parc, ptemps = _acquire_spec(ps, work_dir, offline_dir=offdir, mirror_prefix=mirror, proxy_url=proxy, progress_cb=prog_cb, cancel_event=cancel, log_cb=log_cb)',
     '            pack_arcs.append((ps, parc)); asset_temps.extend(ptemps)',
     '            completed_base[0] += int(ps.get("size_bytes") or 0)',
-    '        emit("downloads_ready", {"work_dir": str(work_dir), "ext_archive": str(ext_arc), "ext_temps": [str(x) for x in ext_temps], "iit_file": str(iit_file) if iit_file else "", "pack_archives": [[ps, str(pa)] for ps, pa in pack_arcs], "asset_temps": [str(x) for x in asset_temps], "sel_packs": list(sel_packs), "mirror": mirror, "proxy": proxy, "offdir": offdir, "verified_packs": True})',
+    '        emit("downloads_ready", {"work_dir": str(work_dir), "ext_archive": str(ext_arc), "ext_temps": [str(x) for x in ext_temps], "iit_file": str(iit_file) if iit_file else "", "model_archives": [[ms, str(ma)] for ms, ma in model_arcs], "pack_archives": [[ps, str(pa)] for ps, pa in pack_arcs], "asset_temps": [str(x) for x in asset_temps], "sel_packs": list(sel_packs), "mirror": mirror, "proxy": proxy, "offdir": offdir, "verified_packs": True})',
     '    except InterruptedError: emit("cancelled", "")',
     '    except Exception as exc: emit("error", f"{exc}\\n{traceback.format_exc()}")',
     'def _run_phase_c_core(info, emit):',
@@ -1035,8 +1060,11 @@
     '        try: from shared.user_config import prune_stale_bundled_dependencies',
     '        except ImportError: prune_stale_bundled_dependencies = None',
     '        save_network_settings(mirror_prefix=info["mirror"], proxy_url=info["proxy"], offline_assets_dir=info["offdir"])',
+    '        cfg = load_user_config()',
     '        custom_assets = str(CONFIG.get("model_assets_dir") or "").strip()',
-    '        asset_root = configured_model_assets_root(custom_assets or None); asset_root.mkdir(parents=True, exist_ok=True)',
+    '        saved_assets = str((cfg.get("external_dependencies") or {}).get("model_assets_dir") or "").strip()',
+    '        effective_assets = custom_assets or (saved_assets if (saved_assets and Path(saved_assets).expanduser().is_dir()) else "")',
+    '        asset_root = configured_model_assets_root(effective_assets or None); asset_root.mkdir(parents=True, exist_ok=True)',
     '        bundled_assets = mod_root.parents[2] / "bundled-model-assets"',
     '        if custom_assets and bundled_assets.is_dir() and bundled_assets.resolve() != asset_root.resolve():',
     '            log_cb(f"Staging bundled model weights -> {asset_root}")',
@@ -1047,6 +1075,13 @@
     '                dst.parent.mkdir(parents=True, exist_ok=True)',
     '                try: os.link(src_f, dst)',
     '                except OSError: shutil.copy2(src_f, dst)',
+    '        pack_list = list(info.get("model_archives") or ()) + list(info.get("pack_archives") or ())',
+    '        already_verified = bool(info.get("verified_packs"))',
+    '        for i, (ps, parc_str) in enumerate(pack_list):',
+    '            parc = Path(parc_str)',
+    '            emit("progress", [930 + int(60 * i / max(1, len(pack_list))), f"Extracting {ps[\'filename\']}..."])',
+    '            log_cb(f"Extracting {ps[\'filename\']} -> {asset_root}")',
+    '            extract_modular_pack(parc, asset_root, expected_sha256="" if already_verified else str(ps.get("sha256") or ""))',
     '        iit_src = Path(info["iit_file"]) if info.get("iit_file") else None',
     '        if iit_src and iit_src.is_file():',
     '            iit_rel = str((CONFIG["artifacts"].get("iit_template") or {}).get("relpath") or "brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz")',
@@ -1056,15 +1091,8 @@
     '                if dst.is_file() and ((iit_sha and _sha256(dst) == iit_sha) or dst.resolve() == iit_src.resolve()): continue',
     '                shutil.copy2(iit_src, dst)',
     '            if iit_src.parent == Path(info.get("work_dir") or (Path(tempfile.gettempdir()) / "slicerdspace-installer-cache")): _cleanup_paths([iit_src])',
-    '        pack_list = info["pack_archives"]',
-    '        already_verified = bool(info.get("verified_packs"))',
-    '        for i, (ps, parc_str) in enumerate(pack_list):',
-    '            parc = Path(parc_str)',
-    '            emit("progress", [930 + int(60 * i / max(1, len(pack_list))), f"Extracting {ps[\'filename\']}..."])',
-    '            log_cb(f"Extracting {ps[\'filename\']} -> {asset_root}")',
-    '            extract_modular_pack(parc, asset_root, expected_sha256="" if already_verified else str(ps.get("sha256") or ""))',
     '        _cleanup_paths(info["asset_temps"])',
-    '        cfg = load_user_config(); ui_cfg = cfg.setdefault("ui", {}); ui_cfg["language"] = ui_cfg.get("language") or str(CONFIG.get("language") or "en")',
+    '        ui_cfg = cfg.setdefault("ui", {}); ui_cfg["language"] = ui_cfg.get("language") or str(CONFIG.get("language") or "en")',
     '        if prune_stale_bundled_dependencies is None: deps = cfg.setdefault("external_dependencies", {})',
     '        else:',
     '            deps, pruned_deps = prune_stale_bundled_dependencies(cfg.get("external_dependencies", {}), current_extension_root=mod_root.parents[2])',
@@ -1263,7 +1291,8 @@
     '        warn_m.setWordWrap(True); warn_m.setStyleSheet("color: #f87171; font-weight: bold;")',
     '        layout.addWidget(warn_m)',
     '    _arts = CONFIG.get("artifacts") or {}',
-    '    _b_bytes = int(((_arts.get("bundles") or {}).get(_host_bundle_key()) or {}).get("size_bytes") or 0) + int(((_arts.get("iit_template") or {})).get("size_bytes") or 0)',
+    '    _m_bytes = sum(int(s.get("size_bytes") or 0) for s in _selected_model_specs(_arts, CONFIG))',
+    '    _b_bytes = int(((_arts.get("bundles") or {}).get(_host_bundle_key()) or {}).get("size_bytes") or 0) + _m_bytes + int(((_arts.get("iit_template") or {})).get("size_bytes") or 0)',
     '    _b_gb = f"~{_b_bytes / 1073741824.0:.2f} GB" if _b_bytes > 0 else "~1.37 GB"',
     '    base_box = qt.QGroupBox("Core Extension")',
     '    base_lay = qt.QVBoxLayout(base_box)',
@@ -1830,6 +1859,19 @@
     '    if own is None:',
     '        return slicer_exe',
     '    raise RuntimeError(f"Requires 3D Slicer 5.10 or later (found {own[0]}.{own[1]}). Install 3D Slicer 5.10 or later, then run this installer again.")',
+    '_CORE_MODEL_PACK_ORDER = ("ddsurfer", "ddseg", "ddparcel", "pnl_cnn", "tractcloud")',
+    'def _selected_model_specs(artifacts, cfg):',
+    '    mpacks = artifacts.get("model_packs") or {}',
+    '    wanted = cfg.get("selected_model_packs")',
+    '    if wanted is None: wanted = list(_CORE_MODEL_PACK_ORDER)',
+    '    wset = set(wanted)',
+    '    out = []',
+    '    for pid in _CORE_MODEL_PACK_ORDER:',
+    '        if pid not in wset: continue',
+    '        sp = mpacks.get(pid)',
+    '        if isinstance(sp, dict) and sp.get("filename") and (sp.get("url") or sp.get("parts")):',
+    '            out.append(sp)',
+    '    return out',
     'def main():',
     '    slicer_exe = str(os.environ.get("SLICERDSPACE_RESOLVED_SLICER") or CONFIG.get("slicer_path") or "").strip()',
     '    if not slicer_exe or not Path(slicer_exe).exists(): raise FileNotFoundError(f"Slicer not found: {slicer_exe}")',
@@ -1840,7 +1882,8 @@
     '    _warn_linux_glibc_floor()',
     '    if _is_intel_mac(): raise RuntimeError("Intel x86_64 Macs are not supported; Apple Silicon (M1-M4) is required.")',
     '    bkey = {"windows":"windows_x64_base","linux":"linux_x64_base","macos":"macos_arm64_base"}[os_name]',
-    '    need_b = int(((artifacts.get("bundles") or {}).get(bkey) or {}).get("size_bytes") or 0) + int((artifacts.get("iit_template") or {}).get("size_bytes") or 0)',
+    '    model_specs = _selected_model_specs(artifacts, CONFIG)',
+    '    need_b = int(((artifacts.get("bundles") or {}).get(bkey) or {}).get("size_bytes") or 0) + sum(int(s.get("size_bytes") or 0) for s in model_specs) + int((artifacts.get("iit_template") or {}).get("size_bytes") or 0)',
     '    work_dir = _pick_cache_dir(int(need_b * 1.15) + 536870912 if need_b else 0)',
     '    ext_archive, ext_temps = _acquire_spec(artifacts["bundles"][bkey], work_dir)',
     '    receipt = _install_extension(slicer_exe, ext_archive); _cleanup_temp_files(ext_temps)',
@@ -1856,8 +1899,11 @@
     '    if CONFIG.get("mirror_prefix"): os.environ["SLICERDSPACE_MIRROR_PREFIX"] = _clean_mirror(CONFIG["mirror_prefix"])',
     '    if CONFIG.get("proxy_url"): os.environ["SLICERDSPACE_PROXY_URL"] = os.environ["HTTPS_PROXY"] = os.environ["HTTP_PROXY"] = str(CONFIG["proxy_url"]).strip()',
     '    if CONFIG.get("offline_dir"): os.environ["SLICERDSPACE_OFFLINE_DIR"] = str(CONFIG["offline_dir"]).strip()',
+    '    cfg = load_user_config()',
     '    custom_assets = str(CONFIG.get("model_assets_dir") or "").strip()',
-    '    asset_root = configured_model_assets_root(custom_assets or None); asset_root.mkdir(parents=True, exist_ok=True)',
+    '    saved_assets = str((cfg.get("external_dependencies") or {}).get("model_assets_dir") or "").strip()',
+    '    effective_assets = custom_assets or (saved_assets if (saved_assets and Path(saved_assets).expanduser().is_dir()) else "")',
+    '    asset_root = configured_model_assets_root(effective_assets or None); asset_root.mkdir(parents=True, exist_ok=True)',
     '    bundled_assets = mod_root.parents[2] / "bundled-model-assets"',
     '    if custom_assets and bundled_assets.is_dir() and bundled_assets.resolve() != asset_root.resolve():',
     '        _log(f"Staging bundled base model weights -> {asset_root}")',
@@ -1868,6 +1914,9 @@
     '            dst.parent.mkdir(parents=True, exist_ok=True)',
     '            try: os.link(src_file, dst)',
     '            except OSError: shutil.copy2(src_file, dst)',
+    '    for mspec in model_specs:',
+    '        arc, mtemps = _acquire_spec(mspec, work_dir); _log(f"Extracting {mspec[\'filename\']} -> {asset_root}")',
+    '        extract_modular_pack(arc, asset_root, expected_sha256=""); _cleanup_temp_files(mtemps)',
     '    _sync_iit_template(artifacts.get("iit_template") or {}, work_dir, bundled_assets, asset_root)',
     '    selected_packs = [p for p in ("wma_org", "wma_naba", "wma_east_west") if p in set(CONFIG.get("selected_packs") or ())]',
     '    packs = artifacts.get("packs") or {}',
@@ -1876,7 +1925,7 @@
     '        if not pspec: continue',
     '        arc, ptemps = _acquire_spec(pspec, work_dir); _log(f"Extracting {pspec[\'filename\']} -> {asset_root}")',
     '        extract_modular_pack(arc, asset_root, expected_sha256=""); _cleanup_temp_files(ptemps)',
-    '    cfg = load_user_config(); ui_cfg = cfg.setdefault("ui", {}); ui_cfg["language"] = ui_cfg.get("language") or str(CONFIG.get("language") or "en")',
+    '    ui_cfg = cfg.setdefault("ui", {}); ui_cfg["language"] = ui_cfg.get("language") or str(CONFIG.get("language") or "en")',
     '    if prune_stale_bundled_dependencies is None: deps = cfg.setdefault("external_dependencies", {})',
     '    else:',
     '        deps, pruned_deps = prune_stale_bundled_dependencies(cfg.get("external_dependencies", {}), current_extension_root=mod_root.parents[2])',
@@ -1902,7 +1951,7 @@
     '    defaults["targets"] = list(dict.fromkeys(targets)); write_user_config(cfg)',
     '    try:',
     '        from shared.environment import EnvironmentDoctorConfig, run_environment_doctor',
-    '        doc = run_environment_doctor(EnvironmentDoctorConfig(repo_root=mod_root, targets=tuple(defaults["targets"]), wma_atlas=defaults.get("wma_atlas", "org"), brain_mask_backend="pnl_cnn", model_assets_dir=asset_root if custom_assets else None, python_executable=Path(sys.executable), slicer_executable=Path(slicer_exe)))',
+    '        doc = run_environment_doctor(EnvironmentDoctorConfig(repo_root=mod_root, targets=tuple(defaults["targets"]), wma_atlas=defaults.get("wma_atlas", "org"), brain_mask_backend="pnl_cnn", model_assets_dir=asset_root, python_executable=Path(sys.executable), slicer_executable=Path(slicer_exe)))',
     '        _log(f"Environment doctor check: {len(doc.statuses)} items, blockers={doc.blocker_count}")',
     '    except Exception as exc: _log(f"Post-install check note: {exc}")',
     '    _apply_code_update(mod_root, CONFIG.get("mirror_prefix", ""), CONFIG.get("proxy_url", ""), CONFIG.get("offline_dir", ""), _log, CONFIG.get("language", "en"))',
@@ -2030,12 +2079,16 @@
 
   function buildConfig(state) {
     var selectedPacks = state.wmaEnabled ? (state.wmaAtlases || []).slice() : [];
+    var selectedModelPacks = Array.isArray(state.modelPacks)
+      ? state.modelPacks.slice()
+      : DEFAULT_MODEL_PACKS.slice();
     return {
       os: state.os || 'macos',
       mode: 'base',
       slicer_path: String(state.slicerPath || '').trim(),
       model_assets_dir: String(state.modelAssetsDir || '').trim(),
       selected_packs: selectedPacks,
+      selected_model_packs: selectedModelPacks,
       mirror_prefix: String(state.mirrorPrefix || '').trim(),
       proxy_url: String(state.proxyUrl || '').trim(),
       offline_dir: String(state.offlineDir || '').trim(),
@@ -2310,8 +2363,13 @@
       var def = OS_DEFAULTS[osKey] || OS_DEFAULTS.macos;
       var bundle = (ARTIFACTS.bundles && ARTIFACTS.bundles[def.bundleKey]) || null;
       var bBytes = Number((bundle && bundle.size_bytes) || def.baseEstimateBytes || 0);
+      var mPacks = ARTIFACTS.model_packs || {};
+      var mBytes = DEFAULT_MODEL_PACKS.reduce(function (sum, pid) {
+        var sp = mPacks[pid];
+        return sum + Number((sp && sp.size_bytes) || 0);
+      }, 0);
       var iitBytes = Number((ARTIFACTS.iit_template && ARTIFACTS.iit_template.size_bytes) || 0);
-      return formatGb(bBytes + iitBytes);
+      return formatGb(bBytes + mBytes + iitBytes);
     }
 
     function osSubtitle(osKey) {

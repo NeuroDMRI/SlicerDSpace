@@ -1,14 +1,20 @@
 name: Repackage Release Assets
 
 on:
+  push:
+    tags:
+      - "v1.*"
+      - "v2.*"
   workflow_dispatch:
     inputs:
       phase:
-        description: "Phase to execute: 'os-bases' (repack code into all 3 OS base packages + overlay + website), 'code-overlay' (fast ~20s incremental code update + manifest), 'standalone-ukf' (build optimized standalone CPU UKF for Windows/Linux/macOS), 'macos-ukf' (legacy macOS arm64 UKF), 'setup-zips', or 'atlases'"
+        description: "Phase to execute: 'full-release' (5 modular model packs + 3 slimmed OS bases + Setup zips + overlay + website), 'model-packs' (5 modular model weight packs), 'os-bases' (repack 3 slimmed OS bases + overlay + website), 'code-overlay' (fast ~20s incremental code update + manifest), 'standalone-ukf', 'macos-ukf', 'setup-zips', or 'atlases'"
         required: true
         type: choice
-        default: "os-bases"
+        default: "full-release"
         options:
+          - "full-release"
+          - "model-packs"
           - "os-bases"
           - "code-overlay"
           - "standalone-ukf"
@@ -16,12 +22,17 @@ on:
           - "setup-zips"
           - "atlases"
       release_tag:
-        description: "Release tag to update (used by setup-zips)"
+        description: "Release tag to publish/update (v0.1.1 is immutable; use v1.0.0+)"
+        required: false
+        type: string
+        default: "v1.0.0"
+      source_release_tag:
+        description: "Source release tag for OS Base runtime bootstrap (default v0.1.1)"
         required: false
         type: string
         default: "v0.1.1"
       os_targets:
-        description: "JSON array of OS targets when phase is 'os-bases'"
+        description: "JSON array of OS targets when phase is 'full-release' or 'os-bases'"
         required: false
         type: string
         default: '["windows-x64","linux-x64","macos-arm64"]'
@@ -30,9 +41,51 @@ permissions:
   contents: write
   actions: write
 
+env:
+  TARGET_RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag || 'v1.0.0' }}
+  SOURCE_RELEASE_TAG: ${{ inputs.source_release_tag || 'v0.1.1' }}
+
 jobs:
+  ensure-release:
+    if: github.event_name == 'push' || inputs.phase == 'full-release' || inputs.phase == 'model-packs' || inputs.phase == 'os-bases'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Ensure target GitHub Release exists (never touch v0.1.1)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$TARGET_RELEASE_TAG" = "v0.1.1" ] || [ "$TARGET_RELEASE_TAG" = "model-assets-v0.1.1" ]; then
+            echo "::error::Refusing to mutate immutable legacy release $TARGET_RELEASE_TAG"
+            exit 1
+          fi
+          if gh release view "$TARGET_RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TARGET_RELEASE_TAG already exists."
+          else
+            NOTES_FILE="docs/release/RELEASE_NOTES_${TARGET_RELEASE_TAG}.md"
+            if [ -f "$NOTES_FILE" ]; then
+              gh release create "$TARGET_RELEASE_TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --prerelease \
+                --latest=false \
+                --title "SlicerDSpace $TARGET_RELEASE_TAG" \
+                --notes-file "$NOTES_FILE"
+            else
+              gh release create "$TARGET_RELEASE_TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --prerelease \
+                --latest=false \
+                --title "SlicerDSpace $TARGET_RELEASE_TAG" \
+                --notes "SlicerDSpace $TARGET_RELEASE_TAG modular release."
+            fi
+          fi
+
   build-standalone-ukf:
-    if: github.event.inputs.phase == 'standalone-ukf'
+    if: github.event_name == 'workflow_dispatch' && inputs.phase == 'standalone-ukf'
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -68,7 +121,7 @@ jobs:
         run: gh release upload model-assets-v0.1.1 --repo "${{ github.repository }}" --clobber "${{ runner.temp }}/ukf-out/${{ matrix.target == 'windows-x64' && 'ukf-standalone-windows-x64.zip' || (matrix.target == 'linux-x64' && 'ukf-standalone-linux-x64.tar.gz' || 'ukf-standalone-darwin-arm64.tar.gz') }}" "${{ runner.temp }}/ukf-out/${{ matrix.target == 'windows-x64' && 'ukf-standalone-windows-x64.zip' || (matrix.target == 'linux-x64' && 'ukf-standalone-linux-x64.tar.gz' || 'ukf-standalone-darwin-arm64.tar.gz') }}.sha256"
 
   build-macos-ukf:
-    if: github.event.inputs.phase == 'macos-ukf'
+    if: github.event_name == 'workflow_dispatch' && inputs.phase == 'macos-ukf'
     runs-on: macos-15
     timeout-minutes: 90
     steps:
@@ -99,8 +152,43 @@ jobs:
             "${{ runner.temp }}/ukf-out/ukf-standalone-darwin-arm64.tar.gz" \
             "${{ runner.temp }}/ukf-out/ukf-standalone-darwin-arm64.tar.gz.sha256"
 
+  model-packs:
+    if: github.event_name == 'push' || inputs.phase == 'full-release' || inputs.phase == 'model-packs'
+    needs: [ensure-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        pack: [ddsurfer, ddseg, ddparcel, pnl_cnn, tractcloud]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build & upload modular model weight pack (${{ matrix.pack }})
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python .github/scripts/repackage_release_assets.py build-model-pack \
+            --pack "${{ matrix.pack }}" \
+            --release-tag "$TARGET_RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --work-dir "${{ runner.temp }}/model-work" \
+            --out-dir "${{ runner.temp }}/model-out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: model-pack-receipt-${{ matrix.pack }}
+          path: ${{ runner.temp }}/model-out/model-pack-receipt-${{ matrix.pack }}.json
+          if-no-files-found: error
+
   atlases:
-    if: github.event.inputs.phase == 'atlases'
+    if: github.event_name == 'workflow_dispatch' && inputs.phase == 'atlases'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -137,7 +225,8 @@ jobs:
           if-no-files-found: error
 
   os-bases:
-    if: github.event.inputs.phase == 'os-bases'
+    if: ${{ !cancelled() && (needs.ensure-release.result == 'success' || needs.ensure-release.result == 'skipped') && (needs.model-packs.result == 'success' || needs.model-packs.result == 'skipped') && (github.event_name == 'push' || inputs.phase == 'full-release' || inputs.phase == 'os-bases') }}
+    needs: [ensure-release, model-packs]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -158,12 +247,31 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Repack & upload ${{ matrix.target }} Base package
+      - name: Download modular model-pack receipts (when built in this run)
+        if: needs.model-packs.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: model-pack-receipt-*
+          path: ${{ runner.temp }}/model-receipts
+          merge-multiple: true
+
+      - name: Sync model-pack manifest into checkout before repacking OS base
+        if: needs.model-packs.result == 'success'
+        run: |
+          python .github/scripts/repackage_release_assets.py apply-model-receipts \
+            --receipts-dir "${{ runner.temp }}/model-receipts" \
+            --release-tag "$TARGET_RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Repack & upload slimmed ${{ matrix.target }} Base package
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python .github/scripts/repackage_release_assets.py repack-os-base \
             --target "${{ matrix.target }}" \
+            --release-tag "$TARGET_RELEASE_TAG" \
+            --source-release-tag "$SOURCE_RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
             --work-dir "${{ runner.temp }}/base-work" \
             --out-dir "${{ runner.temp }}/base-out"
 
@@ -174,8 +282,8 @@ jobs:
           if-no-files-found: error
 
   sync-metadata:
-    if: github.event.inputs.phase == 'os-bases'
-    needs: [os-bases]
+    if: ${{ !cancelled() && (needs.ensure-release.result == 'success' || needs.ensure-release.result == 'skipped') && (needs.model-packs.result == 'success' || needs.model-packs.result == 'skipped') && (needs.os-bases.result == 'success' || needs.os-bases.result == 'skipped') && (github.event_name == 'push' || inputs.phase == 'full-release' || inputs.phase == 'os-bases' || inputs.phase == 'model-packs') }}
+    needs: [ensure-release, model-packs, os-bases]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -193,13 +301,23 @@ jobs:
         with:
           node-version: "22"
 
-      - uses: actions/download-artifact@v4
+      - name: Download model-pack receipts
+        if: needs.model-packs.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: model-pack-receipt-*
+          path: ${{ runner.temp }}/receipts
+          merge-multiple: true
+
+      - name: Download OS base receipts
+        if: needs.os-bases.result == 'success'
+        uses: actions/download-artifact@v4
         with:
           pattern: os-base-receipt-*
           path: ${{ runner.temp }}/receipts
           merge-multiple: true
 
-      - name: Sync Release SHA256SUMS.txt, setup zips, website metadata & GitHub Pages
+      - name: Sync Release SHA256SUMS.txt, setup zips, overlay, website metadata & publish Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -208,22 +326,26 @@ jobs:
             --receipts-dir "${{ runner.temp }}/receipts" \
             --setup-out-dir "${{ runner.temp }}/setup-zips" \
             --sha256sums-out "${{ runner.temp }}/SHA256SUMS.txt" \
-            --release-tag "${{ inputs.release_tag }}" \
+            --release-tag "$TARGET_RELEASE_TAG" \
             --repo "${GITHUB_REPOSITORY}" \
             --upload-sha256sums
           python scripts/build_website_locales.py
           python -I Testing/Website/check_site.py
-          if [ -n "$(git status --porcelain docs/website/installer_artifacts.json docs/site/)" ]; then
+          gh release edit "$TARGET_RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --prerelease=false \
+            --latest
+          if [ -n "$(git status --porcelain models/release_packs_manifest.json docs/website/ docs/site/ shared/installer_script_builder.py .github/scripts/ci_install_dspace.py Testing/Python/test_website_editorial_copy.py)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add docs/website/installer_artifacts.json docs/site/assets/js/installer-customizer.js docs/site/zh.html
-            git commit -m "chore(release): sync repacked ${{ inputs.release_tag }} checksums and setup zips to website"
+            git add models/release_packs_manifest.json docs/website/installer_artifacts.json docs/site/assets/js/installer-customizer.js docs/site/index.html docs/site/zh.html shared/installer_script_builder.py .github/scripts/ci_install_dspace.py Testing/Python/test_website_editorial_copy.py
+            git commit -m "chore(release): publish ${TARGET_RELEASE_TAG} modular model packs, slimmed OS bases and setup zips"
             git push origin HEAD:main
             gh workflow run pages.yml --repo "$GITHUB_REPOSITORY"
           fi
 
   publish-setup-zips:
-    if: github.event.inputs.phase == 'setup-zips'
+    if: github.event_name == 'workflow_dispatch' && inputs.phase == 'setup-zips'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -249,7 +371,7 @@ jobs:
           python .github/scripts/repackage_release_assets.py sync-setup-zips \
             --out-dir "${{ runner.temp }}/setup-zips" \
             --sha256sums-out "${{ runner.temp }}/SHA256SUMS.txt" \
-            --release-tag "${{ inputs.release_tag }}" \
+            --release-tag "$TARGET_RELEASE_TAG" \
             --repo "${GITHUB_REPOSITORY}"
           python scripts/build_website_locales.py
           python -I Testing/Website/check_site.py
@@ -257,13 +379,13 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add docs/website/installer_artifacts.json docs/site/assets/js/installer-customizer.js docs/site/zh.html
-            git commit -m "chore(release): publish ${{ inputs.release_tag }} universal SlicerDSpaceSetup zips"
+            git commit -m "chore(release): publish ${TARGET_RELEASE_TAG} universal SlicerDSpaceSetup zips"
             git push origin HEAD:main
             gh workflow run pages.yml --repo "$GITHUB_REPOSITORY"
           fi
 
   publish-code-overlay:
-    if: github.event.inputs.phase == 'code-overlay'
+    if: github.event_name == 'workflow_dispatch' && inputs.phase == 'code-overlay'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -285,12 +407,12 @@ jobs:
           python .github/scripts/repackage_release_assets.py sync-code-overlay \
             --out-dir "${{ runner.temp }}/code-overlay" \
             --sha256sums-out "${{ runner.temp }}/SHA256SUMS.txt" \
-            --release-tag "${{ inputs.release_tag }}" \
+            --release-tag "$TARGET_RELEASE_TAG" \
             --repo "${GITHUB_REPOSITORY}"
           if [ -n "$(git status --porcelain docs/website/installer_artifacts.json)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add docs/website/installer_artifacts.json
-            git commit -m "chore(release): publish ${{ inputs.release_tag }} incremental code overlay"
+            git commit -m "chore(release): publish ${TARGET_RELEASE_TAG} incremental code overlay"
             git push origin HEAD:main
           fi

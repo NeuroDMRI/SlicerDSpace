@@ -81,21 +81,29 @@ def find_installed_module_dir(installer_output):
     return Path(match[-1].strip()) if match else None
 
 
-def download_asset(offline_dir, filename):
+def download_asset(offline_dir, filename, extra_filenames=()):
     offline_dir.mkdir(parents=True, exist_ok=True)
     sums = offline_dir / "SHA256SUMS.txt"
-    command = ["gh", "release", "download", RELEASE_TAG, "-R", REPO, "-p", filename, "-p", "SHA256SUMS.txt",
-               "-D", str(offline_dir), "--clobber"]
+    targets = [filename, *list(extra_filenames or ())]
+    command = ["gh", "release", "download", RELEASE_TAG, "-R", REPO]
+    for name in targets:
+        command.extend(["-p", name])
+    command.extend(["-p", "SHA256SUMS.txt", "-D", str(offline_dir), "--clobber"])
     log("run: " + " ".join(command))
     subprocess.run(command, check=True)  # needs GH_TOKEN in the environment
-    expected = parse_sha256sums(sums.read_text(encoding="utf-8")).get(filename)
-    if not expected:
-        raise SystemExit("SHA256SUMS.txt of release %s does not list %s" % (RELEASE_TAG, filename))
-    actual = sha256_of(offline_dir / filename)
-    if actual != expected:
-        raise SystemExit("SHA-256 mismatch for %s: %s != %s" % (filename, actual, expected))
-    log("verified %s (%d bytes, sha256 %s)" % (filename, (offline_dir / filename).stat().st_size, actual))
-    return actual
+    table = parse_sha256sums(sums.read_text(encoding="utf-8"))
+    primary_sha = ""
+    for name in targets:
+        expected = table.get(name)
+        if not expected:
+            raise SystemExit("SHA256SUMS.txt of release %s does not list %s" % (RELEASE_TAG, name))
+        actual = sha256_of(offline_dir / name)
+        if actual != expected:
+            raise SystemExit("SHA-256 mismatch for %s: %s != %s" % (name, actual, expected))
+        log("verified %s (%d bytes, sha256 %s)" % (name, (offline_dir / name).stat().st_size, actual))
+        if name == filename:
+            primary_sha = actual
+    return primary_sha
 
 
 def run_website_installer(python_slicer, slicer_exe, target_os, offline_dir, bundle_key, asset_sha):
@@ -259,12 +267,19 @@ def main(argv=None):
     target_os, template, bundle_key = BASE_ASSETS[platform_key()]
     filename = template % RELEASE_TAG
     asset = args.offline_dir / filename
+    from shared.installer_script_builder import load_installer_artifacts
+    artifacts = load_installer_artifacts()
+    model_pack_names = [
+        str(spec["filename"])
+        for spec in (artifacts.get("model_packs") or {}).values()
+        if isinstance(spec, dict) and spec.get("filename") and (spec.get("url") or spec.get("parts"))
+    ]
     if args.reinstall:
         if not asset.is_file():
             raise SystemExit("--reinstall needs %s from the first install run; pass --keep-asset to that run" % asset)
         asset_sha = sha256_of(asset)
     else:
-        asset_sha = download_asset(args.offline_dir, filename)
+        asset_sha = download_asset(args.offline_dir, filename, extra_filenames=model_pack_names)
     output = run_website_installer(args.python_slicer, args.slicer_exe, target_os, args.offline_dir, bundle_key, asset_sha)
     module_dir = find_installed_module_dir(output)
     if args.reinstall:
@@ -274,7 +289,9 @@ def main(argv=None):
     count = overlay_checkout(module_dir)
     cancelled = [] if args.reinstall else cancel_scheduled_uninstall(args.slicer_exe)
     if not args.keep_asset:
-        asset.unlink()  # free about 1.5 GB of runner disk
+        asset.unlink(missing_ok=True)
+        for mp_name in model_pack_names:
+            (args.offline_dir / mp_name).unlink(missing_ok=True)
     write_outputs({"module_dir": module_dir, "ext_root": module_dir.parents[2], "overlay_files": count,
                    "scheduled_uninstall_cancelled": len(cancelled)})
     return 0

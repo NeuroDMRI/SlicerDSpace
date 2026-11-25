@@ -98,6 +98,12 @@ ALLOWED_URLS.update(row["url"] for row in REFERENCE_CATALOG["references"])
 
 with open(os.path.join(ROOT, "docs", "website", "installer_artifacts.json"), encoding="utf-8") as art_file:
     INSTALLER_ARTIFACTS = json.load(art_file)
+for pack in (INSTALLER_ARTIFACTS.get("model_packs") or {}).values():
+    if pack.get("url"):
+        ALLOWED_URLS.add(pack["url"])
+    for part in pack.get("parts") or ():
+        if part.get("url"):
+            ALLOWED_URLS.add(part["url"])
 for bundle in (INSTALLER_ARTIFACTS.get("bundles") or {}).values():
     if bundle.get("url"):
         ALLOWED_URLS.add(bundle["url"])
@@ -130,6 +136,7 @@ for bundle in (RELEASE_PACKS.get("bundles") or {}).values():
 ALLOWED_URLS.update({
     REPO + "/releases/download/",
     REPO + "/releases/download/v0.1.1",
+    REPO + "/releases/download/v1.0.0",
     REPO + "/releases/download/v0.1.1/SlicerDSpace-Example-HCP-100307-NIfTI.zip",
     "https://www.nitrc.org/frs/download.php/11290/IITmean_b0_256.nii.gz",
     "https://github.com/",

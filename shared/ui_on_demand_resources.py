@@ -247,20 +247,23 @@ def detect_missing_task_resources(
     if "segmentation" in target_set:
         paths = _core_profile_paths("segmentation")
         if paths and not _all_files_nonempty(roots, paths):
-            size = sum(core_sizes.get(p, 0) for p in paths) or _DEFAULT_PACK_SIZES_BYTES["segmentation"]
-            add_item("segmentation", size, "anatomy")
+            pack_size = int((packs.get("ddseg") or {}).get("size_bytes") or 0)
+            size = pack_size or sum(core_sizes.get(p, 0) for p in paths) or _DEFAULT_PACK_SIZES_BYTES["segmentation"]
+            add_item("segmentation", size, "ddseg")
 
     if "parcellation" in target_set:
         paths = _core_profile_paths("parcellation")
         if paths and not _all_files_nonempty(roots, paths):
-            size = sum(core_sizes.get(p, 0) for p in paths) or _DEFAULT_PACK_SIZES_BYTES["parcellation"]
-            add_item("parcellation", size, "anatomy")
+            pack_size = int((packs.get("ddparcel") or {}).get("size_bytes") or 0)
+            size = pack_size or sum(core_sizes.get(p, 0) for p in paths) or _DEFAULT_PACK_SIZES_BYTES["parcellation"]
+            add_item("parcellation", size, "ddparcel")
 
     if "surface" in target_set:
         paths = _core_profile_paths("surface")
         if paths and not _all_files_nonempty(roots, paths):
-            size = sum(core_sizes.get(p, 0) for p in paths) or _DEFAULT_PACK_SIZES_BYTES["surface"]
-            add_item("surface", size, "surface")
+            pack_size = int((packs.get("ddsurfer") or {}).get("size_bytes") or 0)
+            size = pack_size or sum(core_sizes.get(p, 0) for p in paths) or _DEFAULT_PACK_SIZES_BYTES["surface"]
+            add_item("surface", size, "ddsurfer")
 
     if "surface_postprocess" in target_set:
         atlas_paths = _ext_profile_paths("surface-postprocess")
@@ -280,7 +283,7 @@ def detect_missing_task_resources(
                     int(runtime["download_bytes"]) if not runtime_ok else 0
                 )
                 reason = runtime.get("reason") or None if not runtime_ok else None
-                add_item("surface_postprocess", size or _DEFAULT_PACK_SIZES_BYTES["surface_postprocess"], "surface",
+                add_item("surface_postprocess", size or _DEFAULT_PACK_SIZES_BYTES["surface_postprocess"], "ddsurfer",
                          reason)
 
     # 2. Automatic PNL brain mask
@@ -317,15 +320,17 @@ def detect_missing_task_resources(
                             "title_zh": "PNL 脑掩膜参考模板（IITmean_b0_256.nii.gz）",
                             "title_en": "PNL Brain-Mask Template (IITmean_b0_256.nii.gz)",
                             "size_bytes": int(size),
-                            "pack_id": "brain_mask_pnl",
+                            "pack_id": "pnl_cnn",
                         }
                     )
                 elif truly_missing and len(truly_missing) < len(pnl_paths):
                     size = sum(ext_sizes.get(p, 0) for p in truly_missing)
-                    add_item("pnl_cnn", size or _DEFAULT_PACK_SIZES_BYTES["pnl_cnn"], "brain_mask_pnl")
+                    add_item("pnl_cnn", size or _DEFAULT_PACK_SIZES_BYTES["pnl_cnn"], "pnl_cnn")
                 else:
-                    size = sum(ext_sizes.get(p, 0) for p in pnl_paths) or _DEFAULT_PACK_SIZES_BYTES["pnl_cnn"]
-                    add_item("pnl_cnn", size, "brain_mask_pnl")
+                    pack_size = int((packs.get("pnl_cnn") or {}).get("size_bytes") or 0)
+                    iit_size = int(ext_sizes.get(iit_rel, 7_830_929))
+                    size = (pack_size + iit_size if pack_size else 0) or sum(ext_sizes.get(p, 0) for p in pnl_paths) or _DEFAULT_PACK_SIZES_BYTES["pnl_cnn"]
+                    add_item("pnl_cnn", size, "pnl_cnn")
 
     # 3. Bundles: TractCloud / WMA. Fix round W3: the closure turns a selection without WMQL into the target 'wma' or
     # 'tractcloud' (not 'bundles'), and the bundle tuple can be empty or the 'wmql' default then; either form counts.

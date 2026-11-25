@@ -215,7 +215,14 @@ def _run_script_main(ns: dict, project: _Project, *, network: dict | None = None
     archive = project.root / "ext.zip"
     archive.write_bytes(b"PK")
     config = dict(ns["CONFIG"])
-    config.update(model_assets_dir=str(project.assets), selected_packs=[], mirror_prefix="", proxy_url="", offline_dir="")
+    config.update(
+        model_assets_dir=str(project.assets),
+        selected_packs=[],
+        selected_model_packs=[],
+        mirror_prefix="",
+        proxy_url="",
+        offline_dir="",
+    )
     config.update(network or {})
     ns["CONFIG"] = config
     ns["_log"] = logs.append

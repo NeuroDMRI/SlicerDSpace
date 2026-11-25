@@ -30,11 +30,17 @@ from scripts.audit_extension_package import audit_package
 from scripts.extension_runtime.archive_layout import inspect_archive_layout
 from scripts.extension_runtime.runtime_resources import runtime_files
 from scripts.package_modular_assets import (
+    CORE_MODEL_PACK_ORDER,
+    CORE_MODEL_PACK_SPECS,
     DETERMINISTIC_MTIME,
     RELEASE_BASE_URL,
     RELEASE_TAG,
     WMA_ATLAS_PACK_SPECS,
+    WMA_ATLAS_RELEASE_BASE_URL,
+    WMA_ATLAS_RELEASE_TAG,
+    collect_model_pack_files,
     collect_wma_pack_files,
+    manifest_model_pack_entry,
     manifest_pack_entry,
     sha256_file,
     split_file_if_needed,
@@ -45,6 +51,7 @@ from shared.code_updater import EXTENSION_VERSION, RUNTIME_ABI_VERSION, compute_
 
 GITHUB_REPO = "NeuroDMRI/SlicerDSpace"
 MODEL_ASSETS_TAG = "model-assets-v0.1.1"
+IMMUTABLE_LEGACY_TAGS = frozenset({"v0.1.1", "model-assets-v0.1.1"})
 MACOS_UKF_ARCHIVE = "ukf-standalone-darwin-arm64.tar.gz"
 STANDALONE_UKF_ARCHIVES: dict[str, tuple[str, str]] = {
     "windows-x64": ("ukf-standalone-windows-x64.zip", "ukf-windows-x64"),
@@ -52,11 +59,37 @@ STANDALONE_UKF_ARCHIVES: dict[str, tuple[str, str]] = {
     "macos-arm64": ("ukf-standalone-darwin-arm64.tar.gz", "ukf-darwin-arm64"),
 }
 
+# Verified immutable v0.1.1 OS Base archives used as the clean runtime bootstrap source when building v1.0.0+.
+V011_BOOTSTRAP_BUNDLES: dict[str, dict[str, Any]] = {
+    "windows-x64": {
+        "filename": "SlicerDSpace-v0.1.1-Windows-x64.zip",
+        "base_url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1",
+        "size_bytes": 1471482327,
+        "sha256": "0cd4825374dc209a697c7976d6daceb7f358173ddcb7066fdf9a18be73c667ac",
+        "parts": [],
+    },
+    "linux-x64": {
+        "filename": "SlicerDSpace-v0.1.1-Linux-x64.tar.gz",
+        "base_url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1",
+        "size_bytes": 1620043144,
+        "sha256": "b96db0274fe8d22cab04f8ce87d441b105196115674b1028de98303e03d85dd8",
+        "parts": [],
+    },
+    "macos-arm64": {
+        "filename": "SlicerDSpace-v0.1.1-macOS-arm64.tar.gz",
+        "base_url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1",
+        "size_bytes": 1468508163,
+        "sha256": "3277f724e942f5dcd4e203e5d3da3a98dec404234b1871d429a027ac93fa2dab",
+        "parts": [],
+    },
+}
+
 SOURCE_BUNDLES: dict[str, dict[str, str]] = {
     "windows-x64": {
         "bundle_key": "windows_x64_base",
         "os": "windows",
         "arch": "x86_64",
+        "out_name_template": "SlicerDSpace-{tag}-Windows-x64.zip",
         "out_name": f"SlicerDSpace-{RELEASE_TAG}-Windows-x64.zip",
         "ext_prefix": "SlicerDSpace",
         "slicer_subdir": "Slicer-5.10",
@@ -65,6 +98,7 @@ SOURCE_BUNDLES: dict[str, dict[str, str]] = {
         "bundle_key": "linux_x64_base",
         "os": "linux",
         "arch": "x86_64",
+        "out_name_template": "SlicerDSpace-{tag}-Linux-x64.tar.gz",
         "out_name": f"SlicerDSpace-{RELEASE_TAG}-Linux-x64.tar.gz",
         "ext_prefix": "SlicerDSpace",
         "slicer_subdir": "Slicer-5.10",
@@ -73,11 +107,23 @@ SOURCE_BUNDLES: dict[str, dict[str, str]] = {
         "bundle_key": "macos_arm64_base",
         "os": "macos",
         "arch": "arm64",
+        "out_name_template": "SlicerDSpace-{tag}-macOS-arm64.tar.gz",
         "out_name": f"SlicerDSpace-{RELEASE_TAG}-macOS-arm64.tar.gz",
         "ext_prefix": "SlicerDSpace/Slicer.app/Contents/Extensions-34045/SlicerDSpace",
         "slicer_subdir": "Slicer-5.10",
     },
 }
+
+
+def _release_base_url(release_tag: str, repo: str = GITHUB_REPO) -> str:
+    return f"https://github.com/{repo}/releases/download/{release_tag}"
+
+
+def _assert_mutable_release_tag(release_tag: str, *, dry_run: bool = False) -> None:
+    if not dry_run and str(release_tag or "").strip() in IMMUTABLE_LEGACY_TAGS:
+        raise RuntimeError(
+            f"Refusing to modify immutable legacy release tag {release_tag!r}; target v1.0.0 or a newer release tag."
+        )
 
 
 def _upload_release_files(
@@ -105,11 +151,18 @@ def _upload_release_files(
     raise RuntimeError(f"Failed to upload release assets after 3 attempts: {files}")
 
 
-def _download_verified_part(filename: str, expected_size: int, expected_sha256: str, dest: Path) -> Path:
+def _download_verified_part(
+    filename: str,
+    expected_size: int,
+    expected_sha256: str,
+    dest: Path,
+    *,
+    base_url: str = RELEASE_BASE_URL,
+) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.is_file() and sha256_file(dest) == expected_sha256:
         return dest
-    url = f"{RELEASE_BASE_URL}/{filename}"
+    url = f"{base_url.rstrip('/')}/{filename}"
     for attempt in range(1, 4):
         try:
             print(f"[download] {filename} (attempt {attempt}/3)...", flush=True)
@@ -225,12 +278,17 @@ def _should_skip_member(
     ext_prefix: str,
     qt_root: str,
     *,
+    decouple_model_assets: bool = False,
     replace_macos_ukf: bool = False,
     replace_ukf_runtime_dir: str | None = None,
     replace_surface_runtime_dir: str | None = None,
     replace_wma_source: bool = False,
     slicer_subdir: str = "Slicer-5.10",
 ) -> bool:
+    if decouple_model_assets:
+        bma_root = f"{ext_prefix}/bundled-model-assets"
+        if norm_path == bma_root or norm_path.startswith(bma_root + "/"):
+            return True
     wma_root = f"{ext_prefix}/bundled-model-assets/bundles/wma"
     if norm_path == wma_root or norm_path.startswith(wma_root + "/"):
         return True
@@ -263,6 +321,150 @@ def _should_skip_member(
         ):
             return True
     return False
+
+
+def cmd_build_model_pack(args: argparse.Namespace) -> int:
+    pack_id = args.pack
+    release_tag = str(args.release_tag or RELEASE_TAG)
+    repo = str(args.repo or GITHUB_REPO)
+    _assert_mutable_release_tag(release_tag, dry_run=bool(args.dry_run))
+
+    spec = CORE_MODEL_PACK_SPECS[pack_id]
+    work_dir = args.work_dir.expanduser().resolve()
+    out_dir = args.out_dir.expanduser().resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    assets_dir = (
+        args.asset_root.expanduser().resolve()
+        if getattr(args, "asset_root", None)
+        else (work_dir / f"model-assets-{pack_id}")
+    )
+    assets_dir.mkdir(parents=True, exist_ok=True)
+
+    from scripts.download_model_assets import download_asset_urls, load_manifest, resolve_asset_plan
+
+    for manifest_name, profile_name in spec["manifest_sources"]:
+        manifest_path = REPO_ROOT / "models" / manifest_name
+        manifest = load_manifest(manifest_path)
+        plan = resolve_asset_plan(manifest, profile_name)
+        download_asset_urls(
+            assets_dir,
+            plan,
+            manifest,
+            source_ids=(),
+            base_urls=(),
+            allow_planned_sources=False,
+            force=False,
+        )
+
+    files = collect_model_pack_files(pack_id, repo_root=REPO_ROOT)
+    filename = spec["filename_template"].format(tag=release_tag)
+    archive_path = out_dir / filename
+    size_bytes, digest = write_deterministic_tar_gz(assets_dir, files, archive_path)
+
+    # Verify archive members match expected manifest files 1-to-1 and exclude upstream-only IIT.
+    with tarfile.open(archive_path, "r:gz") as tf:
+        members = sorted(m.name for m in tf.getmembers() if m.isfile())
+    if members != sorted(files):
+        raise RuntimeError(f"Pack archive member mismatch for {pack_id}: got {members}, expected {sorted(files)}")
+    if any(m.endswith("/IITmean_b0_256.nii.gz") for m in members):
+        raise RuntimeError(f"Refusing upstream-only IIT template in pack {pack_id}")
+
+    if not getattr(args, "asset_root", None):
+        shutil.rmtree(assets_dir, ignore_errors=True)
+
+    rel_base = _release_base_url(release_tag, repo)
+    parts, upload_paths = split_file_if_needed(
+        archive_path,
+        release_base_url=rel_base,
+        remove_unsplit_when_split=True,
+    )
+    if not args.dry_run:
+        _upload_release_files(upload_paths, release_tag=release_tag, repo=repo)
+        for p in upload_paths:
+            p.unlink(missing_ok=True)
+
+    receipt = manifest_model_pack_entry(
+        pack_id,
+        size_bytes=size_bytes,
+        sha256=digest,
+        files=files,
+        parts=parts,
+        published=not args.dry_run,
+        release_tag=release_tag,
+        release_base_url=rel_base,
+    )
+    receipt_path = out_dir / f"model-pack-receipt-{pack_id}.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    print(f"[model-pack-receipt] Wrote {receipt_path} ({size_bytes:,} bytes, sha256={digest})", flush=True)
+    return 0
+
+
+def apply_model_pack_receipts(
+    receipts_dir: Path,
+    *,
+    release_tag: str = RELEASE_TAG,
+    repo: str = GITHUB_REPO,
+) -> dict[str, dict[str, Any]]:
+    """Merge model-pack-receipt-*.json files into models/release_packs_manifest.json and return core pack map."""
+    receipt_files = sorted(receipts_dir.expanduser().resolve().rglob("model-pack-receipt-*.json"))
+    packs_manifest_path = REPO_ROOT / "models" / "release_packs_manifest.json"
+    packs_manifest = json.loads(packs_manifest_path.read_text(encoding="utf-8"))
+    existing_packs = dict(packs_manifest.get("packs") or {})
+    ingested: dict[str, dict[str, Any]] = {}
+    for rf in receipt_files:
+        rec = json.loads(rf.read_text(encoding="utf-8"))
+        pid = str(rec.get("id") or "").strip()
+        if pid:
+            ingested[pid] = rec
+            existing_packs[pid] = rec
+
+    ordered_packs: dict[str, dict[str, Any]] = {}
+    for pid in CORE_MODEL_PACK_ORDER:
+        if pid in existing_packs:
+            ordered_packs[pid] = existing_packs[pid]
+    for pid in ("wma_org", "wma_naba", "wma_east_west"):
+        if pid in existing_packs:
+            ordered_packs[pid] = existing_packs[pid]
+    for pid, rec in existing_packs.items():
+        if pid not in ordered_packs:
+            ordered_packs[pid] = rec
+
+    rel_base = _release_base_url(release_tag, repo)
+    packs_manifest["release_tag"] = release_tag
+    packs_manifest["release_base_url"] = rel_base
+    packs_manifest["packs"] = ordered_packs
+    packs_manifest_path.write_text(json.dumps(packs_manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"[model-pack-receipt] Synced {len(ingested)} core model pack(s) into {packs_manifest_path}", flush=True)
+
+    _update_python_release_tag(REPO_ROOT / "shared" / "installer_script_builder.py", release_tag)
+    return {pid: ordered_packs[pid] for pid in CORE_MODEL_PACK_ORDER if pid in ordered_packs}
+
+
+def _update_python_release_tag(py_path: Path, release_tag: str) -> bool:
+    if not py_path.is_file():
+        return False
+    src = py_path.read_text(encoding="utf-8")
+    new_src, count = re.subn(
+        r'^(RELEASE_TAG\s*=\s*)"[^"]+"',
+        rf'\g<1>"{release_tag}"',
+        src,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count and new_src != src:
+        py_path.write_text(new_src, encoding="utf-8")
+        print(f"[sync-metadata] Updated RELEASE_TAG={release_tag} in {py_path}", flush=True)
+        return True
+    return False
+
+
+def cmd_apply_model_receipts(args: argparse.Namespace) -> int:
+    apply_model_pack_receipts(
+        args.receipts_dir,
+        release_tag=str(args.release_tag or RELEASE_TAG),
+        repo=str(args.repo or GITHUB_REPO),
+    )
+    return 0
 
 
 def cmd_build_atlas(args: argparse.Namespace) -> int:
@@ -323,48 +525,85 @@ def cmd_build_atlas(args: argparse.Namespace) -> int:
 
 def cmd_repack_os_base(args: argparse.Namespace) -> int:
     target = args.target
+    release_tag = str(getattr(args, "release_tag", "") or RELEASE_TAG)
+    repo = str(getattr(args, "repo", "") or GITHUB_REPO)
+    decouple_model_assets = not bool(getattr(args, "keep_bundled_model_assets", False))
+    _assert_mutable_release_tag(release_tag, dry_run=bool(args.dry_run))
+
     spec = SOURCE_BUNDLES[target]
+    out_name = spec["out_name_template"].format(tag=release_tag)
+    rel_base = _release_base_url(release_tag, repo)
     work_dir = args.work_dir.expanduser().resolve()
     out_dir = args.out_dir.expanduser().resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    artifacts_path = REPO_ROOT / "docs" / "website" / "installer_artifacts.json"
-    artifacts = json.loads(artifacts_path.read_text(encoding="utf-8"))
-    bundle_spec = artifacts["bundles"][spec["bundle_key"]]
-    source_filename = str(bundle_spec["filename"])
-    source_sha256 = str(bundle_spec["sha256"])
-    source_size = int(bundle_spec["size_bytes"])
-    source_parts = list(bundle_spec.get("parts") or ())
-
-    parts_dir = work_dir / f"parts-{target}"
-    old_archive = work_dir / f"{source_filename}.source"
-    if not (old_archive.is_file() and sha256_file(old_archive) == source_sha256):
-        if source_parts:
-            part_paths = []
-            for pspec in source_parts:
-                pname = str(pspec["filename"])
-                psize = int(pspec["size_bytes"])
-                psha = str(pspec["sha256"])
-                part_paths.append(_download_verified_part(pname, psize, psha, parts_dir / pname))
-            merging = old_archive.with_name(old_archive.name + ".merging")
-            h = hashlib.sha256()
-            with merging.open("wb") as out_fh:
-                for pp in part_paths:
-                    with pp.open("rb") as in_fh:
-                        while True:
-                            buf = in_fh.read(16 * 1024 * 1024)
-                            if not buf:
-                                break
-                            out_fh.write(buf)
-                            h.update(buf)
-            if h.hexdigest() != source_sha256:
-                merging.unlink(missing_ok=True)
-                raise RuntimeError(f"Merged source SHA-256 mismatch for {source_filename}")
-            os.replace(merging, old_archive)
-            shutil.rmtree(parts_dir, ignore_errors=True)
+    explicit_source = getattr(args, "source_archive", None)
+    if explicit_source is not None:
+        old_archive = Path(explicit_source).expanduser().resolve()
+        if not old_archive.is_file():
+            raise FileNotFoundError(f"Explicit source archive not found: {old_archive}")
+        cleanup_source = False
+    else:
+        source_tag = str(getattr(args, "source_release_tag", "") or "").strip()
+        artifacts_path = REPO_ROOT / "docs" / "website" / "installer_artifacts.json"
+        artifacts = json.loads(artifacts_path.read_text(encoding="utf-8"))
+        bundle_spec = (artifacts.get("bundles") or {}).get(spec["bundle_key"]) or {}
+        if source_tag == "v0.1.1" or not bundle_spec.get("sha256"):
+            src_info = V011_BOOTSTRAP_BUNDLES[target]
+            source_filename = str(src_info["filename"])
+            source_sha256 = str(src_info["sha256"])
+            source_size = int(src_info["size_bytes"])
+            source_parts = list(src_info.get("parts") or ())
+            source_base_url = str(src_info["base_url"])
         else:
-            _download_verified_part(source_filename, source_size, source_sha256, old_archive)
+            source_filename = str(bundle_spec["filename"])
+            source_sha256 = str(bundle_spec["sha256"])
+            source_size = int(bundle_spec["size_bytes"])
+            source_parts = list(bundle_spec.get("parts") or ())
+            source_base_url = (
+                _release_base_url(source_tag, repo)
+                if source_tag
+                else str(artifacts.get("release_base_url") or RELEASE_BASE_URL)
+            )
+
+        parts_dir = work_dir / f"parts-{target}"
+        old_archive = work_dir / f"{source_filename}.source"
+        cleanup_source = True
+        if not (old_archive.is_file() and sha256_file(old_archive) == source_sha256):
+            if source_parts:
+                part_paths = []
+                for pspec in source_parts:
+                    pname = str(pspec["filename"])
+                    psize = int(pspec["size_bytes"])
+                    psha = str(pspec["sha256"])
+                    part_paths.append(
+                        _download_verified_part(pname, psize, psha, parts_dir / pname, base_url=source_base_url)
+                    )
+                merging = old_archive.with_name(old_archive.name + ".merging")
+                h = hashlib.sha256()
+                with merging.open("wb") as out_fh:
+                    for pp in part_paths:
+                        with pp.open("rb") as in_fh:
+                            while True:
+                                buf = in_fh.read(16 * 1024 * 1024)
+                                if not buf:
+                                    break
+                                out_fh.write(buf)
+                                h.update(buf)
+                if h.hexdigest() != source_sha256:
+                    merging.unlink(missing_ok=True)
+                    raise RuntimeError(f"Merged source SHA-256 mismatch for {source_filename}")
+                os.replace(merging, old_archive)
+                shutil.rmtree(parts_dir, ignore_errors=True)
+            else:
+                _download_verified_part(
+                    source_filename,
+                    source_size,
+                    source_sha256,
+                    old_archive,
+                    base_url=source_base_url,
+                )
 
     ext_prefix = spec["ext_prefix"]
     slicer_subdir = spec["slicer_subdir"]
@@ -411,7 +650,7 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
     surf_pair = _download_verified_surface_runtime(target, work_dir)
     if surf_pair is not None:
         surface_rt_archive, surface_rt_dir = surf_pair
-    new_archive = out_dir / spec["out_name"]
+    new_archive = out_dir / out_name
     tmp_new = new_archive.with_name(new_archive.name + ".tmp")
     saw_qt_entry = False
 
@@ -427,6 +666,7 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                     norm,
                     ext_prefix,
                     qt_root,
+                    decouple_model_assets=decouple_model_assets,
                     replace_macos_ukf=replace_macos_ukf,
                     replace_ukf_runtime_dir=standalone_ukf_dir if standalone_ukf_archive is not None else None,
                     replace_wma_source=fresh_wma_source_dir is not None,
@@ -503,6 +743,7 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
                     norm,
                     ext_prefix,
                     qt_root,
+                    decouple_model_assets=decouple_model_assets,
                     replace_macos_ukf=replace_macos_ukf,
                     replace_ukf_runtime_dir=standalone_ukf_dir if standalone_ukf_archive is not None else None,
                     replace_surface_runtime_dir=surface_rt_dir if surface_rt_archive is not None else None,
@@ -647,7 +888,8 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
         raise RuntimeError(f"Expected module root {qt_root}/SlicerDSpace.py was not found in source archive")
 
     os.replace(tmp_new, new_archive)
-    old_archive.unlink(missing_ok=True)
+    if cleanup_source:
+        old_archive.unlink(missing_ok=True)
 
     audit = audit_package(new_archive, REPO_ROOT)
     layout = inspect_archive_layout(new_archive)
@@ -657,23 +899,34 @@ def cmd_repack_os_base(args: argparse.Namespace) -> int:
         raise RuntimeError(f"inspect_archive_layout failed for {new_archive.name}: {json.dumps(layout, indent=2)}")
     if audit["bundled_wma_atlases"] != [] or layout["bundled_wma_atlases"] != []:
         raise RuntimeError(f"WMA atlases leaked into {new_archive.name}")
-    if audit["bundled_python_file_count"] <= 0 or audit["bundled_model_asset_file_count"] <= 0:
-        raise RuntimeError(f"Missing bundled Python/model assets in {new_archive.name}")
+    if audit["bundled_python_file_count"] <= 0:
+        raise RuntimeError(f"Missing bundled Python runtime in {new_archive.name}")
+    if decouple_model_assets:
+        if audit["bundled_model_asset_file_count"] != 0:
+            raise RuntimeError(
+                f"Expected decoupled base archive without bundled model weights, found {audit['bundled_model_asset_file_count']} files in {new_archive.name}"
+            )
+    elif audit["bundled_model_asset_file_count"] <= 0:
+        raise RuntimeError(f"Missing bundled model assets in {new_archive.name}")
 
     size_bytes = new_archive.stat().st_size
     digest = sha256_file(new_archive)
-    parts, upload_paths = split_file_if_needed(new_archive, remove_unsplit_when_split=True)
+    parts, upload_paths = split_file_if_needed(
+        new_archive,
+        release_base_url=rel_base,
+        remove_unsplit_when_split=True,
+    )
     if not args.dry_run:
-        _upload_release_files(upload_paths)
-    for p in upload_paths:
-        p.unlink(missing_ok=True)
+        _upload_release_files(upload_paths, release_tag=release_tag, repo=repo)
+        for p in upload_paths:
+            p.unlink(missing_ok=True)
 
     receipt: dict[str, Any] = {
         "os": spec["os"],
         "arch": spec["arch"],
         "mode": "base",
-        "filename": spec["out_name"],
-        "url": "" if parts else f"{RELEASE_BASE_URL}/{spec['out_name']}",
+        "filename": out_name,
+        "url": "" if parts else f"{rel_base}/{out_name}",
         "size_bytes": size_bytes,
         "sha256": digest,
         "published": not args.dry_run,
@@ -728,16 +981,81 @@ def _render_js_bundles_block(bundles: dict[str, dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _sync_customizer_js_bundles(bundles: dict[str, dict[str, Any]]) -> Path:
+def _render_js_model_packs_block(model_packs: dict[str, dict[str, Any]]) -> str:
+    keys = [k for k in CORE_MODEL_PACK_ORDER if k in model_packs] + [
+        k for k in model_packs if k not in CORE_MODEL_PACK_ORDER
+    ]
+    lines = ["    // __ARTIFACTS_MODEL_PACKS_BEGIN__", "    model_packs: {"]
+    for idx, key in enumerate(keys):
+        p = model_packs[key]
+        fn = str(p["filename"])
+        parts = list(p.get("parts") or ())
+        url_expr = "''" if parts else f"RELEASE_BASE + '/{fn}'"
+        lines.append(f"      {key}: {{")
+        lines.append(f"        id: '{key}',")
+        lines.append(f"        filename: '{fn}',")
+        lines.append(f"        url: {url_expr},")
+        lines.append(f"        size_bytes: {int(p['size_bytes'])},")
+        lines.append(f"        sha256: '{p['sha256']}',")
+        if not parts:
+            lines.append("        parts: []")
+        else:
+            lines.append("        parts: [")
+            for p_idx, sp in enumerate(parts):
+                pfn = str(sp["filename"])
+                pcomma = "," if p_idx + 1 < len(parts) else ""
+                lines.append("          {")
+                lines.append(f"            filename: '{pfn}',")
+                lines.append(f"            size_bytes: {int(sp['size_bytes'])},")
+                lines.append(f"            sha256: '{sp['sha256']}',")
+                lines.append(f"            url: RELEASE_BASE + '/{pfn}'")
+                lines.append(f"          }}{pcomma}")
+            lines.append("        ]")
+        comma = "," if idx + 1 < len(keys) else ""
+        lines.append(f"      }}{comma}")
+    lines.append("    },")
+    lines.append("    // __ARTIFACTS_MODEL_PACKS_END__")
+    return "\n".join(lines)
+
+
+def _sync_customizer_js_bundles(
+    bundles: dict[str, dict[str, Any]],
+    *,
+    model_packs: dict[str, dict[str, Any]] | None = None,
+    release_tag: str | None = None,
+) -> Path:
     js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
     js_src = js_path.read_text(encoding="utf-8")
+    new_js = js_src
+
+    if release_tag:
+        new_js, tag_count = re.subn(
+            r"(var\s+RELEASE_TAG\s*=\s*')[^']+(';)",
+            rf"\g<1>{release_tag}\g<2>",
+            new_js,
+            count=1,
+        )
+        if tag_count != 1:
+            raise RuntimeError(f"Could not update RELEASE_TAG in {js_path}")
+
+    if model_packs is not None:
+        mp_pattern = re.compile(
+            r"^[ \t]*// __ARTIFACTS_MODEL_PACKS_BEGIN__.*?^[ \t]*// __ARTIFACTS_MODEL_PACKS_END__",
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        if not mp_pattern.search(new_js):
+            raise RuntimeError(
+                f"Missing __ARTIFACTS_MODEL_PACKS_BEGIN__/__ARTIFACTS_MODEL_PACKS_END__ markers in {js_path}"
+            )
+        new_js = mp_pattern.sub(lambda _m: _render_js_model_packs_block(model_packs), new_js, count=1)
+
     pattern = re.compile(
         r"^[ \t]*// __ARTIFACTS_BUNDLES_BEGIN__.*?^[ \t]*// __ARTIFACTS_BUNDLES_END__",
         flags=re.MULTILINE | re.DOTALL,
     )
-    if not pattern.search(js_src):
+    if not pattern.search(new_js):
         raise RuntimeError(f"Missing __ARTIFACTS_BUNDLES_BEGIN__/__ARTIFACTS_BUNDLES_END__ markers in {js_path}")
-    new_js = pattern.sub(lambda _m: _render_js_bundles_block(bundles), js_src, count=1)
+    new_js = pattern.sub(lambda _m: _render_js_bundles_block(bundles), new_js, count=1)
 
     for os_key, _, bundle_key, _ in SETUP_OS_ORDER:
         if bundle_key in bundles:
@@ -788,6 +1106,7 @@ def _verify_setup_py(
     os_key: str,
     bundle_key: str,
     bundles: dict[str, dict[str, Any]],
+    model_packs: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     if not all(ord(ch) < 128 or ch == "·" for ch in py_src):
         raise RuntimeError(f"Non-ASCII wording detected in {zip_path}")
@@ -802,6 +1121,17 @@ def _verify_setup_py(
         raise RuntimeError(
             f"Embedded {bundle_key} sha256 mismatch in {zip_path}: {actual_bundle_sha} != {expected_bundle_sha}"
         )
+    if model_packs:
+        if cfg.get("selected_model_packs") != list(CORE_MODEL_PACK_ORDER):
+            raise RuntimeError(
+                f"Expected default selected_model_packs={list(CORE_MODEL_PACK_ORDER)} in {zip_path}, got {cfg.get('selected_model_packs')!r}"
+            )
+        emb_mp = ((cfg.get("artifacts") or {}).get("model_packs") or {})
+        for pid, spec in model_packs.items():
+            exp_sha = str(spec.get("sha256") or "")
+            act_sha = str((emb_mp.get(pid) or {}).get("sha256") or "")
+            if exp_sha and act_sha != exp_sha:
+                raise RuntimeError(f"Embedded model pack {pid} sha256 mismatch in {zip_path}: {act_sha} != {exp_sha}")
 
 
 def _verify_generated_setup_zip(
@@ -810,6 +1140,7 @@ def _verify_generated_setup_zip(
     bundle_key: str,
     expected_s4ext_os: str,
     bundles: dict[str, dict[str, Any]],
+    model_packs: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     if not zip_path.is_file():
         raise RuntimeError(f"Missing generated setup archive: {zip_path}")
@@ -832,7 +1163,9 @@ def _verify_generated_setup_zip(
                 if f"os {expected_s4ext_os}" not in s4ext_text or f"slicer_revision {rev}" not in s4ext_text:
                     raise RuntimeError(f"Unexpected .s4ext metadata inside {zip_path} ({s4ext_rel})")
                 if not verified_py:
-                    _verify_setup_py(zf.read(py_rel).decode("utf-8"), zip_path, os_key, bundle_key, bundles)
+                    _verify_setup_py(
+                        zf.read(py_rel).decode("utf-8"), zip_path, os_key, bundle_key, bundles, model_packs=model_packs
+                    )
                     verified_py = True
         else:
             if "SlicerDSpaceSetup/SlicerDSpaceSetup.s4ext" not in names:
@@ -847,7 +1180,9 @@ def _verify_generated_setup_zip(
                 if f"os {expected_s4ext_os}" not in s4ext_text:
                     raise RuntimeError(f"Unexpected .s4ext metadata inside {zip_path} ({s4ext_rel})")
                 if not verified_py:
-                    _verify_setup_py(zf.read(py_rel).decode("utf-8"), zip_path, os_key, bundle_key, bundles)
+                    _verify_setup_py(
+                        zf.read(py_rel).decode("utf-8"), zip_path, os_key, bundle_key, bundles, model_packs=model_packs
+                    )
                     verified_py = True
 
 
@@ -893,12 +1228,15 @@ def build_setup_zips(
         or f"https://github.com/{GITHUB_REPO}/releases/download/{release_tag}"
     ).rstrip("/")
     bundles = installer_artifacts.get("bundles") or {}
+    model_packs = installer_artifacts.get("model_packs") or {}
     setup_meta: dict[str, dict[str, Any]] = {}
     written_paths: list[Path] = []
 
     for os_key, filename, bundle_key, expected_s4ext_os in SETUP_OS_ORDER:
         zip_path = out_dir / filename
-        _verify_generated_setup_zip(zip_path, os_key, bundle_key, expected_s4ext_os, bundles)
+        _verify_generated_setup_zip(
+            zip_path, os_key, bundle_key, expected_s4ext_os, bundles, model_packs=model_packs or None
+        )
         size_bytes = zip_path.stat().st_size
         digest = sha256_file(zip_path)
         setup_meta[os_key] = {
@@ -999,42 +1337,77 @@ def build_code_overlay(
     return manifest, [overlay_path, manifest_path]
 
 
-def _format_sha256sums(artifacts: dict[str, Any], packs_manifest: dict[str, Any]) -> str:
+def _format_sha256sums(
+    artifacts: dict[str, Any],
+    packs_manifest: dict[str, Any],
+    *,
+    release_tag: str | None = None,
+) -> str:
+    tag = str(release_tag or artifacts.get("release_tag") or RELEASE_TAG)
     entries: list[tuple[str, str]] = []
     merged_entries: list[tuple[str, str]] = []
+    seen_names: set[str] = set()
+
+    def _add(sha: str, name: str, *, merged: bool = False) -> None:
+        if not sha or not name or name in seen_names:
+            return
+        seen_names.add(name)
+        (merged_entries if merged else entries).append((sha, name))
+
     bundles = artifacts.get("bundles") or {}
     for key in [k for k in _BUNDLE_ORDER if k in bundles] + [k for k in bundles if k not in _BUNDLE_ORDER]:
         b = bundles[key]
         parts = list(b.get("parts") or ())
         if parts:
             for p in parts:
-                entries.append((str(p["sha256"]), str(p["filename"])))
+                _add(str(p["sha256"]), str(p["filename"]))
             if b.get("sha256") and b.get("filename"):
-                merged_entries.append((str(b["sha256"]), str(b["filename"])))
+                _add(str(b["sha256"]), str(b["filename"]), merged=True)
         elif b.get("sha256"):
-            entries.append((str(b["sha256"]), str(b["filename"])))
+            _add(str(b["sha256"]), str(b["filename"]))
+
+    model_packs = artifacts.get("model_packs") or {}
+    for key in [k for k in CORE_MODEL_PACK_ORDER if k in model_packs] + [
+        k for k in model_packs if k not in CORE_MODEL_PACK_ORDER
+    ]:
+        p = model_packs[key]
+        parts = list(p.get("parts") or ())
+        if parts:
+            for sp in parts:
+                _add(str(sp["sha256"]), str(sp["filename"]))
+            if p.get("sha256") and p.get("filename"):
+                _add(str(p["sha256"]), str(p["filename"]), merged=True)
+        elif p.get("sha256"):
+            _add(str(p["sha256"]), str(p["filename"]))
+
     code_overlay = artifacts.get("code_overlay") or {}
     if code_overlay.get("sha256") and code_overlay.get("filename"):
-        entries.append((str(code_overlay["sha256"]), str(code_overlay["filename"])))
+        _add(str(code_overlay["sha256"]), str(code_overlay["filename"]))
     setup_installers = artifacts.get("setup_installers") or {}
     for os_key, _, _, _ in SETUP_OS_ORDER:
         rec = setup_installers.get(os_key)
         if rec and rec.get("sha256") and rec.get("filename"):
-            entries.append((str(rec["sha256"]), str(rec["filename"])))
+            _add(str(rec["sha256"]), str(rec["filename"]))
+
     packs = packs_manifest.get("packs") or {}
-    pack_order = [k for k in ("wma_org", "wma_naba", "wma_east_west") if k in packs] + [
-        k for k in packs if k not in ("wma_org", "wma_naba", "wma_east_west")
+    pack_order = [k for k in (*CORE_MODEL_PACK_ORDER, "wma_org", "wma_naba", "wma_east_west") if k in packs] + [
+        k for k in packs if k not in (*CORE_MODEL_PACK_ORDER, "wma_org", "wma_naba", "wma_east_west")
     ]
+    tag_segment = f"/releases/download/{tag}/"
     for key in pack_order:
         p = packs[key]
         parts = list(p.get("parts") or ())
+        urls = [str(sp.get("url") or "") for sp in parts] if parts else [str(p.get("url") or "")]
+        if tag != WMA_ATLAS_RELEASE_TAG and urls and not any(tag_segment in u for u in urls):
+            continue
         if parts:
             for sp in parts:
-                entries.append((str(sp["sha256"]), str(sp["filename"])))
+                _add(str(sp["sha256"]), str(sp["filename"]))
             if p.get("sha256") and p.get("filename"):
-                merged_entries.append((str(p["sha256"]), str(p["filename"])))
+                _add(str(p["sha256"]), str(p["filename"]), merged=True)
         elif p.get("sha256"):
-            entries.append((str(p["sha256"]), str(p["filename"])))
+            _add(str(p["sha256"]), str(p["filename"]))
+
     out = "".join(f"{sha}  {name}\n" for sha, name in entries if sha and name)
     if merged_entries:
         out += "\n# Merged multi-part archive SHA-256 (after concatenating .001..N parts):\n"
@@ -1042,14 +1415,93 @@ def _format_sha256sums(artifacts: dict[str, Any], packs_manifest: dict[str, Any]
     return out
 
 
+def _sync_release_tag_references(release_tag: str) -> None:
+    """Update CLI installer/CI/website documentation references when publishing a new release tag (e.g. v1.0.0)."""
+    _update_python_release_tag(REPO_ROOT / "shared" / "installer_script_builder.py", release_tag)
+    _update_python_release_tag(REPO_ROOT / ".github" / "scripts" / "ci_install_dspace.py", release_tag)
+    if release_tag == WMA_ATLAS_RELEASE_TAG:
+        return
+
+    index_path = REPO_ROOT / "docs" / "site" / "index.html"
+    if index_path.is_file():
+        src = index_path.read_text(encoding="utf-8")
+        new_src = src
+        new_src = re.sub(
+            r"(/releases/download/)v[0-9]+\.[0-9]+\.[0-9]+(/SlicerDSpace-v[0-9]+\.[0-9]+\.[0-9]+-(?:Linux-x64\.tar\.gz|Windows-x64\.zip|macOS-arm64\.tar\.gz))",
+            rf"\g<1>{release_tag}\2",
+            new_src,
+        )
+        new_src = re.sub(
+            r"SlicerDSpace-v[0-9]+\.[0-9]+\.[0-9]+-(Linux-x64\.tar\.gz|Windows-x64\.zip|macOS-arm64\.tar\.gz)",
+            rf"SlicerDSpace-{release_tag}-\1",
+            new_src,
+        )
+        new_src = new_src.replace(
+            " (with the v0.1.1 archive on Linux, UKF tractography requires this update):",
+            ":",
+        )
+        old_opt_dd = (
+            "Base archives bundle Python packages, core deep-learning weights and native runtimes; fetch the NITRC "
+            "<code>IITmean_b0_256.nii.gz</code> template for PNL CNN masking or optional WMA atlases "
+            "(<code>wma</code>, <code>wma-naba</code>, <code>wma-east-west</code>) by previewing with "
+            '<code>"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/scripts/setup_optional_assets.py" '
+            "--profiles pnl-cnn</code> and then adding <code>--execute --accept-terms</code> to install."
+        )
+        new_opt_dd = (
+            "OS base archives bundle Python packages and native runtimes; model weights are packaged as separate "
+            "modular packs (installed by default in Route A Setup). When unpacking a manual CLI archive, fetch core "
+            'model weights via <code>"$SLICER_LAUNCHER" --launch PythonSlicer '
+            '"$DSPACE_REPO/scripts/download_model_assets.py" --profile core</code>, and fetch PNL CNN weights, '
+            "TractCloud, the NITRC <code>IITmean_b0_256.nii.gz</code> template, or optional WMA atlases "
+            "(<code>wma</code>, <code>wma-naba</code>, <code>wma-east-west</code>) by previewing with "
+            '<code>"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/scripts/setup_optional_assets.py" '
+            "--profiles pnl-cnn tractcloud surface-postprocess</code> and then adding "
+            "<code>--execute --accept-terms</code> to install."
+        )
+        new_src = new_src.replace(old_opt_dd, new_opt_dd)
+        if new_src != src:
+            index_path.write_text(new_src, encoding="utf-8")
+            print(f"[sync-metadata] Updated CLI release references in {index_path}", flush=True)
+
+    editorial_test = REPO_ROOT / "Testing" / "Python" / "test_website_editorial_copy.py"
+    if editorial_test.is_file():
+        tsrc = editorial_test.read_text(encoding="utf-8")
+        new_tsrc = re.sub(
+            r"SlicerDSpace-v[0-9]+\.[0-9]+\.[0-9]+-Linux-x64\.tar\.gz",
+            f"SlicerDSpace-{release_tag}-Linux-x64.tar.gz",
+            tsrc,
+        )
+        if new_tsrc != tsrc:
+            editorial_test.write_text(new_tsrc, encoding="utf-8")
+            print(f"[sync-metadata] Updated CLI marker in {editorial_test}", flush=True)
+
+
 def cmd_sync_metadata(args: argparse.Namespace) -> int:
+    release_tag = str(args.release_tag or RELEASE_TAG)
+    repo = str(args.repo or GITHUB_REPO)
+    _assert_mutable_release_tag(release_tag, dry_run=bool(args.dry_run))
+    rel_base = _release_base_url(release_tag, repo)
+
     receipts_dir = args.receipts_dir.expanduser().resolve()
     receipt_files = sorted(receipts_dir.rglob("os-base-receipt-*.json"))
-    if not receipt_files:
-        raise RuntimeError(f"No os-base-receipt-*.json files found under {receipts_dir}")
+    model_receipt_files = sorted(receipts_dir.rglob("model-pack-receipt-*.json"))
+    if not receipt_files and not model_receipt_files:
+        raise RuntimeError(f"No os-base-receipt-*.json or model-pack-receipt-*.json files found under {receipts_dir}")
+
+    core_model_packs: dict[str, dict[str, Any]] = {}
+    if model_receipt_files:
+        core_model_packs = apply_model_pack_receipts(receipts_dir, release_tag=release_tag, repo=repo)
+    else:
+        packs_manifest_existing = json.loads((REPO_ROOT / "models" / "release_packs_manifest.json").read_text(encoding="utf-8"))
+        for pid in CORE_MODEL_PACK_ORDER:
+            rec = (packs_manifest_existing.get("packs") or {}).get(pid)
+            if isinstance(rec, dict) and rec.get("sha256"):
+                core_model_packs[pid] = rec
 
     artifacts_path = REPO_ROOT / "docs" / "website" / "installer_artifacts.json"
     artifacts = json.loads(artifacts_path.read_text(encoding="utf-8"))
+    artifacts["release_tag"] = release_tag
+    artifacts["release_base_url"] = rel_base
     bundles = artifacts.setdefault("bundles", {})
     allowed_keys = ("os", "arch", "mode", "filename", "url", "size_bytes", "sha256", "published", "parts")
     for rf in receipt_files:
@@ -1058,13 +1510,38 @@ def cmd_sync_metadata(args: argparse.Namespace) -> int:
             rec_copy = {k: rec[k] for k in allowed_keys if k in rec}
             bundles[key] = rec_copy
 
-    _sync_customizer_js_bundles(bundles)
+    compact_model_packs: dict[str, dict[str, Any]] = {}
+    pack_keys = ("id", "tier", "default_install", "filename", "url", "size_bytes", "sha256", "published", "parts")
+    for pid in CORE_MODEL_PACK_ORDER:
+        rec = core_model_packs.get(pid)
+        if isinstance(rec, dict) and rec.get("sha256"):
+            entry = {k: rec[k] for k in pack_keys if k in rec}
+            entry.setdefault("parts", [])
+            compact_model_packs[pid] = entry
+    if compact_model_packs:
+        artifacts["model_packs"] = compact_model_packs
+
+    # Keep models/release_packs_manifest.json bundles in sync with installer_artifacts.json BEFORE CodeOverlay!
+    packs_manifest_path = REPO_ROOT / "models" / "release_packs_manifest.json"
+    packs_manifest = json.loads(packs_manifest_path.read_text(encoding="utf-8"))
+    packs_manifest["release_tag"] = release_tag
+    packs_manifest["release_base_url"] = rel_base
+    packs_manifest["bundles"] = bundles
+    packs_manifest_path.write_text(json.dumps(packs_manifest, indent=2) + "\n", encoding="utf-8")
+    print(f"[sync-metadata] Updated {packs_manifest_path}", flush=True)
+
+    _sync_release_tag_references(release_tag)
+    _sync_customizer_js_bundles(
+        bundles,
+        model_packs=compact_model_packs if compact_model_packs else None,
+        release_tag=release_tag,
+    )
 
     setup_dir = (args.setup_out_dir or (receipts_dir / "setup-zips")).expanduser().resolve()
     setup_meta, setup_paths = build_setup_zips(
         setup_dir,
         artifacts,
-        release_tag=args.release_tag,
+        release_tag=release_tag,
         published=not args.dry_run,
     )
     artifacts["setup_installers"] = setup_meta
@@ -1073,8 +1550,8 @@ def cmd_sync_metadata(args: argparse.Namespace) -> int:
 
     overlay_manifest, overlay_paths = build_code_overlay(
         setup_dir / "overlay",
-        release_tag=args.release_tag,
-        repo=args.repo,
+        release_tag=release_tag,
+        repo=repo,
     )
     artifacts["code_overlay"] = {
         **overlay_manifest["overlay"],
@@ -1086,23 +1563,22 @@ def cmd_sync_metadata(args: argparse.Namespace) -> int:
     artifacts_path.write_text(json.dumps(artifacts, indent=2) + "\n", encoding="utf-8")
     print(f"[sync-metadata] Updated {artifacts_path}", flush=True)
 
-    packs_manifest_path = REPO_ROOT / "models" / "release_packs_manifest.json"
-    packs_manifest = json.loads(packs_manifest_path.read_text(encoding="utf-8"))
     sha_out = (args.sha256sums_out or (receipts_dir / "SHA256SUMS.txt")).expanduser().resolve()
     sha_out.parent.mkdir(parents=True, exist_ok=True)
-    sha_out.write_text(_format_sha256sums(artifacts, packs_manifest), encoding="utf-8")
+    sha_out.write_text(_format_sha256sums(artifacts, packs_manifest, release_tag=release_tag), encoding="utf-8")
     print(f"[sync-metadata] Wrote {sha_out}", flush=True)
 
     if args.upload_sha256sums and not args.dry_run:
         _upload_release_files(
             [*overlay_paths, *setup_paths, sha_out],
-            release_tag=args.release_tag,
-            repo=args.repo,
+            release_tag=release_tag,
+            repo=repo,
         )
     return 0
 
 
 def cmd_sync_code_overlay(args: argparse.Namespace) -> int:
+    _assert_mutable_release_tag(args.release_tag, dry_run=bool(args.dry_run))
     artifacts_path = REPO_ROOT / "docs" / "website" / "installer_artifacts.json"
     artifacts = json.loads(artifacts_path.read_text(encoding="utf-8"))
     out_dir = args.out_dir.expanduser().resolve()
@@ -1124,7 +1600,7 @@ def cmd_sync_code_overlay(args: argparse.Namespace) -> int:
     packs_manifest = json.loads(packs_manifest_path.read_text(encoding="utf-8"))
     sha_out = (args.sha256sums_out or (out_dir / "SHA256SUMS.txt")).expanduser().resolve()
     sha_out.parent.mkdir(parents=True, exist_ok=True)
-    sha_out.write_text(_format_sha256sums(artifacts, packs_manifest), encoding="utf-8")
+    sha_out.write_text(_format_sha256sums(artifacts, packs_manifest, release_tag=args.release_tag), encoding="utf-8")
     print(f"[sync-code-overlay] Wrote {sha_out}", flush=True)
 
     if not args.dry_run:
@@ -1137,10 +1613,12 @@ def cmd_sync_code_overlay(args: argparse.Namespace) -> int:
 
 
 def cmd_sync_setup_zips(args: argparse.Namespace) -> int:
+    _assert_mutable_release_tag(args.release_tag, dry_run=bool(args.dry_run))
     artifacts_path = REPO_ROOT / "docs" / "website" / "installer_artifacts.json"
     artifacts = json.loads(artifacts_path.read_text(encoding="utf-8"))
     bundles = artifacts.get("bundles") or {}
-    _sync_customizer_js_bundles(bundles)
+    model_packs = artifacts.get("model_packs") or None
+    _sync_customizer_js_bundles(bundles, model_packs=model_packs, release_tag=args.release_tag)
 
     out_dir = args.out_dir.expanduser().resolve()
     setup_meta, setup_paths = build_setup_zips(
@@ -1159,7 +1637,7 @@ def cmd_sync_setup_zips(args: argparse.Namespace) -> int:
     packs_manifest = json.loads(packs_manifest_path.read_text(encoding="utf-8"))
     sha_out = (args.sha256sums_out or (out_dir / "SHA256SUMS.txt")).expanduser().resolve()
     sha_out.parent.mkdir(parents=True, exist_ok=True)
-    sha_out.write_text(_format_sha256sums(artifacts, packs_manifest), encoding="utf-8")
+    sha_out.write_text(_format_sha256sums(artifacts, packs_manifest, release_tag=args.release_tag), encoding="utf-8")
     print(f"[sync-setup-zips] Wrote {sha_out}", flush=True)
 
     if not args.dry_run:
@@ -1175,16 +1653,41 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p_model = sub.add_parser(
+        "build-model-pack",
+        help="Download/verify one modular core model weight pack and upload tar.gz to release.",
+    )
+    p_model.add_argument("--pack", required=True, choices=CORE_MODEL_PACK_ORDER)
+    p_model.add_argument("--work-dir", required=True, type=Path)
+    p_model.add_argument("--out-dir", required=True, type=Path)
+    p_model.add_argument("--asset-root", default=None, type=Path, help="Optional pre-populated local verified asset root.")
+    p_model.add_argument("--release-tag", default=RELEASE_TAG)
+    p_model.add_argument("--repo", default=GITHUB_REPO)
+    p_model.add_argument("--dry-run", action="store_true")
+
+    p_apply_models = sub.add_parser(
+        "apply-model-receipts",
+        help="Merge model-pack-receipt-*.json files into models/release_packs_manifest.json before OS base repacking.",
+    )
+    p_apply_models.add_argument("--receipts-dir", required=True, type=Path)
+    p_apply_models.add_argument("--release-tag", default=RELEASE_TAG)
+    p_apply_models.add_argument("--repo", default=GITHUB_REPO)
+
     p_atlas = sub.add_parser("build-atlas", help="Download/verify one WMA atlas and upload tar.gz/split volumes.")
     p_atlas.add_argument("--atlas", required=True, choices=tuple(WMA_ATLAS_PACK_SPECS.keys()))
     p_atlas.add_argument("--work-dir", required=True, type=Path)
     p_atlas.add_argument("--out-dir", required=True, type=Path)
     p_atlas.add_argument("--dry-run", action="store_true")
 
-    p_base = sub.add_parser("repack-os-base", help="Repack v0.1.1 archive without WMA/IIT and with fresh HEAD code.")
+    p_base = sub.add_parser("repack-os-base", help="Repack slimmed OS Base archive without bundled model weights and with fresh HEAD code.")
     p_base.add_argument("--target", required=True, choices=tuple(SOURCE_BUNDLES.keys()))
     p_base.add_argument("--work-dir", required=True, type=Path)
     p_base.add_argument("--out-dir", required=True, type=Path)
+    p_base.add_argument("--release-tag", default=RELEASE_TAG)
+    p_base.add_argument("--source-release-tag", default="", help="Optional source release tag (e.g. v0.1.1 when bootstrapping v1.0.0).")
+    p_base.add_argument("--source-archive", default=None, type=Path, help="Optional local source base archive path.")
+    p_base.add_argument("--repo", default=GITHUB_REPO)
+    p_base.add_argument("--keep-bundled-model-assets", action="store_true", help="Keep bundled-model-assets inside OS Base archive (legacy monolithic layout).")
     p_base.add_argument("--macos-ukf-archive", default=None, type=Path, help="Optional local ukf-standalone-darwin-arm64.tar.gz path.")
     p_base.add_argument("--standalone-ukf-archive", default=None, type=Path, help="Optional local standalone UKF archive path for target OS.")
     p_base.add_argument("--skip-macos-ukf", action="store_true", help="Do not replace macOS UKF binary during repack.")
@@ -1193,7 +1696,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_sync = sub.add_parser(
         "sync-metadata",
-        help="Sync os-base-receipt-*.json checksums into installer_artifacts.json, website JS, setup zips, and SHA256SUMS.txt.",
+        help="Sync model-pack & os-base receipt checksums into release_packs_manifest.json, installer_artifacts.json, website JS, setup zips, and SHA256SUMS.txt.",
     )
     p_sync.add_argument("--receipts-dir", required=True, type=Path)
     p_sync.add_argument("--setup-out-dir", default=None, type=Path)
@@ -1224,6 +1727,10 @@ def main(argv: list[str] | None = None) -> int:
     p_overlay.add_argument("--dry-run", action="store_true")
 
     args = parser.parse_args(argv)
+    if args.command == "build-model-pack":
+        return cmd_build_model_pack(args)
+    if args.command == "apply-model-receipts":
+        return cmd_apply_model_receipts(args)
     if args.command == "build-atlas":
         return cmd_build_atlas(args)
     if args.command == "sync-metadata":

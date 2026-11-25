@@ -5,15 +5,17 @@ on:
     tags:
       - "v1.*"
       - "v2.*"
+      - "assets"
   workflow_dispatch:
     inputs:
       phase:
-        description: "Phase to execute: 'full-release' (5 modular model packs + 3 slimmed OS bases + Setup zips + overlay + website), 'model-packs' (5 modular model weight packs), 'os-bases' (repack 3 slimmed OS bases + overlay + website), 'code-overlay' (fast ~20s incremental code update + manifest), 'standalone-ukf', 'macos-ukf', 'setup-zips', or 'atlases'"
+        description: "Phase to execute: 'full-release' (3 slimmed OS bases + Setup zips + overlay + website), 'migrate-assets' (populate permanent assets release), 'model-packs' (5 modular model weight packs), 'os-bases', 'code-overlay', 'standalone-ukf', 'macos-ukf', 'setup-zips', or 'atlases'"
         required: true
         type: choice
         default: "full-release"
         options:
           - "full-release"
+          - "migrate-assets"
           - "model-packs"
           - "os-bases"
           - "code-overlay"
@@ -46,8 +48,74 @@ env:
   SOURCE_RELEASE_TAG: ${{ inputs.source_release_tag || 'v0.1.1' }}
 
 jobs:
+  ensure-assets-release:
+    if: (github.event_name == 'push' && github.ref_name == 'assets') || (github.event_name == 'workflow_dispatch' && inputs.phase == 'migrate-assets')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - name: Ensure permanent shared assets release exists (never latest)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES_FILE="docs/release/RELEASE_NOTES_assets.md"
+          if gh release view "assets" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release assets already exists."
+            if [ -f "$NOTES_FILE" ]; then
+              gh release edit "assets" \
+                --repo "$GITHUB_REPOSITORY" \
+                --prerelease \
+                --latest=false \
+                --title "SlicerDSpace Shared Assets" \
+                --notes-file "$NOTES_FILE"
+            fi
+          else
+            gh release create "assets" \
+              --repo "$GITHUB_REPOSITORY" \
+              --prerelease \
+              --latest=false \
+              --title "SlicerDSpace Shared Assets" \
+              --notes-file "$NOTES_FILE"
+          fi
+
+  migrate-assets:
+    if: (github.event_name == 'push' && github.ref_name == 'assets') || (github.event_name == 'workflow_dispatch' && inputs.phase == 'migrate-assets')
+    needs: [ensure-assets-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [models, wma-core, wma-east-west, runtimes-and-mirror]
+    steps:
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Migrate & verify ${{ matrix.group }} into permanent assets release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python .github/scripts/repackage_release_assets.py migrate-assets \
+            --group "${{ matrix.group }}" \
+            --assets-tag "assets" \
+            --repo "$GITHUB_REPOSITORY" \
+            --work-dir "${{ runner.temp }}/migrate-${{ matrix.group }}"
+
   ensure-release:
-    if: github.event_name == 'push' || inputs.phase == 'full-release' || inputs.phase == 'model-packs' || inputs.phase == 'os-bases'
+    if: (github.event_name == 'push' && startsWith(github.ref_name, 'v')) || inputs.phase == 'full-release' || inputs.phase == 'model-packs' || inputs.phase == 'os-bases'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -159,7 +227,7 @@ jobs:
             "${{ runner.temp }}/ukf-out/ukf-standalone-darwin-arm64.tar.gz.sha256"
 
   model-packs:
-    if: github.event_name == 'push' || inputs.phase == 'full-release' || inputs.phase == 'model-packs'
+    if: (github.event_name == 'push' && startsWith(github.ref_name, 'v')) || inputs.phase == 'full-release' || inputs.phase == 'model-packs'
     needs: [ensure-release]
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -231,7 +299,7 @@ jobs:
           if-no-files-found: error
 
   os-bases:
-    if: ${{ !cancelled() && (needs.ensure-release.result == 'success' || needs.ensure-release.result == 'skipped') && (needs.model-packs.result == 'success' || needs.model-packs.result == 'skipped') && (github.event_name == 'push' || inputs.phase == 'full-release' || inputs.phase == 'os-bases') }}
+    if: ${{ !cancelled() && (needs.ensure-release.result == 'success' || needs.ensure-release.result == 'skipped') && (needs.model-packs.result == 'success' || needs.model-packs.result == 'skipped') && ((github.event_name == 'push' && startsWith(github.ref_name, 'v')) || inputs.phase == 'full-release' || inputs.phase == 'os-bases') }}
     needs: [ensure-release, model-packs]
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -288,7 +356,7 @@ jobs:
           if-no-files-found: error
 
   sync-metadata:
-    if: ${{ !cancelled() && (needs.ensure-release.result == 'success' || needs.ensure-release.result == 'skipped') && (needs.model-packs.result == 'success' || needs.model-packs.result == 'skipped') && (needs.os-bases.result == 'success' || needs.os-bases.result == 'skipped') && (github.event_name == 'push' || inputs.phase == 'full-release' || inputs.phase == 'os-bases' || inputs.phase == 'model-packs') }}
+    if: ${{ !cancelled() && (needs.ensure-release.result == 'success' || needs.ensure-release.result == 'skipped') && (needs.model-packs.result == 'success' || needs.model-packs.result == 'skipped') && (needs.os-bases.result == 'success' || needs.os-bases.result == 'skipped') && ((github.event_name == 'push' && startsWith(github.ref_name, 'v')) || inputs.phase == 'full-release' || inputs.phase == 'os-bases' || inputs.phase == 'model-packs') }}
     needs: [ensure-release, model-packs, os-bases]
     runs-on: ubuntu-latest
     timeout-minutes: 15

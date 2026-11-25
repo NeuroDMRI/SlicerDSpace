@@ -1716,6 +1716,270 @@ def cmd_sync_setup_zips(args: argparse.Namespace) -> int:
     return 0
 
 
+def _download_exact_url(
+    url: str,
+    dest: Path,
+    *,
+    expected_sha256: str = "",
+    expected_size: int = 0,
+) -> Path:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_file() and expected_sha256 and sha256_file(dest).lower() == expected_sha256.lower():
+        return dest
+    for attempt in range(1, 5):
+        try:
+            print(f"[migrate-download] {dest.name} <- {url} (attempt {attempt}/4)...", flush=True)
+            req = urllib.request.Request(url, headers={"User-Agent": "SlicerDSpace-repackager"})
+            with urllib.request.urlopen(req, timeout=600) as resp, dest.open("wb") as out:
+                shutil.copyfileobj(resp, out, length=8 * 1024 * 1024)
+            actual_size = dest.stat().st_size
+            if expected_size and actual_size != expected_size:
+                raise RuntimeError(f"Size mismatch for {dest.name}: {actual_size} != {expected_size}")
+            actual_sha = sha256_file(dest).lower()
+            if expected_sha256 and actual_sha != expected_sha256.lower():
+                raise RuntimeError(f"SHA256 mismatch for {dest.name}: {actual_sha} != {expected_sha256}")
+            return dest
+        except Exception as exc:
+            dest.unlink(missing_ok=True)
+            print(f"[warn] Download retry for {dest.name}: {exc}", flush=True)
+            time.sleep(4 * attempt)
+    raise RuntimeError(f"Failed downloading {dest.name} from {url}")
+
+
+def _migration_items_for_group(group: str, *, repo: str = GITHUB_REPO) -> list[tuple[str, str, str, int]]:
+    """Return list of ``(dest_name, source_url, expected_sha256, expected_size)`` tuples."""
+    dl = f"https://github.com/{repo}/releases/download"
+    if group == "models":
+        return [
+            (
+                "SlicerDSpace-Model-DDSurfer-v1.tar.gz",
+                f"{dl}/v1.0.0/SlicerDSpace-v1.0.0-Model-DDSurfer.tar.gz",
+                "b7efeea47aa736301f569622c461fd8d032d4e8734c6174b7aadcd86f58f8277",
+                220436307,
+            ),
+            (
+                "SlicerDSpace-Model-DDSeg-v1.tar.gz",
+                f"{dl}/v1.0.0/SlicerDSpace-v1.0.0-Model-DDSeg.tar.gz",
+                "f0146b958ac8a9ba35bd4fb7f4e2b334b7f7f3d324639428fa7d0f3b8adc19d4",
+                280945320,
+            ),
+            (
+                "SlicerDSpace-Model-DDParcel-v1.tar.gz",
+                f"{dl}/v1.0.0/SlicerDSpace-v1.0.0-Model-DDParcel.tar.gz",
+                "4f6e265f282c210647ed3c287fcfb7c2473b061c1802aac3c88db4c3d9ff50a6",
+                391935821,
+            ),
+            (
+                "SlicerDSpace-Model-PNL-CNN-v1.tar.gz",
+                f"{dl}/v1.0.0/SlicerDSpace-v1.0.0-Model-PNL-CNN.tar.gz",
+                "cf8b677106604ae10fc14f83639aa95d3709b585c81e2f39ca7fac581b3cbd65",
+                200140589,
+            ),
+            (
+                "SlicerDSpace-Model-TractCloud-v1.tar.gz",
+                f"{dl}/v1.0.0/SlicerDSpace-v1.0.0-Model-TractCloud.tar.gz",
+                "3f3a3a5e17c7e022736e7eb5ec20bc5c43247bc3135a858096eb9717583a3640",
+                8225793,
+            ),
+        ]
+    if group == "wma-core":
+        return [
+            (
+                "SlicerDSpace-WMA-ORG-v1.tar.gz",
+                f"{dl}/v0.1.1/SlicerDSpace-v0.1.1-WMA-ORG.tar.gz",
+                "e1bb6f42218c80705746bc677ba7962468801585af31f9ce712b2164c298e6cd",
+                1804334817,
+            ),
+            (
+                "SlicerDSpace-WMA-NABA-v1.tar.gz.001",
+                f"{dl}/v0.1.1/SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.001",
+                "a948e9d82eedcb3daec6ed7a0c5e5ec866d10d4070373aa7cbf4baeb2e3cf0c1",
+                1900000000,
+            ),
+            (
+                "SlicerDSpace-WMA-NABA-v1.tar.gz.002",
+                f"{dl}/v0.1.1/SlicerDSpace-v0.1.1-WMA-NABA.tar.gz.002",
+                "bdc60b267630cd737a6a9e8cf22db771147a5daba6c9e623998d0b5f4c5985c1",
+                1465003883,
+            ),
+            (
+                "SlicerDSpace-Example-HCP-100307-NIfTI.zip",
+                f"{dl}/v0.1.1/SlicerDSpace-Example-HCP-100307-NIfTI.zip",
+                "fada1b1f8c3f0ec52817b4db8b0cde7249490682d396f08dfab19a9693d71db0",
+                1258033642,
+            ),
+        ]
+    if group == "wma-east-west":
+        return [
+            (
+                "SlicerDSpace-WMA-EastWest-v1.tar.gz.001",
+                f"{dl}/v0.1.1/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.001",
+                "6daf10aba6b3bc530dc136c67e4da2d8b45f7b89d8cd4203de28bdf71b703d8f",
+                1900000000,
+            ),
+            (
+                "SlicerDSpace-WMA-EastWest-v1.tar.gz.002",
+                f"{dl}/v0.1.1/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.002",
+                "805e74a323dac63573759c362c3de81296ac1712482858d021dff8d986b2b670",
+                1900000000,
+            ),
+            (
+                "SlicerDSpace-WMA-EastWest-v1.tar.gz.003",
+                f"{dl}/v0.1.1/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.003",
+                "24c27591a46c54f387fd86045a564ee4241abf9a51d4cd8f30066a7b712e0071",
+                1900000000,
+            ),
+            (
+                "SlicerDSpace-WMA-EastWest-v1.tar.gz.004",
+                f"{dl}/v0.1.1/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.004",
+                "4a060647f641c12309953bb3ba887a23ba51ef4dac9d911ac42428fdda1f3932",
+                1900000000,
+            ),
+            (
+                "SlicerDSpace-WMA-EastWest-v1.tar.gz.005",
+                f"{dl}/v0.1.1/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.005",
+                "4fd4650b67bc51d49869e10363dba988fcad2e071ffce5fea6e1c3254680fb95",
+                1900000000,
+            ),
+            (
+                "SlicerDSpace-WMA-EastWest-v1.tar.gz.006",
+                f"{dl}/v0.1.1/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.006",
+                "5ad69210366044801eb3be30ad26a1744c3bf658f8b1388ec3dfe0a607039a44",
+                1900000000,
+            ),
+            (
+                "SlicerDSpace-WMA-EastWest-v1.tar.gz.007",
+                f"{dl}/v0.1.1/SlicerDSpace-v0.1.1-WMA-EastWest.tar.gz.007",
+                "2663479e6cd9fddaa0df5360646c86e7b2a31643c78c5a0eae3af715370cb455",
+                5353584,
+            ),
+        ]
+    if group == "runtimes-and-mirror":
+        items: list[tuple[str, str, str, int]] = [
+            (
+                "surface-runtime-linux-x86_64.tar.gz",
+                f"{dl}/v0.1.0/surface-runtime-linux-x86_64.tar.gz",
+                "9e6005a114c7d1ff58f247ee2e8977f9eb80f48f525172e15d7e7174ab30fb10",
+                40995581,
+            ),
+            (
+                "surface-runtime-windows-x86_64.tar.gz",
+                f"{dl}/v0.1.0/surface-runtime-windows-x86_64.tar.gz",
+                "bbc97ea1c89117713bf36db2e4f9dd0b23ad4b69b9e27cba1b7050c0bc71f742",
+                66211294,
+            ),
+            (
+                "surface-runtime-darwin-arm64-macos13.tar.gz",
+                f"{dl}/v0.1.1/surface-runtime-darwin-arm64-macos13.tar.gz",
+                "cfd1d7b85c595479b5378fc91dde6ab0a781fc2b6c6e2a04de9feabc414faff9",
+                39339026,
+            ),
+            (
+                "surface-runtime-darwin-arm64-macos13.tar.gz.sha256",
+                f"{dl}/v0.1.1/surface-runtime-darwin-arm64-macos13.tar.gz.sha256",
+                "5d26d27dfdc9c28955d4e825eaaac1895ba5856eb47f14e63f7e8bc95c0fd008",
+                110,
+            ),
+            (
+                "ukf-standalone-darwin-arm64.tar.gz",
+                f"{dl}/model-assets-v0.1.1/ukf-standalone-darwin-arm64.tar.gz",
+                "e68e8190f8d3e5ae70e5dbc68d55d99f6c6551abbebc3dd1a1696c43ada51f8f",
+                3699789,
+            ),
+            (
+                "ukf-standalone-darwin-arm64.tar.gz.sha256",
+                f"{dl}/model-assets-v0.1.1/ukf-standalone-darwin-arm64.tar.gz.sha256",
+                "f6d4240f47101c4ee92b484a8011c13d00c2c6f746daf412ce9c52bdd5695a50",
+                101,
+            ),
+            (
+                "ukf-standalone-linux-x64.tar.gz",
+                f"{dl}/model-assets-v0.1.1/ukf-standalone-linux-x64.tar.gz",
+                "8631887f22ed6d79bf692f29280a824d9276dec3eb41702241f93822401dcffd",
+                6031472,
+            ),
+            (
+                "ukf-standalone-linux-x64.tar.gz.sha256",
+                f"{dl}/model-assets-v0.1.1/ukf-standalone-linux-x64.tar.gz.sha256",
+                "4576d7d6d4073ce5d981cd80550b276afe74569d81c9d083415c5dd1c97caf58",
+                98,
+            ),
+            (
+                "ukf-standalone-windows-x64.zip",
+                f"{dl}/model-assets-v0.1.1/ukf-standalone-windows-x64.zip",
+                "a9359316af30163f4a2abd19a282d0595e311d0c2c0122e2c29cc70bf23ce47c",
+                2365153,
+            ),
+            (
+                "ukf-standalone-windows-x64.zip.sha256",
+                f"{dl}/model-assets-v0.1.1/ukf-standalone-windows-x64.zip.sha256",
+                "54f0753a2f7b5c50badb117a34e46a21df2e06b55b8385f32277cb6ef30d10cf",
+                98,
+            ),
+        ]
+        # Mirror all active individual files from assets_manifest.json + external_assets_manifest.json
+        # (excluding upstream-only NITRC IIT and large split WMA zip parts that are superseded by WMA-*-v1.tar.gz).
+        seen_names: set[str] = {name for name, _, _, _ in items}
+        for mname in ("assets_manifest.json", "external_assets_manifest.json"):
+            mdata = json.loads((REPO_ROOT / "models" / mname).read_text(encoding="utf-8"))
+            for rel_path, rec in (mdata.get("asset_records") or {}).items():
+                if not isinstance(rec, dict):
+                    continue
+                if rec.get("redistribution") == "upstream-only":
+                    continue
+                if rel_path.startswith("bundles/wma/") and ("archives/" in rel_path or "ATTRIBUTION.md" in rel_path or "naba/" in rel_path or "east-west/" in rel_path):
+                    continue
+                if rel_path.startswith("brain_mask/pnl_cnn/"):
+                    continue
+                sha = str(rec.get("sha256") or "").strip().lower()
+                sz = int(rec.get("size_bytes") or 0)
+                if len(sha) != 64:
+                    continue
+                fname = PurePosixPath(rel_path).name
+                dest_name = f"{sha}-{fname}"
+                if dest_name in seen_names:
+                    continue
+                seen_names.add(dest_name)
+                urls = rec.get("urls") or []
+                src_url = str(urls[0]) if urls else f"{dl}/model-assets-v0.1.1/{dest_name}"
+                items.append((dest_name, src_url, sha, sz))
+        return items
+    raise ValueError(f"Unknown migrate-assets group: {group}")
+
+
+def cmd_migrate_assets(args: argparse.Namespace) -> int:
+    assets_tag = str(args.assets_tag or "assets").strip()
+    repo = str(args.repo or GITHUB_REPO)
+    _assert_mutable_release_tag(assets_tag, dry_run=bool(args.dry_run))
+    work_dir = args.work_dir.expanduser().resolve()
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    items = _migration_items_for_group(args.group, repo=repo)
+    remote_assets = {} if args.dry_run else _fetch_remote_release_assets(assets_tag, repo)
+    print(f"[migrate-assets] Group={args.group} ({len(items)} item(s)) -> release {assets_tag}", flush=True)
+
+    for dest_name, src_url, expected_sha, expected_size in items:
+        existing = remote_assets.get(dest_name)
+        if (
+            isinstance(existing, dict)
+            and str(existing.get("state") or "").lower() == "uploaded"
+            and int(existing.get("size") or -1) == expected_size
+            and str(existing.get("digest") or "").strip().lower() == f"sha256:{expected_sha.lower()}"
+        ):
+            print(f"[migrate-assets] Already verified on {assets_tag}: {dest_name}", flush=True)
+            continue
+        if args.dry_run:
+            print(f"[migrate-assets] [dry-run] Would copy {dest_name} ({expected_size:,} B) from {src_url}", flush=True)
+            continue
+        local_path = work_dir / dest_name
+        try:
+            _download_exact_url(src_url, local_path, expected_sha256=expected_sha, expected_size=expected_size)
+            _upload_release_files([local_path], release_tag=assets_tag, repo=repo)
+        finally:
+            local_path.unlink(missing_ok=True)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1793,7 +2057,19 @@ def main(argv: list[str] | None = None) -> int:
     p_overlay.add_argument("--repo", default=GITHUB_REPO)
     p_overlay.add_argument("--dry-run", action="store_true")
 
+    p_migrate = sub.add_parser(
+        "migrate-assets",
+        help="Copy and SHA-256 verify shared model packs, WMA atlases, example data and runtimes into the permanent assets release.",
+    )
+    p_migrate.add_argument("--group", required=True, choices=("models", "wma-core", "wma-east-west", "runtimes-and-mirror"))
+    p_migrate.add_argument("--work-dir", required=True, type=Path)
+    p_migrate.add_argument("--assets-tag", default="assets")
+    p_migrate.add_argument("--repo", default=GITHUB_REPO)
+    p_migrate.add_argument("--dry-run", action="store_true")
+
     args = parser.parse_args(argv)
+    if args.command == "migrate-assets":
+        return cmd_migrate_assets(args)
     if args.command == "build-model-pack":
         return cmd_build_model_pack(args)
     if args.command == "apply-model-receipts":

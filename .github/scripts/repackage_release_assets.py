@@ -1799,8 +1799,8 @@ _SURFACE_RUNTIME_REPACK_SPECS: tuple[dict[str, Any], ...] = (
         "base_release_tag": "v1.0.0",
         "runtime_dirname": "surface-runtime-windows-x86_64",
         "expected_recipe_sha256": "0ca82110b74fc3898b2a96ee4b4749369a208e5fc65553335008d1c4c05284c6",
-        "expected_files": 72,
-        "expected_unpacked_bytes": 154982057,
+        "expected_files": 71,
+        "expected_unpacked_bytes": 154970962,
     },
 )
 

@@ -175,11 +175,26 @@ class _Isolated:
             sys.modules["shared.environment"] = _stub_environment_module()
         return self
 
+    def _between_exit_phases(self) -> None:
+        """Hook point of __exit__: runs after the saved ``shared.*`` children are back and before the parent entry is set.
+        It does nothing. A test replaces it with the sampler's lazy import (finding B1)."""
+
     def __exit__(self, *exc):
         saved = self._modules
-        # Restore entry by entry (no clear()): a foreign thread never sees sys.modules without the saved 'shared'.
-        for name in [n for n in ("shared",) if n in saved]:
-            sys.modules[name] = saved[name]
+        # Finding B1 (Opus review): children first, parent last. While the stub package is still in sys.modules['shared'],
+        # a leaked sampler that runs ``from shared.hardware_adapt import ...`` finds the saved child in sys.modules and
+        # imports nothing. With the parent first, the thread saw the repo package without its child, imported a second
+        # copy and set it as an attribute of the repo package: getattr(shared, 'hardware_adapt') was no longer
+        # sys.modules['shared.hardware_adapt'], so patch('shared.hardware_adapt.X') missed the module that others use.
+        # Restore entry by entry (no clear()): a foreign thread never sees sys.modules without a 'shared'.
+        for name, module in saved.items():
+            if name.startswith("shared.") and sys.modules.get(name) is not module:
+                sys.modules[name] = module
+        for name in [n for n in list(sys.modules) if n.startswith("shared.") and n not in saved]:
+            sys.modules.pop(name, None)
+        self._between_exit_phases()
+        if "shared" in saved:
+            sys.modules["shared"] = saved["shared"]
         for name, module in saved.items():
             if sys.modules.get(name) is not module:
                 sys.modules[name] = module
@@ -434,7 +449,7 @@ class PruneGuardTests(unittest.TestCase):
             self.assertIn("node is not installed", reason)
 
 
-def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp: bool):
+def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp: bool, exit_tick: bool = False):
     """Run the behaviour tests of PruneFallbackTests (not PruneGuardTests or this class: no recursion) with unittest.
 
     leaked_sampler: another thread runs the lazy import of the StageMonitor sampler that test_cohort_granularity leaves
@@ -442,6 +457,9 @@ def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp:
     left open: right after the harness removed ``shared`` from sys.modules, and during the node build of the Setup
     module. The real thread does this every 0.2 s at a random time; here it happens at fixed points, in the same order.
     symlinked_tmp: temp folders are reached through a symlink (macOS /var -> /private/var is the same shape).
+    exit_tick: finding B1. The sampler also ticks inside _Isolated.__exit__, between the restore of the saved shared.*
+    children and the restore of the parent (_between_exit_phases; this point exists in both orders). shared.hardware_adapt is
+    imported before the first state(), so the saved sys.modules holds it.
     Returns (TestResult, process state before, process state after)."""
     from shared import cohort_profile  # the repo module; its function object keeps working after the harness drops it
 
@@ -466,13 +484,29 @@ def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp:
         tick()
         return real_stub()
 
+    tracked: set = set()
+
     def state():
-        return {"shared": sys.modules.get("shared"), "path": list(sys.path), "environ": dict(os.environ),
-                "tempdir": tempfile.tempdir, "threads": threading.active_count()}
+        # Finding B1: the identity of every shared* entry, and whether each child is still the attribute of its parent.
+        # Only the keys of the first call: a module that a test imports for the first time (shared.installer_script_builder
+        # in setUpClass) is new, not a leak.
+        shared = sys.modules.get("shared")
+        keys = [k for k in list(sys.modules) if k == "shared" or k.startswith("shared.")]
+        if tracked:
+            keys = [k for k in keys if k in tracked]
+        ids = {k: id(sys.modules[k]) for k in keys}
+        attrs = {k: getattr(shared, k.split(".", 1)[1], None) is sys.modules[k]
+                 for k in keys if k.count(".") == 1 and k.split(".", 1)[1] in vars(shared)}
+        if not tracked:
+            tracked.update(keys)
+        return {"shared": shared, "path": list(sys.path), "environ": dict(os.environ),
+                "tempdir": tempfile.tempdir, "threads": threading.active_count(), "ids": ids, "attrs": attrs}
 
     names = [n for n in unittest.defaultTestLoader.getTestCaseNames(PruneFallbackTests)
              if n != "test_prune_stub_matches_the_release_package_shape"]
     tempfile.gettempdir()  # fill the cache first: the first call sets tempfile.tempdir, which is not a leak
+    if exit_tick:
+        import shared.hardware_adapt  # noqa: F401  (a saved child of the shared package that the sampler imports lazily)
     before = state()
     with tempfile.TemporaryDirectory() as real_root:
         patches = []
@@ -485,6 +519,8 @@ def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp:
         if leaked_sampler:
             patches.append(patch.object(subprocess, "run", run_with_tick))
             patches.append(patch.dict(globals(), {"_stub_environment_module": stub_with_tick}))
+        if exit_tick:
+            patches.append(patch.object(_Isolated, "_between_exit_phases", lambda self: tick()))
         for p in patches:
             p.start()
         try:
@@ -535,6 +571,22 @@ class PruneOrderIndependenceTests(unittest.TestCase):
         self._assert_clean(result)
         self.assertIs(before["shared"], after["shared"])
         self.assertEqual(before, after)
+
+    def test_prune_order_b1_sampler_between_the_restores_leaves_no_second_hardware_adapt(self) -> None:
+        # Finding B1 (Opus review): a sampler tick between the child and parent restores of _Isolated.__exit__.
+        import shared.hardware_adapt
+        saved_module = sys.modules["shared.hardware_adapt"]
+        result, before, after = _run_prune_cases_under_ci_conditions(
+            leaked_sampler=False, symlinked_tmp=False, exit_tick=True)
+        self._assert_clean(result)
+        self.assertEqual(before["ids"], after["ids"], "a shared* sys.modules entry is a different object after the run")
+        self.assertEqual(before, after)
+        self.assertIs(sys.modules["shared.hardware_adapt"], saved_module)
+        self.assertIs(getattr(sys.modules["shared"], "hardware_adapt"), sys.modules["shared.hardware_adapt"])
+        self.assertTrue(before["attrs"]["shared.hardware_adapt"], "the pre-import must make the child an attribute")
+        for key, was_attr in before["attrs"].items():
+            if was_attr:
+                self.assertTrue(after["attrs"].get(key), f"{key} is not the attribute of the shared package any more")
 
 
 class PruneWorkflowSyncTests(unittest.TestCase):

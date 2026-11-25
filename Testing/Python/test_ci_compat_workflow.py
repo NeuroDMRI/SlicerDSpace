@@ -110,11 +110,26 @@ class WorkflowStaticTests(unittest.TestCase):
             return dict(line.split("==") for line in lines if "==" in line and not line.startswith("#"))
         ci = pins("requirements-ci.txt")
         slicer = pins("requirements-slicer-tests.txt")
-        for name in ("nibabel", "pynrrd", "dipy", "scikit-learn", "trimesh"):
+        for name in ("nibabel", "pynrrd", "dipy", "scikit-learn", "trimesh", "matplotlib"):
             self.assertEqual(slicer[name], ci[name], name)
         self.assertIn("psutil", slicer)
-        for name in ("numpy", "scipy", "vtk", "SimpleITK", "matplotlib"):
+        for name in ("numpy", "scipy", "vtk", "SimpleITK"):
             self.assertNotIn(name, slicer)
+
+    def test_ci_repo_only_causes_matplotlib_and_its_runtime_imports_are_installed_and_checked(self):
+        # Backlog "CI repo-only causes", run 44897203687: test_scientific_review_packet
+        # failed with "No module named 'matplotlib'". pip runs with --no-deps, so every
+        # run-time import of matplotlib must be listed too (numpy stays with Slicer).
+        lines = (REPO / "scripts" / "dev" / "requirements-slicer-tests.txt").read_text(encoding="utf-8").splitlines()
+        listed = {line.split("==")[0].strip().lower() for line in lines if "==" in line and not line.startswith("#")}
+        for name in ("matplotlib", "contourpy", "cycler", "fonttools", "kiwisolver", "pillow",
+                     "pyparsing", "python-dateutil", "six", "packaging"):
+            self.assertIn(name, listed, name)
+        install = self.text.split("Install the unit-test dependencies for PythonSlicer", 1)[1]
+        install = install.split("Unit test suite under the real PythonSlicer", 1)[0]
+        self.assertIn("MPLBACKEND=Agg", install)
+        self.assertIn('"matplotlib"', install)
+        self.assertIn('"matplotlib.pyplot"', install)
 
     def test_only_github_token_is_used(self):
         self.assertNotIn("secrets.", self.text)

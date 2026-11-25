@@ -10,13 +10,15 @@
 # lacks come from <dir>. Every package that the listed ones import at run
 # time is therefore listed here too; the install step imports them all.
 #
-# The pins of the first six lines must equal scripts/dev/requirements-ci.txt
+# The pins of nibabel, pynrrd, dipy, scikit-learn, trimesh and matplotlib must
+# equal scripts/dev/requirements-ci.txt
 # (Testing/Python/test_ci_compat_workflow.py checks this).
 nibabel==5.4.2
 pynrrd==1.1.3
 dipy==1.12.1
 scikit-learn==1.9.0
 trimesh==4.12.2
+matplotlib==3.10.8
 # psutil is not in requirements-ci.txt. 7.2.2 ships abi3 wheels for CPython 3
 # on Linux, macOS (x86_64 and arm64) and Windows.
 psutil==7.2.2
@@ -33,3 +35,17 @@ narwhals==2.29.0
 threadpoolctl==3.8.0
 packaging==26.2
 typing_extensions==4.15.0
+# Run-time imports of matplotlib (Requires-Dist of 3.10.8; numpy is left to
+# Slicer, packaging is listed above). Backlog "CI repo-only causes": run
+# 44897203687 failed test_scientific_review_packet with "No module named
+# 'matplotlib'". Each pin has a CPython 3.12 wheel (or is pure Python) for
+# manylinux x86_64, win_amd64, macOS x86_64 and macOS arm64, and accepts
+# numpy 2.0.2 (Slicer 5.10) and 2.4.6 (Slicer 5.12.4).
+contourpy==1.3.3
+cycler==0.12.1
+fonttools==4.67.0
+kiwisolver==1.5.1
+pillow==12.2.0
+pyparsing==3.3.2
+python-dateutil==2.9.0.post0
+six==1.17.0

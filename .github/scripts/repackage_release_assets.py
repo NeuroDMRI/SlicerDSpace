@@ -126,29 +126,96 @@ def _assert_mutable_release_tag(release_tag: str, *, dry_run: bool = False) -> N
         )
 
 
+def _fetch_remote_release_assets(
+    release_tag: str,
+    repo: str,
+) -> dict[str, dict[str, Any]]:
+    try:
+        proc = subprocess.run(
+            ["gh", "api", f"repos/{repo}/releases/tags/{release_tag}"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+        )
+        if proc.returncode != 0 or not proc.stdout.strip():
+            return {}
+        data = json.loads(proc.stdout)
+        return {
+            str(a.get("name") or ""): a
+            for a in (data.get("assets") or [])
+            if isinstance(a, dict) and a.get("name")
+        }
+    except Exception:
+        return {}
+
+
+def _asset_matches_remote(local_path: Path, expected_size: int, expected_sha256: str, remote_assets: dict[str, dict[str, Any]]) -> bool:
+    asset = remote_assets.get(local_path.name)
+    if not isinstance(asset, dict):
+        return False
+    if str(asset.get("state") or "").lower() != "uploaded":
+        return False
+    if int(asset.get("size") or -1) != expected_size:
+        return False
+    remote_digest = str(asset.get("digest") or "").strip().lower()
+    if remote_digest:
+        return remote_digest == f"sha256:{expected_sha256.lower()}"
+    return False
+
+
 def _upload_release_files(
     files: list[Path],
     *,
     release_tag: str = RELEASE_TAG,
     repo: str = GITHUB_REPO,
 ) -> None:
-    cmd = [
-        "gh",
-        "release",
-        "upload",
-        release_tag,
-        "--repo",
-        repo,
-        "--clobber",
-        *[str(f) for f in files],
-    ]
-    for attempt in range(1, 4):
+    file_meta = [(f, f.stat().st_size, sha256_file(f)) for f in files]
+    remote_assets = _fetch_remote_release_assets(release_tag, repo)
+    pending: list[tuple[Path, int, str]] = []
+    for f, sz, digest in file_meta:
+        if _asset_matches_remote(f, sz, digest, remote_assets):
+            print(f"[upload] Already uploaded with verified SHA-256 on {release_tag}: {f.name}", flush=True)
+        else:
+            pending.append((f, sz, digest))
+    if not pending:
+        return
+
+    for attempt in range(1, 6):
+        cmd = [
+            "gh",
+            "release",
+            "upload",
+            release_tag,
+            "--repo",
+            repo,
+            "--clobber",
+            *[str(f) for f, _, _ in pending],
+        ]
         proc = subprocess.run(cmd)
         if proc.returncode == 0:
             return
-        print(f"[warn] gh release upload failed (attempt {attempt}/3), retrying...", flush=True)
+        remote_assets = _fetch_remote_release_assets(release_tag, repo)
+        still_pending = [
+            (f, sz, digest)
+            for f, sz, digest in pending
+            if not _asset_matches_remote(f, sz, digest, remote_assets)
+        ]
+        if not still_pending:
+            print(
+                f"[upload] gh returned {proc.returncode} on attempt {attempt}/5, "
+                f"but all {len(pending)} asset(s) verified uploaded with matching SHA-256 on {release_tag}.",
+                flush=True,
+            )
+            return
+        pending = still_pending
+        print(
+            f"[warn] gh release upload failed (attempt {attempt}/5, {len(pending)} file(s) remaining), retrying...",
+            flush=True,
+        )
         time.sleep(5 * attempt)
-    raise RuntimeError(f"Failed to upload release assets after 3 attempts: {files}")
+    raise RuntimeError(f"Failed to upload release assets after 5 attempts: {[f for f, _, _ in pending]}")
 
 
 def _download_verified_part(

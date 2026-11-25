@@ -656,11 +656,39 @@ def environment_item_text(item: Any, zh: bool = False) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def is_cuda_device_item(item: Any) -> bool:
+    """Return True when a dependency status item represents a requested CUDA GPU device."""
+
+    if getattr(item, "kind", "") != "device":
+        return False
+    details = getattr(item, "details", None) or {}
+    requested = str(details.get("requested_device") or "").strip().lower()
+    key = str(getattr(item, "key", "") or "").strip().lower()
+    return requested.startswith("cuda") or ":cuda" in key
+
+
+def should_route_environment_item_to_cuda_setup(item: Any) -> bool:
+    """Return True when clicking a missing row's action button should open the CUDA PyTorch installer."""
+
+    return is_cuda_device_item(item)
+
+
+def should_route_prepare_all_to_cuda_setup(result: Any) -> bool:
+    """Return True when every required missing dependency in ``result`` is a CUDA device row."""
+
+    missing_required = [
+        item for item in environment_missing_items(result) if getattr(item, "required", False)
+    ]
+    return bool(missing_required) and all(is_cuda_device_item(item) for item in missing_required)
+
+
 def environment_item_button_text(item: Any, zh: bool = False) -> str:
     """Return the action button text for a missing dependency row."""
 
     if os_blocked_without_remedy(item):  # b2-os, decision 5: opens the FreeSurfer home chooser
         return "选择 FreeSurfer 文件夹" if zh else "Choose FreeSurfer folder"
+    if is_cuda_device_item(item):
+        return "安装 CUDA 版 PyTorch" if zh else "Install CUDA PyTorch"
     if item.kind == "python":
         return "Install" if (item.details or {}).get("package") else "Setup"
     if getattr(item, "install_group", "") == "model-resources":
@@ -682,6 +710,13 @@ def environment_item_button_tooltip(item: Any, zh: bool = False) -> str:
             return "选择一个兼容的 FreeSurfer 安装文件夹（设置“FreeSurfer 主目录（可选）”）；表面后处理随后使用它。"
         return ("Choose the folder of a compatible FreeSurfer installation (the setting FreeSurfer home (optional)); "
                 "Surface postprocess then uses it.")
+    if is_cuda_device_item(item):
+        if zh:
+            return "打开向导，在 3D Slicer 内直接安装 CUDA 版 PyTorch（约 2.5–2.7 GB 下载，约 4.6–5.2 GB 磁盘空间）。"
+        return (
+            "Open the CUDA PyTorch installer inside 3D Slicer "
+            "(~2.5–2.7 GB download, ~4.6–5.2 GB disk space)."
+        )
     if item.kind == "python":
         if (item.details or {}).get("package"):
             return item.install_hint or "Install this package into the selected Slicer Python environment."
@@ -698,11 +733,12 @@ def environment_dialog_state(result: Any, *, python_install_target: str) -> Envi
 
     missing_items = tuple(environment_missing_items(result))
     has_model_resources = any(getattr(item, "install_group", "") == "model-resources" for item in missing_items)
+    has_cuda_device_missing = any(item.required and is_cuda_device_item(item) for item in missing_items)
     return EnvironmentDialogState(
         summary_text=environment_summary_text(result),
         detail_text="\n".join(environment_detail_lines(result)),
         missing_items=missing_items,
-        can_install_python=bool(result.missing_python_packages) or has_model_resources or any(
+        can_install_python=bool(result.missing_python_packages) or has_model_resources or has_cuda_device_missing or any(
             item.required and getattr(item, "install_group", "") in {"mrtrix", "fsl", "brain_mask", "slicer-runtime", "slicer-dmri", "ukf"}
             for item in missing_items),
         has_manual_setup_notes=any(

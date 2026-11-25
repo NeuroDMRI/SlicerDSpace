@@ -1001,10 +1001,57 @@ def _detect_cuda_devices() -> tuple[tuple[str, str], ...]:
             except Exception:
                 entries.clear()
 
-    if not entries and sys.platform != "darwin":
-        entries = [("cuda:0", "CUDA:0"), ("cuda:1", "CUDA:1")]
     _DETECTED_CUDA_DEVICES_CACHE = tuple(entries)
     return _DETECTED_CUDA_DEVICES_CACHE
+
+
+def _cuda_pytorch_runtime_available() -> bool:
+    """Zero-import check whether Slicer's active Python has a CUDA-enabled PyTorch build."""
+    try:
+        from shared.ui_cuda_setup import cuda_pytorch_runtime_available
+
+        return bool(cuda_pytorch_runtime_available())
+    except Exception:
+        return False
+
+
+def _cuda_help_button_style(dark: bool, *, restart_pending: bool = False) -> str:
+    """Style for the circular ``?`` CUDA setup button next to Compute device."""
+    if restart_pending:
+        ink, hover = ("#66BB6A", "#81C784") if dark else ("#2E7D32", "#1B5E20")
+    else:
+        ink, hover = ("#F59E0B", "#FBBF24") if dark else ("#C27803", "#92400E")
+    name = "computeDeviceCudaHelpButton"
+    return (
+        f"QToolButton#{name} {{ color: {ink}; border: 1px solid {ink}; border-radius: 9px; "
+        "font-size: 11px; font-weight: 700; background: transparent; padding: 0px; }"
+        f"QToolButton#{name}:hover {{ color: {hover}; border-color: {hover}; }}"
+        f"QToolButton#{name}:focus {{ color: {hover}; border: 2px solid {hover}; }}"
+    )
+
+
+def refresh_cuda_help_button_style(owner: Any, *, dark: bool | None = None) -> None:
+    """Refresh the light/dark stylesheet of the Compute device CUDA ``?`` button."""
+    button = getattr(owner, "_computeDeviceCudaHelpButton", None)
+    if button is None or not hasattr(button, "setStyleSheet"):
+        return
+    if dark is None:
+        try:
+            from shared.ui_styles import is_dark_mode
+
+            use_dark = bool(is_dark_mode(getattr(owner, "_uiWidget", None)))
+        except Exception:
+            use_dark = False
+    else:
+        use_dark = bool(dark)
+    restart_pending = bool(getattr(owner, "_cudaInstallRestartPending", False))
+    button.setStyleSheet(_cuda_help_button_style(use_dark, restart_pending=restart_pending))
+
+
+def _on_compute_device_cuda_help_clicked(owner: Any) -> None:
+    from shared.ui_cuda_setup import show_cuda_pytorch_setup_dialog
+
+    show_cuda_pytorch_setup_dialog(owner)
 
 
 def install_compute_device_selector(owner: Any) -> None:
@@ -1034,7 +1081,7 @@ def install_compute_device_selector(owner: Any) -> None:
     row.setObjectName("computeDeviceRow")
     row_layout = qt.QHBoxLayout(row)
     row_layout.setContentsMargins(0, 3, 0, 0)
-    row_layout.setSpacing(10)
+    row_layout.setSpacing(6)
     combo.setSizePolicy(qt.QSizePolicy.Expanding, qt.QSizePolicy.Fixed)
     if hasattr(qt, "QComboBox") and hasattr(combo, "setSizeAdjustPolicy"):
         combo.setSizeAdjustPolicy(qt.QComboBox.AdjustToMinimumContentsLengthWithIcon)
@@ -1046,6 +1093,31 @@ def install_compute_device_selector(owner: Any) -> None:
     combo.show()
     row_layout.addWidget(label, 0, qt.Qt.AlignVCenter)
     row_layout.addWidget(combo, 1)
+
+    if hasattr(qt, "QToolButton"):
+        cuda_help_btn = qt.QToolButton(row)
+        cuda_help_btn.setObjectName("computeDeviceCudaHelpButton")
+        cuda_help_btn.setText("?")
+        if hasattr(cuda_help_btn, "setAutoRaise"):
+            cuda_help_btn.setAutoRaise(True)
+        if hasattr(cuda_help_btn, "setFixedSize"):
+            cuda_help_btn.setFixedSize(18, 18)
+        if pointing is not None and hasattr(cuda_help_btn, "setCursor"):
+            cuda_help_btn.setCursor(pointing)
+        strong_focus = getattr(qt.Qt, "StrongFocus", None)
+        if strong_focus is not None and hasattr(cuda_help_btn, "setFocusPolicy"):
+            cuda_help_btn.setFocusPolicy(strong_focus)
+        _connect_clicked(cuda_help_btn, lambda _checked=False: _on_compute_device_cuda_help_clicked(owner))
+        if hasattr(cuda_help_btn, "hide"):
+            cuda_help_btn.hide()
+        row_layout.addWidget(cuda_help_btn, 0, qt.Qt.AlignVCenter)
+        owner._computeDeviceCudaHelpButton = cuda_help_btn
+        try:
+            setattr(ui, "computeDeviceCudaHelpButton", cuda_help_btn)
+        except Exception:
+            pass
+        refresh_cuda_help_button_style(owner)
+
     targets_layout.addWidget(row)
     owner._computeDeviceRow = row
     refresh_compute_device_selector(owner)
@@ -1082,32 +1154,76 @@ def refresh_compute_device_selector(owner: Any, language: str | None = None) -> 
         idx = _qt_int(combo, "currentIndex", 0)
         current = str(combo.itemData(idx) or _qt_val(combo, "currentText", "auto") or "auto").strip().lower() or "auto"
 
+    cuda_devices = _detect_cuda_devices()
+    restart_pending = bool(getattr(owner, "_cudaInstallRestartPending", False))
+    cuda_ready = _cuda_pytorch_runtime_available() if cuda_devices else True
+    cuda_needs_setup = bool(cuda_devices) and (not cuda_ready or restart_pending)
+
+    suffix = ""
+    if cuda_needs_setup:
+        suffix_key = "cuda_device_restart_pending_suffix" if restart_pending else "cuda_device_not_installed_suffix"
+        suffix = onboarding_text(lang, suffix_key)
+
+    cuda_items = [(val, f"{disp}{suffix}") for val, disp in cuda_devices]
+
     items: list[tuple[str, str]] = [
         ("auto", onboarding_text(lang, "compute_device_auto")),
         ("cpu", "CPU"),
         *_detect_mps_devices(),
-        *_detect_cuda_devices(),
+        *cuda_items,
     ]
     seen_values = {val for val, _ in items}
     if current == "mps" and current not in seen_values:
         items.append(("mps", "MPS"))
         seen_values.add("mps")
     if current not in seen_values and current.startswith("cuda:"):
-        items.append((current, current.upper()))
+        items.append((current, f"{current.upper()}{suffix}" if cuda_needs_setup else current.upper()))
 
     was_blocked = combo.blockSignals(True) if hasattr(combo, "blockSignals") else False
     try:
         combo.clear()
         for value, display in items:
             combo.addItem(display, value)
+
+        disabled_indices: set[int] = set()
+        if cuda_needs_setup and hasattr(combo, "model"):
+            model = combo.model()
+            item_getter = getattr(model, "item", None) if model is not None else None
+            if callable(item_getter):
+                for idx, (value, _display) in enumerate(items):
+                    if value.startswith("cuda:"):
+                        qitem = item_getter(idx)
+                        if qitem is not None and hasattr(qitem, "setEnabled"):
+                            qitem.setEnabled(False)
+                            disabled_indices.add(idx)
+
         target_idx = combo.findData(current) if hasattr(combo, "findData") else -1
-        if target_idx < 0:
+        if target_idx < 0 or target_idx in disabled_indices:
+            if target_idx in disabled_indices and node is not None:
+                if str(getattr(node, "device", "") or "").strip().lower().startswith("cuda"):
+                    node.device = "auto"
+                if str(getattr(node, "ddsegDevice", "") or "").strip().lower().startswith("cuda"):
+                    node.ddsegDevice = "auto"
             target_idx = 0
         if hasattr(combo, "setCurrentIndex"):
             combo.setCurrentIndex(target_idx)
     finally:
         if hasattr(combo, "blockSignals"):
             combo.blockSignals(bool(was_blocked))
+
+    cuda_help_btn = getattr(owner, "_computeDeviceCudaHelpButton", None)
+    if cuda_help_btn is not None:
+        if cuda_needs_setup:
+            help_tip_key = "cuda_setup_restart_tooltip" if restart_pending else "cuda_setup_help_tooltip"
+            if hasattr(cuda_help_btn, "setToolTip"):
+                cuda_help_btn.setToolTip(onboarding_text(lang, help_tip_key))
+            if hasattr(cuda_help_btn, "setAccessibleName"):
+                cuda_help_btn.setAccessibleName(onboarding_text(lang, "cuda_setup_help_name"))
+            refresh_cuda_help_button_style(owner)
+            if hasattr(cuda_help_btn, "show"):
+                cuda_help_btn.show()
+        elif hasattr(cuda_help_btn, "hide"):
+            cuda_help_btn.hide()
 
 
 def organize_environment_section(owner: Any) -> None:

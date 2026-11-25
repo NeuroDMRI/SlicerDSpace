@@ -110,6 +110,12 @@ def refresh_help_styles(owner: Any, *, dark: bool | None = None) -> None:
     popup = getattr(owner, "_helpPopup", None)
     if popup is not None:
         popup.setStyleSheet(help_popup_style(use_dark))
+    try:
+        from shared.ui_compact import refresh_cuda_help_button_style
+
+        refresh_cuda_help_button_style(owner, dark=use_dark)
+    except Exception:
+        pass
 
 
 def _make_popup(owner: Any, qt: Any, anchor: Any) -> tuple[Any, Any]:

@@ -350,6 +350,25 @@ def _requirement_canonical_name(value):
         return str(value).strip().lower()
 
 
+def _windows_safe_torch_requirements(requirements):
+    """Apply Windows MAX_PATH exclusions (matching upstream SlicerPyTorch) to torch/torchvision specs."""
+    if sys.platform != "win32":
+        return list(requirements)
+    exclusions = {"torch": "!=2.13.*", "torchvision": "!=0.28.*"}
+    adjusted = []
+    for raw in requirements:
+        text = str(raw).strip()
+        canon = _requirement_canonical_name(text)
+        excl = exclusions.get(canon)
+        if excl and excl not in text:
+            if any(ch in text for ch in "<>=!~"):
+                text = f"{text},{excl}"
+            else:
+                text = f"{text}{excl}"
+        adjusted.append(text)
+    return adjusted
+
+
 def _torch_cuda_build_satisfied() -> bool:
     """Return True when the installed torch distribution is a CUDA-enabled build."""
     try:
@@ -377,14 +396,16 @@ def install_requirements(
     torchvision_required=False,
     require_cuda_torch=False,
     replace_cpu_torch=False,
+    direct_cuda_wheel=False,
+    cuda_index_url=None,
 ):
     """Called only by the explicitly authorized, cancellable setup worker."""
     requirements = tuple(dict.fromkeys(requirements))
     before = installed_versions()
     backend = "already_satisfied"
-    want_cuda_torch = bool(require_cuda_torch or replace_cpu_torch)
+    want_cuda_torch = bool(require_cuda_torch or replace_cpu_torch or direct_cuda_wheel)
     need_cuda_torch = want_cuda_torch and not _torch_cuda_build_satisfied()
-    if torch_minimum and (
+    if not direct_cuda_wheel and torch_minimum and (
         not requirement_satisfied("torch>=" + torch_minimum)
         or (torchvision_required and not requirement_satisfied("torchvision"))
         or need_cuda_torch
@@ -434,11 +455,6 @@ def install_requirements(
                     else "PyTorch extension could not prepare a compatible torch build"
                 )
             backend = "PyTorch_extension"
-        elif need_cuda_torch:
-            raise RuntimeError(
-                "CPU-only PyTorch is installed and the Slicer PyTorch extension helper (PyTorchUtils) is unavailable; "
-                "install a CUDA-enabled PyTorch wheel matching your NVIDIA driver."
-            )
     cuda_torch_pending = want_cuda_torch and not _torch_cuda_build_satisfied()
     missing = [
         item
@@ -448,8 +464,22 @@ def install_requirements(
     ]
     if cuda_torch_pending and not any(_requirement_canonical_name(item) == "torch" for item in missing):
         missing.insert(0, "torch>=" + torch_minimum if torch_minimum else "torch")
+    if cuda_torch_pending and torchvision_required and not any(
+        _requirement_canonical_name(item) == "torchvision" for item in missing
+    ):
+        missing.append("torchvision")
     if missing:
-        _refuse_bundled_shortfalls(missing)  # D5: before pip, so no long download ends in a failed post-check
+        torch_missing = (
+            [item for item in missing if _requirement_canonical_name(item) in _TORCH_FAMILY_PACKAGES]
+            if cuda_torch_pending
+            else []
+        )
+        other_missing = [item for item in missing if item not in torch_missing]
+        # D5: check before pip so no long download ends in a failed post-check.
+        # Direct CUDA wheel installation into Slicer's site-packages supersedes bundled CPU torch on restart.
+        shortfall_targets = other_missing if direct_cuda_wheel else missing
+        if shortfall_targets:
+            _refuse_bundled_shortfalls(shortfall_targets)
         with tempfile.TemporaryDirectory(prefix="sdds-pip-") as temporary:
             constraints = Path(temporary) / "constraints.txt"
             pinned = installed_versions() if protected else {}
@@ -463,39 +493,70 @@ def install_requirements(
                 ),
                 encoding="utf-8",
             )
-            torch_missing = (
-                [item for item in missing if _requirement_canonical_name(item) in _TORCH_FAMILY_PACKAGES]
-                if cuda_torch_pending
-                else []
-            )
-            other_missing = [item for item in missing if item not in torch_missing]
             if torch_missing:
-                detected_cuda = _detect_host_cuda_backends()
-                flavor = _select_pytorch_wheel_index_flavor(detected_cuda)
-                if not flavor:
-                    raise RuntimeError(
-                        "CUDA-enabled PyTorch was requested for this Python environment, "
-                        "but no compatible NVIDIA GPU/driver was detected."
-                    )
+                explicit_index = str(cuda_index_url or "").strip()
+                if explicit_index:
+                    index_url = explicit_index
+                else:
+                    detected_cuda = _detect_host_cuda_backends()
+                    flavor = _select_pytorch_wheel_index_flavor(detected_cuda)
+                    if not flavor:
+                        raise RuntimeError(
+                            "CUDA-enabled PyTorch was requested for this Python environment, "
+                            "but no compatible NVIDIA GPU/driver was detected."
+                        )
+                    index_url = f"https://download.pytorch.org/whl/{flavor}"
                 backend = "python_subprocess_cuda_wheel"
-                index_url = f"https://download.pytorch.org/whl/{flavor}"
-                subprocess.run(
-                    [
-                        sys.executable,
-                        "-m",
-                        "pip",
-                        "install",
-                        "--force-reinstall",
-                        "--index-url",
-                        index_url,
-                        "--constraint",
-                        str(constraints),
-                        "--",
-                        *torch_missing,
-                    ],
-                    check=True,
-                    **subprocess_no_window_kwargs(),
-                )
+                if protected:
+                    # Inside Slicer's Python, avoid --force-reinstall (which would reinstall Slicer's
+                    # numpy/pillow) and disable pip's wheel cache (~2.7 GB savings). Uninstall any
+                    # pre-existing torch/torchvision in Slicer's site-packages first, then install
+                    # strictly from the CUDA index (never passing --extra-index-url PyPI).
+                    existing_torch = [pkg for pkg in ("torch", "torchvision", "torchaudio") if pkg in before]
+                    if existing_torch:
+                        subprocess.run(
+                            [sys.executable, "-m", "pip", "uninstall", "-y", *existing_torch],
+                            check=False,
+                            **subprocess_no_window_kwargs(),
+                        )
+                    install_torch_reqs = _windows_safe_torch_requirements(torch_missing)
+                    subprocess.run(
+                        [
+                            sys.executable,
+                            "-m",
+                            "pip",
+                            "install",
+                            "--no-cache-dir",
+                            "--upgrade-strategy",
+                            "only-if-needed",
+                            "--index-url",
+                            index_url,
+                            "--constraint",
+                            str(constraints),
+                            "--",
+                            *install_torch_reqs,
+                        ],
+                        check=True,
+                        **subprocess_no_window_kwargs(),
+                    )
+                else:
+                    subprocess.run(
+                        [
+                            sys.executable,
+                            "-m",
+                            "pip",
+                            "install",
+                            "--force-reinstall",
+                            "--index-url",
+                            index_url,
+                            "--constraint",
+                            str(constraints),
+                            "--",
+                            *torch_missing,
+                        ],
+                        check=True,
+                        **subprocess_no_window_kwargs(),
+                    )
             if other_missing:
                 try:
                     packaging = importlib.import_module("slicer.packaging")
@@ -541,6 +602,11 @@ def install_requirements(
             "CUDA-enabled PyTorch was requested, but the installed torch distribution is still CPU-only or lacks CUDA support."
         )
     changed = restart_packages(before, after, loaded)
+    restart_needed = bool(changed)
+    if direct_cuda_wheel and backend == "python_subprocess_cuda_wheel":
+        restart_needed = True
+        if "torch" not in changed:
+            changed = sorted({*changed, "torch"})
     return {"kind": "slicerdsurfer_python_setup", "status": "completed", "backend": backend,
             "requirements": list(requirements), "installed_before": before, "installed_after": after,
-            "restart_required": bool(changed), "restart_packages": changed}
+            "restart_required": restart_needed, "restart_packages": changed}

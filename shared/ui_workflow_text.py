@@ -186,6 +186,16 @@ WORKFLOW_TEXT = {
             "Select CPU, Apple Metal (MPS), or a specific CUDA GPU for neural inference "
             "(DDSurfer, DDParcel, DDSeg, TractCloud, PNL mask). Auto prefers CUDA:0, then MPS, then CPU."
         ),
+        "cuda_device_not_installed_suffix": " (CUDA PyTorch not installed)",
+        "cuda_device_restart_pending_suffix": " (Restart Slicer to enable)",
+        "cuda_setup_help_tooltip": (
+            "NVIDIA GPU detected, but Slicer currently has CPU-only PyTorch. "
+            "Click ? to install CUDA PyTorch inside 3D Slicer (~2.5–2.7 GB download, ~4.6–5.2 GB disk space)."
+        ),
+        "cuda_setup_restart_tooltip": (
+            "CUDA PyTorch has been installed. Restart 3D Slicer to enable CUDA GPU selection. Click ? to restart now."
+        ),
+        "cuda_setup_help_name": "Install CUDA PyTorch for NVIDIA GPU",
     },
     "zh": {
         "section_getting_started": "快速开始",
@@ -328,6 +338,16 @@ WORKFLOW_TEXT = {
         "connectome_tooltip": "基于 DDParcel 分区的 SIFT2 加权或纤维计数（Fiber count）结构连接矩阵。",
         "compute_device_auto": "自动 (CUDA / MPS / CPU)",
         "compute_device_tooltip": "选择用于神经网络推理（DDSurfer、DDParcel、DDSeg、TractCloud、PNL 掩膜）的计算设备；自动模式依次优先使用 CUDA:0、Apple MPS、CPU。",
+        "cuda_device_not_installed_suffix": "（需安装 CUDA 版 PyTorch）",
+        "cuda_device_restart_pending_suffix": "（请重启 Slicer 以启用）",
+        "cuda_setup_help_tooltip": (
+            "检测到 NVIDIA 独显，但当前 Slicer 内置的是 CPU 版 PyTorch。"
+            "点击 ? 可在 3D Slicer 内直接安装 CUDA 版 PyTorch（约 2.5–2.7 GB 下载，约 4.6–5.2 GB 磁盘空间）。"
+        ),
+        "cuda_setup_restart_tooltip": (
+            "CUDA 版 PyTorch 已安装，请重启 3D Slicer 以启用 GPU 选择。点击 ? 可立即重启。"
+        ),
+        "cuda_setup_help_name": "为 NVIDIA 独显安装 CUDA 版 PyTorch",
     },
 }
 

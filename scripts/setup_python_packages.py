@@ -40,7 +40,9 @@ def main():
                                       torch_minimum=request.get("torch_minimum"),
                                       torchvision_required=request.get("torchvision_required", False),
                                       require_cuda_torch=request.get("require_cuda_torch", False),
-                                      replace_cpu_torch=request.get("replace_cpu_torch", False))
+                                      replace_cpu_torch=request.get("replace_cpu_torch", False),
+                                      direct_cuda_wheel=request.get("direct_cuda_wheel", False),
+                                      cuda_index_url=request.get("cuda_index_url"))
     except Exception as exc:
         result = {"kind": "slicerdsurfer_python_setup", "status": "failed",
                   "error": f"{type(exc).__name__}: {exc}"}

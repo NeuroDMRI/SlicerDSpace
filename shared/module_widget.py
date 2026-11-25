@@ -5494,10 +5494,24 @@ class SharedWidgetMixin:
         if result is None:
             slicer.util.infoDisplay("Run the environment check first.", parent=self.parent)
             return
+        from shared.ui_environment_panel import should_route_prepare_all_to_cuda_setup
+
+        if should_route_prepare_all_to_cuda_setup(result):
+            from shared.ui_cuda_setup import show_cuda_pytorch_setup_dialog
+
+            show_cuda_pytorch_setup_dialog(self)
+            return
         from shared.ui_selected_setup import prepare_selected_environment
         prepare_selected_environment(self, result)
 
     def _onInstallEnvironmentItemClicked(self, item) -> None:
+        from shared.ui_environment_panel import should_route_environment_item_to_cuda_setup
+
+        if should_route_environment_item_to_cuda_setup(item):
+            from shared.ui_cuda_setup import show_cuda_pytorch_setup_dialog
+
+            show_cuda_pytorch_setup_dialog(self)
+            return
         group = str(getattr(item, "install_group", "") or "")
         if group in {"mrtrix", "fsl"}:
             from shared.managed_runtimes import cuda_candidate, supported_platform

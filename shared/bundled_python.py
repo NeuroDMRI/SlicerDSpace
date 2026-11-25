@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import site
 import struct
@@ -15,6 +16,8 @@ from typing import MutableMapping
 
 BUNDLED_PYTHON_ENV = "SLICERDSPACE_BUNDLED_PYTHON_ROOT"
 WINDOWS_CUDA_ALLOC_CONF = "garbage_collection_threshold:0.8,max_split_size_mb:128"
+_TORCH_DIST_INFO_RE = re.compile(r"^torch-\d", re.IGNORECASE)
+_TORCH_VERSION_CUDA_RE = re.compile(r"(?m)^\s*cuda\s*=\s*['\"][0-9]+(?:\.[0-9]+)*['\"]")
 _DEQUARANTINED_ROOTS: set[Path] = set()
 _WINDOWS_DLL_DIR_HANDLES: list[object] = []
 _WINDOWS_REGISTERED_DLL_DIRS: set[str] = set()
@@ -402,6 +405,52 @@ def _append_env_paths(env: MutableMapping[str, str], key: str, additions: tuple[
     env[key] = os.pathsep.join(existing)
 
 
+def site_dir_has_cuda_torch(site_dir: Path | str) -> bool:
+    """Return True when ``site_dir`` contains a CUDA-enabled PyTorch installation (zero-import check)."""
+    try:
+        root = Path(site_dir)
+        if not root.is_dir():
+            return False
+    except OSError:
+        return False
+
+    saw_cpu_only = False
+    try:
+        for entry in root.iterdir():
+            name = entry.name
+            if not name.lower().endswith(".dist-info") or not _TORCH_DIST_INFO_RE.match(name):
+                continue
+            low = name.lower()
+            if "+cu" in low:
+                return True
+            if "+cpu" in low:
+                saw_cpu_only = True
+    except OSError:
+        pass
+    if saw_cpu_only:
+        return False
+
+    torch_lib = root / "torch" / "lib"
+    try:
+        if (torch_lib / "libtorch_cuda.so").is_file() or (torch_lib / "torch_cuda.dll").is_file():
+            return True
+    except OSError:
+        pass
+
+    version_py = root / "torch" / "version.py"
+    try:
+        if version_py.is_file():
+            head = version_py.read_text(encoding="utf-8", errors="ignore")[:4096]
+            if _TORCH_VERSION_CUDA_RE.search(head):
+                return True
+    except OSError:
+        pass
+    return False
+
+
+_site_dir_has_cuda_torch = site_dir_has_cuda_torch
+
+
 def inject_bundled_python_env(
     env: MutableMapping[str, str],
     *,
@@ -422,17 +471,23 @@ def inject_bundled_python_env(
                 if cand.is_dir():
                     py_dirs.append(cand.resolve())
         bundle_has_numpy = any((site_dir / "numpy").is_dir() for site_dir in py_dirs)
-        if sys.platform == "win32" and py_dirs and not bundle_has_numpy:
-            # Windows release packages ship CPU-only torch in bundled-python (without numpy)
-            # while GPU users install CUDA torch into Slicer's own Lib/site-packages.
-            # CPython inserts PYTHONPATH ahead of Lib/site-packages, so place Slicer's
-            # site-packages ahead of bundled-python in PYTHONPATH to prevent shadowing CUDA torch.
-            slicer_sp = _slicer_site_packages_dirs(python_executable)
+        slicer_sp = _slicer_site_packages_dirs(python_executable) if sys.platform != "darwin" else ()
+        slicer_has_cuda_torch = bool(slicer_sp) and any(site_dir_has_cuda_torch(sp) for sp in slicer_sp)
+        prefer_slicer_sp = bool(py_dirs) and (
+            (sys.platform == "win32" and not bundle_has_numpy) or slicer_has_cuda_torch
+        )
+        if prefer_slicer_sp and slicer_sp:
+            # Release packages ship CPU-only torch in bundled-python while GPU users install
+            # CUDA torch into Slicer's own site-packages (on Windows or Linux).
+            # CPython inserts PYTHONPATH ahead of site-packages, so place Slicer's site-packages
+            # ahead of bundled-python in PYTHONPATH to prevent shadowing CUDA torch.
             _append_env_paths(env, "PYTHONPATH", (*slicer_sp, *py_dirs))
         else:
             _append_env_paths(env, "PYTHONPATH", tuple(py_dirs))
-        if bundle_has_numpy:
+        if bundle_has_numpy and not slicer_has_cuda_torch:
             env["SLICERDSPACE_BUNDLED_SITE_PACKAGES"] = os.pathsep.join(str(p) for p in py_dirs)
+        elif slicer_has_cuda_torch:
+            env.pop("SLICERDSPACE_BUNDLED_SITE_PACKAGES", None)
     _append_env_paths(env, "PATH", bundled_script_dirs(module_root))
     return env
 
@@ -442,6 +497,8 @@ def prepend_env_bundled_site_packages() -> tuple[str, ...]:
     if sys.platform == "win32":
         register_windows_dll_directories()
     if "numpy" in sys.modules:
+        return ()
+    if sys.platform != "darwin" and any(site_dir_has_cuda_torch(sp) for sp in _slicer_site_packages_dirs()):
         return ()
     raw = os.environ.get("SLICERDSPACE_BUNDLED_SITE_PACKAGES", "")
     dirs = [entry for entry in raw.split(os.pathsep) if entry and os.path.isdir(entry)]
@@ -468,6 +525,8 @@ def activate_bundled_python(module_root: Path | None = None) -> tuple[Path, ...]
     _log_activation_problem()
     if not site_dirs:
         return ()
+    slicer_sp = _slicer_site_packages_dirs() if sys.platform != "darwin" else ()
+    slicer_has_cuda_torch = bool(slicer_sp) and any(site_dir_has_cuda_torch(sp) for sp in slicer_sp)
     norm_sys_path = {os.path.normcase(os.path.normpath(entry)) for entry in sys.path if entry}
     prepend: list[str] = []
     demote: list[str] = []
@@ -477,9 +536,12 @@ def activate_bundled_python(module_root: Path | None = None) -> tuple[Path, ...]
         if norm_rendered not in norm_sys_path:
             site.addsitedir(rendered)
             norm_sys_path.add(norm_rendered)
-        if (site_dir / "numpy").is_dir() and "numpy" not in sys.modules:
+        if (site_dir / "numpy").is_dir() and "numpy" not in sys.modules and not slicer_has_cuda_torch:
             prepend.append(rendered)
-        elif sys.platform == "win32" and not (site_dir / "numpy").is_dir() and "torch" not in sys.modules:
+        elif (
+            (sys.platform == "win32" and not (site_dir / "numpy").is_dir())
+            or slicer_has_cuda_torch
+        ) and "torch" not in sys.modules:
             demote.append(rendered)
     if prepend:
         prepend_norms = {os.path.normcase(os.path.normpath(p)) for p in prepend}
@@ -489,9 +551,9 @@ def activate_bundled_python(module_root: Path | None = None) -> tuple[Path, ...]
         ]
     elif demote:
         # Ensure Slicer's own site-packages (with any user-installed CUDA torch) stays ahead of
-        # a non-numpy Windows bundled-python overlay even if inherited via PYTHONPATH.
+        # bundled-python even if inherited via PYTHONPATH.
         demote_norms = {os.path.normcase(os.path.normpath(p)) for p in demote}
-        slicer_norms = {os.path.normcase(os.path.normpath(str(p))) for p in _slicer_site_packages_dirs()}
+        slicer_norms = {os.path.normcase(os.path.normpath(str(p))) for p in slicer_sp}
         if slicer_norms:
             kept = [entry for entry in sys.path if os.path.normcase(os.path.normpath(entry)) not in demote_norms]
             sys.path[:] = [*kept, *demote]

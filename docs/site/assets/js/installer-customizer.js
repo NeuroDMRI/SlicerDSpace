@@ -151,22 +151,22 @@
       windows_x64_base: {
         filename: 'SlicerDSpace-v1.0.0-Windows-x64.zip',
         url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Windows-x64.zip',
-        size_bytes: 369907450,
-        sha256: '3259f9fe0ecf477f793047dd1ede4b6eacdbac03833ac9fd43077dffda3b3f27',
+        size_bytes: 369907661,
+        sha256: 'b26a6df6981ce18507219dda428b9ab892ff07351426d55cc2a2a8b02e216391',
         parts: []
       },
       linux_x64_base: {
         filename: 'SlicerDSpace-v1.0.0-Linux-x64.tar.gz',
         url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Linux-x64.tar.gz',
-        size_bytes: 518463549,
-        sha256: '028641935b475c7c87ec29a475321363d392ab0af07cb7700e6020c24a9c7bd1',
+        size_bytes: 518463571,
+        sha256: 'c8c242c0cc72c810b0f090fa6168d1c7b018183679e44e83294dc8cfecb83953',
         parts: []
       },
       macos_arm64_base: {
         filename: 'SlicerDSpace-v1.0.0-macOS-arm64.tar.gz',
         url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-macOS-arm64.tar.gz',
-        size_bytes: 366893564,
-        sha256: 'a28b71c9750ddccdfb772ab320ef1b0fe561e0f6449fc9acbcece89e2924ea33',
+        size_bytes: 366893572,
+        sha256: '44ead5de9aae7c77d3638a31e715b66bf7cfe8b32fafaa24e7ebef2535aedd37',
         parts: []
       }
     }
@@ -182,7 +182,7 @@
       modelPlaceholder: '~/Library/Application Support/SlicerDSpace/model-assets',
       setupZipName: 'SlicerDSpaceSetup-macOS.zip',
       scriptName: 'Install-SlicerDSpace.command',
-      baseEstimateBytes: 366893564
+      baseEstimateBytes: 366893572
     },
     windows: {
       label: 'Windows',
@@ -192,7 +192,7 @@
       modelPlaceholder: '%LOCALAPPDATA%\\SlicerDSpace\\model-assets',
       setupZipName: 'SlicerDSpaceSetup-Windows.zip',
       scriptName: 'Install-SlicerDSpace.bat',
-      baseEstimateBytes: 369907450
+      baseEstimateBytes: 369907661
     },
     linux: {
       label: 'Linux',
@@ -202,7 +202,7 @@
       modelPlaceholder: '~/.local/share/SlicerDSpace/model-assets',
       setupZipName: 'SlicerDSpaceSetup-Linux.zip',
       scriptName: 'Install-SlicerDSpace.sh',
-      baseEstimateBytes: 518463549
+      baseEstimateBytes: 518463571
     }
   };
 

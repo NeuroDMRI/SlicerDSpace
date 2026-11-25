@@ -15,6 +15,13 @@ from types import SimpleNamespace
 from shared.cohort_schedule import ENV, create_schedule, stage_admission, scheduled_stage
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def child_pythonpath():
+    # Opus P2 (child PYTHONPATH): ROOT first, then the inherited path, so a test-dependency directory survives.
+    return os.pathsep.join(filter(None, [str(ROOT), os.environ.get('PYTHONPATH')]))
+
+
 WORKER = '''
 import os, time, json
 from pathlib import Path
@@ -88,7 +95,7 @@ class CohortScheduleTests(unittest.TestCase):
             children = []
             try:
                 for index in range(3):
-                    env = {**os.environ, ENV: str(folder), 'PYTHONPATH': str(ROOT),
+                    env = {**os.environ, ENV: str(folder), 'PYTHONPATH': child_pythonpath(),
                            'SLICERDSPACE_COHORT_SUBJECT': str(index), 'RESULT': str(Path(tmp) / f'{index}.json'),
                            'OPENBLAS_NUM_THREADS': '1'}
                     children.append(subprocess.Popen([sys.executable, '-c', WORKER], env=env,
@@ -124,7 +131,7 @@ class CohortScheduleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             folder = self.create(tmp)
             code = "from shared.cohort_schedule import stage_admission; import os\nwith stage_admission('crash',gpu=True): os._exit(7)"
-            env = {**os.environ, ENV: str(folder), 'PYTHONPATH': str(ROOT)}
+            env = {**os.environ, ENV: str(folder), 'PYTHONPATH': child_pythonpath()}
             child = subprocess.run([sys.executable, '-c', code], env=env, capture_output=True, timeout=30)
             self.assertEqual(child.returncode, 7)
             with patch.dict(os.environ, {ENV: str(folder)}):
@@ -150,7 +157,7 @@ class CohortScheduleTests(unittest.TestCase):
     def test_descendant_reuses_parent_reservation_without_deadlock(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = self.create(tmp)
-            env = {ENV: str(folder), 'PYTHONPATH': str(ROOT)}
+            env = {ENV: str(folder), 'PYTHONPATH': child_pythonpath()}
             with patch.dict(os.environ, env):
                 with stage_admission('parent', gpu=True):
                     child = subprocess.run([sys.executable, '-c',

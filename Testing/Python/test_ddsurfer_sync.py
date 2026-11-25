@@ -19,6 +19,11 @@ from anatomy.surface.pipeline import SurfaceConfig, _raw_command, inspect_surfac
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def child_pythonpath():
+    # Opus P2 (child PYTHONPATH): ROOT first, then the inherited path, so a test-dependency directory survives.
+    return os.pathsep.join(filter(None, [str(ROOT), os.environ.get('PYTHONPATH')]))
+
+
 class DDSurferSyncTests(unittest.TestCase):
     def test_identical_assets_are_not_overwritten_on_source_sync(self):
         from scripts.sync_ddsurfer_upstream import copy_if_changed
@@ -174,7 +179,8 @@ class DDSurferSyncTests(unittest.TestCase):
                     raise KeyboardInterrupt
 
             with self.assertRaises(KeyboardInterrupt):
-                run_backend([fixture, BACKEND_ROOT, pid_file], log=cancel_on_ready)
+                run_backend([fixture, BACKEND_ROOT, pid_file], env={'PYTHONPATH': child_pythonpath()},
+                            log=cancel_on_ready)
             pid = int(pid_file.read_text())
             # PythonSlicer is a launcher; its child may still be reaping the
             # interrupted stage when the launcher itself exits.

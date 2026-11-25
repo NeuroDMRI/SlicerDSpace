@@ -30,6 +30,8 @@ from scripts.audit_extension_package import audit_package
 from scripts.extension_runtime.archive_layout import inspect_archive_layout
 from scripts.extension_runtime.runtime_resources import runtime_files
 from scripts.package_modular_assets import (
+    ASSETS_RELEASE_BASE_URL,
+    ASSETS_RELEASE_TAG,
     CORE_MODEL_PACK_ORDER,
     CORE_MODEL_PACK_SPECS,
     DETERMINISTIC_MTIME,
@@ -50,7 +52,7 @@ from scripts.package_slicer_extension import _should_mark_executable
 from shared.code_updater import EXTENSION_VERSION, RUNTIME_ABI_VERSION, compute_code_tree_sha256
 
 GITHUB_REPO = "NeuroDMRI/SlicerDSpace"
-MODEL_ASSETS_TAG = "model-assets-v0.1.1"
+MODEL_ASSETS_TAG = ASSETS_RELEASE_TAG
 IMMUTABLE_LEGACY_TAGS = frozenset({"v0.1.1", "model-assets-v0.1.1"})
 MACOS_UKF_ARCHIVE = "ukf-standalone-darwin-arm64.tar.gz"
 STANDALONE_UKF_ARCHIVES: dict[str, tuple[str, str]] = {
@@ -392,9 +394,9 @@ def _should_skip_member(
 
 def cmd_build_model_pack(args: argparse.Namespace) -> int:
     pack_id = args.pack
-    release_tag = str(args.release_tag or RELEASE_TAG)
+    assets_tag = str(getattr(args, "assets_tag", "") or getattr(args, "release_tag", "") or ASSETS_RELEASE_TAG)
     repo = str(args.repo or GITHUB_REPO)
-    _assert_mutable_release_tag(release_tag, dry_run=bool(args.dry_run))
+    _assert_mutable_release_tag(assets_tag, dry_run=bool(args.dry_run))
 
     spec = CORE_MODEL_PACK_SPECS[pack_id]
     work_dir = args.work_dir.expanduser().resolve()
@@ -424,7 +426,7 @@ def cmd_build_model_pack(args: argparse.Namespace) -> int:
         )
 
     files = collect_model_pack_files(pack_id, repo_root=REPO_ROOT)
-    filename = spec["filename_template"].format(tag=release_tag)
+    filename = spec["filename_template"].format(tag=assets_tag)
     archive_path = out_dir / filename
     size_bytes, digest = write_deterministic_tar_gz(assets_dir, files, archive_path)
 
@@ -439,14 +441,14 @@ def cmd_build_model_pack(args: argparse.Namespace) -> int:
     if not getattr(args, "asset_root", None):
         shutil.rmtree(assets_dir, ignore_errors=True)
 
-    rel_base = _release_base_url(release_tag, repo)
+    assets_base = _release_base_url(assets_tag, repo)
     parts, upload_paths = split_file_if_needed(
         archive_path,
-        release_base_url=rel_base,
+        release_base_url=assets_base,
         remove_unsplit_when_split=True,
     )
     if not args.dry_run:
-        _upload_release_files(upload_paths, release_tag=release_tag, repo=repo)
+        _upload_release_files(upload_paths, release_tag=assets_tag, repo=repo)
         for p in upload_paths:
             p.unlink(missing_ok=True)
 
@@ -457,8 +459,8 @@ def cmd_build_model_pack(args: argparse.Namespace) -> int:
         files=files,
         parts=parts,
         published=not args.dry_run,
-        release_tag=release_tag,
-        release_base_url=rel_base,
+        release_tag=assets_tag,
+        release_base_url=assets_base,
     )
     receipt_path = out_dir / f"model-pack-receipt-{pack_id}.json"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
@@ -565,9 +567,15 @@ def cmd_build_atlas(args: argparse.Namespace) -> int:
     size_bytes, digest = write_deterministic_tar_gz(assets_dir, files, archive_path)
     shutil.rmtree(assets_dir, ignore_errors=True)
 
-    parts, upload_paths = split_file_if_needed(archive_path, remove_unsplit_when_split=True)
+    assets_tag = str(getattr(args, "assets_tag", "") or ASSETS_RELEASE_TAG)
+    assets_base = _release_base_url(assets_tag, GITHUB_REPO)
+    parts, upload_paths = split_file_if_needed(
+        archive_path,
+        release_base_url=assets_base,
+        remove_unsplit_when_split=True,
+    )
     if not args.dry_run:
-        _upload_release_files(upload_paths)
+        _upload_release_files(upload_paths, release_tag=assets_tag, repo=GITHUB_REPO)
     for p in upload_paths:
         p.unlink(missing_ok=True)
 
@@ -1057,7 +1065,8 @@ def _render_js_model_packs_block(model_packs: dict[str, dict[str, Any]]) -> str:
         p = model_packs[key]
         fn = str(p["filename"])
         parts = list(p.get("parts") or ())
-        url_expr = "''" if parts else f"RELEASE_BASE + '/{fn}'"
+        base_var = "ASSETS_RELEASE_BASE" if "/releases/download/assets/" in str(p.get("url") or "") or not p.get("url") else "RELEASE_BASE"
+        url_expr = "''" if parts else f"{base_var} + '/{fn}'"
         lines.append(f"      {key}: {{")
         lines.append(f"        id: '{key}',")
         lines.append(f"        filename: '{fn}',")
@@ -1075,7 +1084,7 @@ def _render_js_model_packs_block(model_packs: dict[str, dict[str, Any]]) -> str:
                 lines.append(f"            filename: '{pfn}',")
                 lines.append(f"            size_bytes: {int(sp['size_bytes'])},")
                 lines.append(f"            sha256: '{sp['sha256']}',")
-                lines.append(f"            url: RELEASE_BASE + '/{pfn}'")
+                lines.append(f"            url: {base_var} + '/{pfn}'")
                 lines.append(f"          }}{pcomma}")
             lines.append("        ]")
         comma = "," if idx + 1 < len(keys) else ""
@@ -1433,12 +1442,17 @@ def _format_sha256sums(
         elif b.get("sha256"):
             _add(str(b["sha256"]), str(b["filename"]))
 
+    tag_segment = f"/releases/download/{tag}/"
+
     model_packs = artifacts.get("model_packs") or {}
     for key in [k for k in CORE_MODEL_PACK_ORDER if k in model_packs] + [
         k for k in model_packs if k not in CORE_MODEL_PACK_ORDER
     ]:
         p = model_packs[key]
         parts = list(p.get("parts") or ())
+        urls = [str(sp.get("url") or "") for sp in parts] if parts else [str(p.get("url") or "")]
+        if urls and not any(tag_segment in u for u in urls):
+            continue
         if parts:
             for sp in parts:
                 _add(str(sp["sha256"]), str(sp["filename"]))
@@ -1460,12 +1474,11 @@ def _format_sha256sums(
     pack_order = [k for k in (*CORE_MODEL_PACK_ORDER, "wma_org", "wma_naba", "wma_east_west") if k in packs] + [
         k for k in packs if k not in (*CORE_MODEL_PACK_ORDER, "wma_org", "wma_naba", "wma_east_west")
     ]
-    tag_segment = f"/releases/download/{tag}/"
     for key in pack_order:
         p = packs[key]
         parts = list(p.get("parts") or ())
         urls = [str(sp.get("url") or "") for sp in parts] if parts else [str(p.get("url") or "")]
-        if tag != WMA_ATLAS_RELEASE_TAG and urls and not any(tag_segment in u for u in urls):
+        if urls and not any(tag_segment in u for u in urls):
             continue
         if parts:
             for sp in parts:
@@ -1641,6 +1654,30 @@ def cmd_sync_metadata(args: argparse.Namespace) -> int:
             release_tag=release_tag,
             repo=repo,
         )
+        # Keep software releases clean: once all 5 core model packs are hosted on the permanent
+        # 'assets' release, prune any legacy SlicerDSpace-<tag>-Model-*.tar.gz off the software release.
+        if release_tag != ASSETS_RELEASE_TAG:
+            assets_remote = _fetch_remote_release_assets(ASSETS_RELEASE_TAG, repo)
+            all_on_assets = all(
+                _asset_matches_remote(
+                    Path(str((compact_model_packs.get(pid) or {}).get("filename") or "")),
+                    int((compact_model_packs.get(pid) or {}).get("size_bytes") or 0),
+                    str((compact_model_packs.get(pid) or {}).get("sha256") or ""),
+                    assets_remote,
+                )
+                for pid in CORE_MODEL_PACK_ORDER
+                if pid in compact_model_packs
+            )
+            if all_on_assets:
+                rel_remote = _fetch_remote_release_assets(release_tag, repo)
+                legacy_prefix = f"SlicerDSpace-{release_tag}-Model-"
+                for name in sorted(rel_remote):
+                    if name.startswith(legacy_prefix):
+                        print(f"[cleanup] Removing migrated model pack from {release_tag}: {name}", flush=True)
+                        subprocess.run(
+                            ["gh", "release", "delete-asset", release_tag, name, "--repo", repo, "--yes"],
+                            check=False,
+                        )
     return 0
 
 
@@ -1744,6 +1781,147 @@ def _download_exact_url(
             print(f"[warn] Download retry for {dest.name}: {exc}", flush=True)
             time.sleep(4 * attempt)
     raise RuntimeError(f"Failed downloading {dest.name} from {url}")
+
+
+_SURFACE_RUNTIME_REPACK_SPECS: tuple[dict[str, Any], ...] = (
+    {
+        "dest_name": "surface-runtime-linux-x86_64.tar.gz",
+        "base_filename": "SlicerDSpace-v1.0.0-Linux-x64.tar.gz",
+        "base_release_tag": "v1.0.0",
+        "runtime_dirname": "surface-runtime-linux-x86_64",
+        "expected_recipe_sha256": "0ca82110b74fc3898b2a96ee4b4749369a208e5fc65553335008d1c4c05284c6",
+        "expected_files": 67,
+        "expected_unpacked_bytes": 89406503,
+    },
+    {
+        "dest_name": "surface-runtime-windows-x86_64.tar.gz",
+        "base_filename": "SlicerDSpace-v1.0.0-Windows-x64.zip",
+        "base_release_tag": "v1.0.0",
+        "runtime_dirname": "surface-runtime-windows-x86_64",
+        "expected_recipe_sha256": "0ca82110b74fc3898b2a96ee4b4749369a208e5fc65553335008d1c4c05284c6",
+        "expected_files": 72,
+        "expected_unpacked_bytes": 154982057,
+    },
+)
+
+
+def _repack_surface_runtime_from_base(
+    spec: dict[str, Any],
+    *,
+    work_dir: Path,
+    assets_tag: str,
+    repo: str,
+    remote_assets: dict[str, dict[str, Any]],
+    dry_run: bool = False,
+) -> None:
+    dest_name = str(spec["dest_name"])
+    sha_name = f"{dest_name}.sha256"
+    existing_tgz = remote_assets.get(dest_name)
+    existing_sha = remote_assets.get(sha_name)
+    if (
+        isinstance(existing_tgz, dict)
+        and str(existing_tgz.get("state") or "").lower() == "uploaded"
+        and int(existing_tgz.get("size") or 0) > 1_000_000
+        and isinstance(existing_sha, dict)
+        and str(existing_sha.get("state") or "").lower() == "uploaded"
+        and int(existing_sha.get("size") or 0) > 64
+    ):
+        print(f"[migrate-assets] Already uploaded on {assets_tag}: {dest_name} (+ .sha256)", flush=True)
+        return
+    base_url = f"https://github.com/{repo}/releases/download/{spec['base_release_tag']}/{spec['base_filename']}"
+    if dry_run:
+        print(f"[migrate-assets] [dry-run] Would extract {spec['runtime_dirname']} from {base_url} -> {dest_name}", flush=True)
+        return
+
+    base_path = work_dir / str(spec["base_filename"])
+    rt_dir = work_dir / str(spec["runtime_dirname"])
+    out_tgz = work_dir / dest_name
+    out_sha = work_dir / sha_name
+    prefix = f"SlicerDSpace/bundled-runtimes/{spec['runtime_dirname']}/"
+    try:
+        _download_exact_url(base_url, base_path)
+        shutil.rmtree(rt_dir, ignore_errors=True)
+        rt_dir.mkdir(parents=True, exist_ok=True)
+        if base_path.suffix == ".zip":
+            with zipfile.ZipFile(base_path, "r") as zf:
+                for info in zf.infolist():
+                    if info.is_dir():
+                        continue
+                    norm = info.filename.replace("\\", "/").lstrip("/")
+                    if not norm.startswith(prefix):
+                        continue
+                    rel = norm[len(prefix):]
+                    if not rel or ".." in PurePosixPath(rel).parts:
+                        raise RuntimeError(f"Unsafe runtime member: {norm}")
+                    dst = rt_dir.joinpath(*PurePosixPath(rel).parts)
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(info, "r") as src_fh, dst.open("wb") as dst_fh:
+                        shutil.copyfileobj(src_fh, dst_fh, length=1024 * 1024)
+        else:
+            with tarfile.open(base_path, "r:*") as tf:
+                for member in tf:
+                    if not member.isfile():
+                        continue
+                    norm = member.name.replace("\\", "/").lstrip("/")
+                    if not norm.startswith(prefix):
+                        continue
+                    rel = norm[len(prefix):]
+                    if not rel or ".." in PurePosixPath(rel).parts:
+                        raise RuntimeError(f"Unsafe runtime member: {norm}")
+                    dst = rt_dir.joinpath(*PurePosixPath(rel).parts)
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    with tf.extractfile(member) as src_fh, dst.open("wb") as dst_fh:
+                        shutil.copyfileobj(src_fh, dst_fh, length=1024 * 1024)
+
+        rj = rt_dir / "runtime.json"
+        if not rj.is_file():
+            raise RuntimeError(f"Missing runtime.json after extracting {prefix} from {base_path.name}")
+        manifest = json.loads(rj.read_text(encoding="utf-8"))
+        if manifest.get("activation_key_included") is not False:
+            raise RuntimeError(f"Refusing surface runtime with activation_key_included != false: {dest_name}")
+        if manifest.get("recipe_sha256") != spec["expected_recipe_sha256"]:
+            raise RuntimeError(
+                f"Surface runtime recipe mismatch for {dest_name}: {manifest.get('recipe_sha256')} != {spec['expected_recipe_sha256']}"
+            )
+        files_map = manifest.get("files") or {}
+        if len(files_map) != int(spec["expected_files"]):
+            raise RuntimeError(f"Unexpected file count in {dest_name}: {len(files_map)} != {spec['expected_files']}")
+        total_bytes = 0
+        for rel, meta in sorted(files_map.items()):
+            fp = rt_dir.joinpath(*PurePosixPath(rel).parts)
+            if not fp.is_file():
+                raise RuntimeError(f"Missing declared file in {dest_name}: {rel}")
+            actual_sz = fp.stat().st_size
+            if actual_sz != int(meta["bytes"]):
+                raise RuntimeError(f"Size mismatch for {rel} in {dest_name}: {actual_sz} != {meta['bytes']}")
+            actual_sha = sha256_file(fp)
+            if actual_sha != str(meta["sha256"]):
+                raise RuntimeError(f"SHA256 mismatch for {rel} in {dest_name}: {actual_sha} != {meta['sha256']}")
+            total_bytes += actual_sz
+        if total_bytes != int(spec["expected_unpacked_bytes"]):
+            raise RuntimeError(f"Unpacked size mismatch for {dest_name}: {total_bytes} != {spec['expected_unpacked_bytes']}")
+
+        with out_tgz.open("wb") as output, gzip.GzipFile(fileobj=output, mode="wb", mtime=0, filename="") as compressed:
+            with tarfile.open(fileobj=compressed, mode="w|", format=tarfile.PAX_FORMAT) as archive:
+                for name in sorted([*files_map.keys(), "runtime.json"]):
+                    fp = rt_dir.joinpath(*PurePosixPath(name).parts)
+                    info = archive.gettarinfo(str(fp), arcname=name)
+                    info.uid = info.gid = info.mtime = 0
+                    info.uname = info.gname = ""
+                    info.mode = 0o755 if (name.startswith("bin/") and not name.lower().endswith(".dll")) else 0o644
+                    with fp.open("rb") as stream:
+                        archive.addfile(info, stream)
+
+        tgz_sha = sha256_file(out_tgz)
+        tgz_sz = out_tgz.stat().st_size
+        out_sha.write_text(f"{tgz_sha}  {dest_name}\n", encoding="utf-8")
+        print(f"[surface-runtime-repacked] {dest_name} bytes={tgz_sz} sha256={tgz_sha}", flush=True)
+        _upload_release_files([out_tgz, out_sha], release_tag=assets_tag, repo=repo)
+    finally:
+        base_path.unlink(missing_ok=True)
+        out_tgz.unlink(missing_ok=True)
+        out_sha.unlink(missing_ok=True)
+        shutil.rmtree(rt_dir, ignore_errors=True)
 
 
 def _migration_items_for_group(group: str, *, repo: str = GITHUB_REPO) -> list[tuple[str, str, str, int]]:
@@ -1857,18 +2035,6 @@ def _migration_items_for_group(group: str, *, repo: str = GITHUB_REPO) -> list[t
     if group == "runtimes-and-mirror":
         items: list[tuple[str, str, str, int]] = [
             (
-                "surface-runtime-linux-x86_64.tar.gz",
-                f"{dl}/v0.1.0/surface-runtime-linux-x86_64.tar.gz",
-                "9e6005a114c7d1ff58f247ee2e8977f9eb80f48f525172e15d7e7174ab30fb10",
-                40995581,
-            ),
-            (
-                "surface-runtime-windows-x86_64.tar.gz",
-                f"{dl}/v0.1.0/surface-runtime-windows-x86_64.tar.gz",
-                "bbc97ea1c89117713bf36db2e4f9dd0b23ad4b69b9e27cba1b7050c0bc71f742",
-                66211294,
-            ),
-            (
                 "surface-runtime-darwin-arm64-macos13.tar.gz",
                 f"{dl}/v0.1.1/surface-runtime-darwin-arm64-macos13.tar.gz",
                 "cfd1d7b85c595479b5378fc91dde6ab0a781fc2b6c6e2a04de9feabc414faff9",
@@ -1958,6 +2124,17 @@ def cmd_migrate_assets(args: argparse.Namespace) -> int:
     remote_assets = {} if args.dry_run else _fetch_remote_release_assets(assets_tag, repo)
     print(f"[migrate-assets] Group={args.group} ({len(items)} item(s)) -> release {assets_tag}", flush=True)
 
+    if args.group == "runtimes-and-mirror":
+        for spec in _SURFACE_RUNTIME_REPACK_SPECS:
+            _repack_surface_runtime_from_base(
+                spec,
+                work_dir=work_dir,
+                assets_tag=assets_tag,
+                repo=repo,
+                remote_assets=remote_assets,
+                dry_run=bool(args.dry_run),
+            )
+
     for dest_name, src_url, expected_sha, expected_size in items:
         existing = remote_assets.get(dest_name)
         if (
@@ -1992,7 +2169,8 @@ def main(argv: list[str] | None = None) -> int:
     p_model.add_argument("--work-dir", required=True, type=Path)
     p_model.add_argument("--out-dir", required=True, type=Path)
     p_model.add_argument("--asset-root", default=None, type=Path, help="Optional pre-populated local verified asset root.")
-    p_model.add_argument("--release-tag", default=RELEASE_TAG)
+    p_model.add_argument("--release-tag", default=ASSETS_RELEASE_TAG)
+    p_model.add_argument("--assets-tag", default="")
     p_model.add_argument("--repo", default=GITHUB_REPO)
     p_model.add_argument("--dry-run", action="store_true")
 

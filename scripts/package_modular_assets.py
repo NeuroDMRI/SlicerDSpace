@@ -20,8 +20,10 @@ if str(REPO_ROOT) not in sys.path:
 
 RELEASE_TAG = "v1.0.0"
 RELEASE_BASE_URL = f"https://github.com/NeuroDMRI/SlicerDSpace/releases/download/{RELEASE_TAG}"
-WMA_ATLAS_RELEASE_TAG = "v0.1.1"
-WMA_ATLAS_RELEASE_BASE_URL = f"https://github.com/NeuroDMRI/SlicerDSpace/releases/download/{WMA_ATLAS_RELEASE_TAG}"
+ASSETS_RELEASE_TAG = "assets"
+ASSETS_RELEASE_BASE_URL = f"https://github.com/NeuroDMRI/SlicerDSpace/releases/download/{ASSETS_RELEASE_TAG}"
+WMA_ATLAS_RELEASE_TAG = ASSETS_RELEASE_TAG
+WMA_ATLAS_RELEASE_BASE_URL = ASSETS_RELEASE_BASE_URL
 SINGLE_FILE_LIMIT_BYTES = 1_950_000_000  # stay safely under GitHub Releases' 2.0 GiB ceiling
 SPLIT_CHUNK_BYTES = 1_900_000_000
 DETERMINISTIC_MTIME = 1767225600  # 2026-01-01T00:00:00Z
@@ -37,8 +39,8 @@ CORE_MODEL_PACK_ORDER: tuple[str, ...] = (
 CORE_MODEL_PACK_SPECS: dict[str, dict[str, Any]] = {
     "ddsurfer": {
         "id": "ddsurfer",
-        "filename_template": "SlicerDSpace-{tag}-Model-DDSurfer.tar.gz",
-        "filename": f"SlicerDSpace-{RELEASE_TAG}-Model-DDSurfer.tar.gz",
+        "filename_template": "SlicerDSpace-Model-DDSurfer-v1.tar.gz",
+        "filename": "SlicerDSpace-Model-DDSurfer-v1.tar.gz",
         "profiles": ["surface", "surface-postprocess"],
         "manifest_sources": [
             ("assets_manifest.json", "surface"),
@@ -51,8 +53,8 @@ CORE_MODEL_PACK_SPECS: dict[str, dict[str, Any]] = {
     },
     "ddseg": {
         "id": "ddseg",
-        "filename_template": "SlicerDSpace-{tag}-Model-DDSeg.tar.gz",
-        "filename": f"SlicerDSpace-{RELEASE_TAG}-Model-DDSeg.tar.gz",
+        "filename_template": "SlicerDSpace-Model-DDSeg-v1.tar.gz",
+        "filename": "SlicerDSpace-Model-DDSeg-v1.tar.gz",
         "profiles": ["segmentation"],
         "manifest_sources": [
             ("assets_manifest.json", "segmentation"),
@@ -64,8 +66,8 @@ CORE_MODEL_PACK_SPECS: dict[str, dict[str, Any]] = {
     },
     "ddparcel": {
         "id": "ddparcel",
-        "filename_template": "SlicerDSpace-{tag}-Model-DDParcel.tar.gz",
-        "filename": f"SlicerDSpace-{RELEASE_TAG}-Model-DDParcel.tar.gz",
+        "filename_template": "SlicerDSpace-Model-DDParcel-v1.tar.gz",
+        "filename": "SlicerDSpace-Model-DDParcel-v1.tar.gz",
         "profiles": ["parcellation"],
         "manifest_sources": [
             ("assets_manifest.json", "parcellation"),
@@ -77,8 +79,8 @@ CORE_MODEL_PACK_SPECS: dict[str, dict[str, Any]] = {
     },
     "pnl_cnn": {
         "id": "pnl_cnn",
-        "filename_template": "SlicerDSpace-{tag}-Model-PNL-CNN.tar.gz",
-        "filename": f"SlicerDSpace-{RELEASE_TAG}-Model-PNL-CNN.tar.gz",
+        "filename_template": "SlicerDSpace-Model-PNL-CNN-v1.tar.gz",
+        "filename": "SlicerDSpace-Model-PNL-CNN-v1.tar.gz",
         "profiles": ["pnl-cnn-weights", "pnl-cnn"],
         "manifest_sources": [
             ("external_assets_manifest.json", "pnl-cnn-weights"),
@@ -90,8 +92,8 @@ CORE_MODEL_PACK_SPECS: dict[str, dict[str, Any]] = {
     },
     "tractcloud": {
         "id": "tractcloud",
-        "filename_template": "SlicerDSpace-{tag}-Model-TractCloud.tar.gz",
-        "filename": f"SlicerDSpace-{RELEASE_TAG}-Model-TractCloud.tar.gz",
+        "filename_template": "SlicerDSpace-Model-TractCloud-v1.tar.gz",
+        "filename": "SlicerDSpace-Model-TractCloud-v1.tar.gz",
         "profiles": ["tractcloud"],
         "manifest_sources": [
             ("external_assets_manifest.json", "tractcloud"),
@@ -107,7 +109,7 @@ WMA_ATLAS_PACK_SPECS: dict[str, dict[str, Any]] = {
     "org": {
         "id": "wma_org",
         "profile": "wma",
-        "filename": f"SlicerDSpace-{WMA_ATLAS_RELEASE_TAG}-WMA-ORG.tar.gz",
+        "filename": "SlicerDSpace-WMA-ORG-v1.tar.gz",
         "tier": "optional",
         "default_install": False,
         "title_en": "WMA ORG 800-Cluster White-Matter Atlas (74 Tracts)",
@@ -116,7 +118,7 @@ WMA_ATLAS_PACK_SPECS: dict[str, dict[str, Any]] = {
     "naba": {
         "id": "wma_naba",
         "profile": "wma-naba",
-        "filename": f"SlicerDSpace-{WMA_ATLAS_RELEASE_TAG}-WMA-NABA.tar.gz",
+        "filename": "SlicerDSpace-WMA-NABA-v1.tar.gz",
         "tier": "optional",
         "default_install": False,
         "title_en": "WMA NABA Lifespan White-Matter Atlas",
@@ -125,7 +127,7 @@ WMA_ATLAS_PACK_SPECS: dict[str, dict[str, Any]] = {
     "east-west": {
         "id": "wma_east_west",
         "profile": "wma-east-west",
-        "filename": f"SlicerDSpace-{WMA_ATLAS_RELEASE_TAG}-WMA-EastWest.tar.gz",
+        "filename": "SlicerDSpace-WMA-EastWest-v1.tar.gz",
         "tier": "optional",
         "default_install": False,
         "title_en": "WMA East-West Cross-Population White-Matter Atlas",
@@ -338,7 +340,7 @@ def manifest_model_pack_entry(
     files: dict[str, str],
     parts: list[dict[str, Any]] | None = None,
     published: bool = True,
-    release_tag: str = RELEASE_TAG,
+    release_tag: str = ASSETS_RELEASE_TAG,
     release_base_url: str | None = None,
 ) -> dict[str, Any]:
     spec = CORE_MODEL_PACK_SPECS[pack_id]
@@ -405,6 +407,7 @@ def build_model_packs(
     pack_ids: Iterable[str] = CORE_MODEL_PACK_ORDER,
     repo_root: Path = REPO_ROOT,
     release_tag: str = RELEASE_TAG,
+    assets_release_tag: str = ASSETS_RELEASE_TAG,
     published: bool = True,
 ) -> dict[str, Any]:
     existing: dict[str, Any] = {}
@@ -415,6 +418,7 @@ def build_model_packs(
             existing = {}
 
     base_url = f"https://github.com/NeuroDMRI/SlicerDSpace/releases/download/{release_tag}"
+    assets_base_url = f"https://github.com/NeuroDMRI/SlicerDSpace/releases/download/{assets_release_tag}"
     bundles = {
         k: (existing.get("bundles") or {}).get(k, v)
         for k, v in DEFAULT_BASE_BUNDLES.items()
@@ -425,10 +429,10 @@ def build_model_packs(
     for pid in CORE_MODEL_PACK_ORDER:
         if pid in selected:
             files = collect_model_pack_files(pid, repo_root=repo_root)
-            filename = CORE_MODEL_PACK_SPECS[pid]["filename_template"].format(tag=release_tag)
+            filename = CORE_MODEL_PACK_SPECS[pid]["filename_template"].format(tag=assets_release_tag)
             out_archive = output_dir / filename
             size_bytes, digest = write_deterministic_tar_gz(asset_root, files, out_archive)
-            parts, _ = split_file_if_needed(out_archive, release_base_url=base_url, remove_unsplit_when_split=True)
+            parts, _ = split_file_if_needed(out_archive, release_base_url=assets_base_url, remove_unsplit_when_split=True)
             packs_payload[pid] = manifest_model_pack_entry(
                 pid,
                 size_bytes=size_bytes,
@@ -436,8 +440,8 @@ def build_model_packs(
                 files=files,
                 parts=parts,
                 published=published,
-                release_tag=release_tag,
-                release_base_url=base_url,
+                release_tag=assets_release_tag,
+                release_base_url=assets_base_url,
             )
             print(f"[model-pack] Built {filename} ({size_bytes:,} bytes, parts={len(parts) or 1}, sha256={digest})")
         elif pid in existing_packs:
@@ -451,6 +455,8 @@ def build_model_packs(
         "version": 1,
         "release_tag": release_tag,
         "release_base_url": base_url,
+        "assets_release_tag": assets_release_tag,
+        "assets_release_base_url": assets_base_url,
         "packs": packs_payload,
         "bundles": bundles,
     }

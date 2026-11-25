@@ -81,6 +81,41 @@ class WorkflowStaticTests(unittest.TestCase):
         self.assertNotIn("macOS", guards[0])
         self.assertIn("runner.os != 'macOS'", guards[1])
 
+    def test_repo_only_installs_test_dependencies_into_own_directory_before_the_unit_suite(self):
+        # Run 44887655250: repo-only had about 310 import errors (nibabel, psutil, nrrd, dipy,
+        # scikit-learn, trimesh were missing from stock Slicer). The full-install job keeps its own source.
+        repo_only, full = self.text.split("\n  full-install:\n", 1)
+        install_step = "Install the unit-test dependencies for PythonSlicer (own directory)"
+        unit_step = "Unit test suite under the real PythonSlicer (report only)"
+        self.assertEqual(repo_only.count(install_step), 1)
+        self.assertLess(repo_only.index(install_step), repo_only.index(unit_step))
+        install = repo_only[repo_only.index(install_step):repo_only.index(unit_step)]
+        self.assertIn("--no-deps", install)  # no second numpy or scipy next to the ones of Slicer
+        self.assertIn('--target "$TEST_SITE"', install)
+        self.assertIn("-r scripts/dev/requirements-slicer-tests.txt", install)
+        self.assertNotIn("continue-on-error", install)  # a broken install must show
+        self.assertNotIn("site-packages", install.split("run: |", 1)[1])  # never into Slicer's own directory
+        unit = repo_only[repo_only.index(unit_step):]
+        self.assertIn('export PYTHONPATH="$RUNNER_TEMP/test-site$SEP$WORKSPACE"', unit)
+        self.assertIn("SEP=';'", unit)  # Windows separator
+        self.assertNotIn("requirements-slicer-tests", full)
+        self.assertNotIn("pip install", full)
+        if self.doc is not None:
+            names = [step.get("name", "") for step in self.doc["jobs"]["repo-only"]["steps"]]
+            self.assertLess(names.index(install_step), names.index(unit_step))
+
+    def test_slicer_test_requirements_match_ci_pins_and_leave_numpy_scipy_to_slicer(self):
+        def pins(name):
+            lines = (REPO / "scripts" / "dev" / name).read_text(encoding="utf-8").splitlines()
+            return dict(line.split("==") for line in lines if "==" in line and not line.startswith("#"))
+        ci = pins("requirements-ci.txt")
+        slicer = pins("requirements-slicer-tests.txt")
+        for name in ("nibabel", "pynrrd", "dipy", "scikit-learn", "trimesh"):
+            self.assertEqual(slicer[name], ci[name], name)
+        self.assertIn("psutil", slicer)
+        for name in ("numpy", "scipy", "vtk", "SimpleITK", "matplotlib"):
+            self.assertNotIn(name, slicer)
+
     def test_only_github_token_is_used(self):
         self.assertNotIn("secrets.", self.text)
         self.assertEqual(self.text.count("github.token"), 1)

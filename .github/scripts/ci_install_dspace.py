@@ -33,7 +33,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-RELEASE_TAG = "v0.1.1"
+RELEASE_TAG = "v1.0.0"
 REPO = "NeuroDMRI/SlicerDSpace"
 BASE_ASSETS = {
     "linux": ("linux", "SlicerDSpace-%s-Linux-x64.tar.gz", "linux_x64_base"),

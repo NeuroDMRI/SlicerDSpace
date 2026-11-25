@@ -1,9 +1,139 @@
 {
   "kind": "slicerdspace_release_packs_manifest",
   "version": 1,
-  "release_tag": "v0.1.1",
-  "release_base_url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1",
+  "release_tag": "v1.0.0",
+  "release_base_url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0",
   "packs": {
+    "ddsurfer": {
+      "id": "ddsurfer",
+      "tier": "core",
+      "default_install": true,
+      "filename": "SlicerDSpace-v1.0.0-Model-DDSurfer.tar.gz",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-Model-DDSurfer.tar.gz",
+      "size_bytes": 220436307,
+      "sha256": "b7efeea47aa736301f569622c461fd8d032d4e8734c6174b7aadcd86f58f8277",
+      "published": true,
+      "profiles": [
+        "surface",
+        "surface-postprocess"
+      ],
+      "title_en": "DDSurfer Cortical Surface Weights, Templates & Surface Atlas",
+      "title_zh": "DDSurfer \u76ae\u5c42\u8868\u9762\u91cd\u5efa\u6a21\u578b\u6743\u91cd\u3001\u6a21\u677f\u4e0e\u8868\u9762\u56fe\u8c31",
+      "files": {
+        "surface/weights/manifest.json": "f5cc5bb23375937feab1075dea2f06e8965f627285eb6a9fac295247ae21a01c",
+        "surface/weights/SHA256SUMS": "986fe52ba0341e76a6dc9cbc33bb6a52112beb02d70950104de2909c5ff419cc",
+        "surface/weights/ddsurfer_lh_wm.pt": "b1ab6ae874e52c80fed4866c8aa03b586c4e7d463b2db688f703627db01a2454",
+        "surface/weights/ddsurfer_rh_wm.pt": "da8277a627e55dc576886bebcc3637bee89c1e8a77ce0c77ab0a3163ba955fcd",
+        "surface/weights/ddsurfer_lh_pial.pt": "58f93a8ea32ee0c0d59d9ca3875d8ef906fff15dc29c87d1fc313a7a25e28393",
+        "surface/weights/ddsurfer_rh_pial.pt": "480961adf7730985b2c2288cac9b66067dcd72b722214ff0ed1183b6dcd0eec0",
+        "surface/template/ddsurfer_lh_template.obj": "4da63ee7b02bd3b45a1164c6c030fdd0e18903c821b47cdd7fc9d492b0a9ed1c",
+        "surface/template/ddsurfer_rh_template.obj": "74186754cdac0510a595bab82818329703c9906384f1e6a8d1c8cad4eddaf1fe",
+        "surface/template/100HCP-population-mean-T2-1mm.nii.gz": "9c0f03a07b0967052d2be81bc359d188940f89794cd95c1369c48bc3a14e644a",
+        "surface/postprocessing/atlas.tar.gz": "531f481bd677396f8b4c816f0be076a35249f2991cb4d4456b22cbc1b583c510"
+      },
+      "upstream_files": {}
+    },
+    "ddseg": {
+      "id": "ddseg",
+      "tier": "core",
+      "default_install": true,
+      "filename": "SlicerDSpace-v1.0.0-Model-DDSeg.tar.gz",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-Model-DDSeg.tar.gz",
+      "size_bytes": 280945320,
+      "sha256": "f0146b958ac8a9ba35bd4fb7f4e2b334b7f7f3d324639428fa7d0f3b8adc19d4",
+      "published": true,
+      "profiles": [
+        "segmentation"
+      ],
+      "title_en": "DDSeg Tissue-Segmentation Weights",
+      "title_zh": "DDSeg \u7ec4\u7ec7\u5206\u5272\u6a21\u578b\u6743\u91cd",
+      "files": {
+        "segmentation/weights/dti_axial.pt": "e331fa15cb531958f892e1b03eaef8405c3ddd927f4cd7427de841f9e9f41e77",
+        "segmentation/weights/dti_coronal.pt": "800a8467021471a99e9cbcec1e5b8cda4b0935018113a85b07d2b903890b8376",
+        "segmentation/weights/dti_sagittal.pt": "5a150b5654d8f31ac03549bfd952aad40f176ffcd2c7bfb359ed9aaf3785612b"
+      },
+      "upstream_files": {}
+    },
+    "ddparcel": {
+      "id": "ddparcel",
+      "tier": "core",
+      "default_install": true,
+      "filename": "SlicerDSpace-v1.0.0-Model-DDParcel.tar.gz",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-Model-DDParcel.tar.gz",
+      "size_bytes": 391935821,
+      "sha256": "4f6e265f282c210647ed3c287fcfb7c2473b061c1802aac3c88db4c3d9ff50a6",
+      "published": true,
+      "profiles": [
+        "parcellation"
+      ],
+      "title_en": "DDParcel 101-ROI Parcellation Weights & T2 Template",
+      "title_zh": "DDParcel 101 \u8111\u533a\u5206\u533a\u6a21\u578b\u6743\u91cd\u4e0e T2 \u6a21\u677f",
+      "files": {
+        "parcellation/weights/Fused-Unet-v3-noMax-axial.pkl": "e330123ba4fb3ea440a3deb4c16200f74a8022cab41902f5c9239b45e81cb527",
+        "parcellation/weights/Fused-Unet-v3-noMax-coronal.pkl": "1690ae3a6631d32579b1b91648098f68ac01d272c9c3cc2d52e44924df5ab05c",
+        "parcellation/weights/Fused-Unet-v3-noMax-sagittal.pkl": "82b3843cdfdb551eca21ac78b300a52f1c7e42eded92ef2bcf6e0084e44c78ad",
+        "parcellation/weights/backbones/dti-FractionalAnisotropy-reg-NormMasked-axial.pkl": "a96335aa059bcbd3b079f17fb1aa768b224a3ed94dec7baf3a47cd30b551139a",
+        "parcellation/weights/backbones/dti-FractionalAnisotropy-reg-NormMasked-coronal.pkl": "45ef5359104a31b62ccae7045bfec25725fbff4e67fa6a145e58d40285211f87",
+        "parcellation/weights/backbones/dti-FractionalAnisotropy-reg-NormMasked-sagittal.pkl": "d9c1d83d59fce85c2b6ed5074bea0895822d25a2117267b569398ca73ebd660d",
+        "parcellation/weights/backbones/dti-MidEigenvalue-reg-NormMasked-axial.pkl": "75dab6bf98a631693db4414b3778aad18367cac5c810d55f6daec5e6477cddbe",
+        "parcellation/weights/backbones/dti-MidEigenvalue-reg-NormMasked-coronal.pkl": "47672c0b700164397c5fe6198ee8936c8a09d46d3ffda4bed43752464a42c9cd",
+        "parcellation/weights/backbones/dti-MidEigenvalue-reg-NormMasked-sagittal.pkl": "39cee3bfd6726acad53386c3d64b4b7e4fbbc797788eb938b0a49deecabcd450",
+        "parcellation/weights/backbones/dti-MinEigenvalue-reg-NormMasked-axial.pkl": "2828a3ddaab013b05ef2a8535914edc4022743be146f6d61543f86981458a3cd",
+        "parcellation/weights/backbones/dti-MinEigenvalue-reg-NormMasked-coronal.pkl": "5110c611191dfdeb5c3ae7a606e1bcf67ddef3349c468b7718dcb30ccb7f6207",
+        "parcellation/weights/backbones/dti-MinEigenvalue-reg-NormMasked-sagittal.pkl": "b18c5d5fd3ea6204b4851969c226caa4ba942cd18361d454b7e5c86cec33394e",
+        "parcellation/weights/backbones/dti-Trace-reg-NormMasked-axial.pkl": "d8dcf6877e372a9f1939818d236c5db833e84a1036749a5c05fd617a565f7a53",
+        "parcellation/weights/backbones/dti-Trace-reg-NormMasked-coronal.pkl": "9c97f98133c7eb2ad7156cab08a57c8904f436f5a895193e26a3a0ed161c9ccc",
+        "parcellation/weights/backbones/dti-Trace-reg-NormMasked-sagittal.pkl": "292f029a3d656a50329aa3bcce5bc9f795496bf434cb23d6769ee183478533b4",
+        "Resources/Data/100HCP-population-mean-T2.nii.gz": "b93f2272e4cf544727daa7b65018fb04003f3e4c25863610394332062de95bb7"
+      },
+      "upstream_files": {}
+    },
+    "pnl_cnn": {
+      "id": "pnl_cnn",
+      "tier": "core",
+      "default_install": true,
+      "filename": "SlicerDSpace-v1.0.0-Model-PNL-CNN.tar.gz",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-Model-PNL-CNN.tar.gz",
+      "size_bytes": 200140589,
+      "sha256": "cf8b677106604ae10fc14f83639aa95d3709b585c81e2f39ca7fac581b3cbd65",
+      "published": true,
+      "profiles": [
+        "pnl-cnn-weights",
+        "pnl-cnn"
+      ],
+      "title_en": "PNL CNN Brain-Mask Weights (PyTorch)",
+      "title_zh": "PNL CNN \u81ea\u52a8\u8111\u63a9\u819c\u6743\u91cd\uff08PyTorch \u7248\uff09",
+      "files": {
+        "brain_mask/pnl_cnn_torch/axial.pt": "27bf8c38a38dfef44f1bb25ab2d180803d9a5794e5dcdb69c4ab0692f2744287",
+        "brain_mask/pnl_cnn_torch/coronal.pt": "a11da30afb41d8db1afa7c447ff94260e7421b0e00c4dd1018825408059a2feb",
+        "brain_mask/pnl_cnn_torch/sagittal.pt": "7dd553b55a4d1d108ddd3e0bad99d6275a4c3a9c833dd469a0ad026d393afdcc",
+        "brain_mask/pnl_cnn_torch/weights.json": "b1af9575253ec94aa5e52b22a14731745e07fac4fb9453c70074e9e2cae48baa",
+        "brain_mask/pnl_cnn_torch/LICENSE.txt": "2586e5953fa5a9bd8d700c21db9503ed448a57209f6e4f24ec3f8d5381715902"
+      },
+      "upstream_files": {}
+    },
+    "tractcloud": {
+      "id": "tractcloud",
+      "tier": "core",
+      "default_install": true,
+      "filename": "SlicerDSpace-v1.0.0-Model-TractCloud.tar.gz",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-Model-TractCloud.tar.gz",
+      "size_bytes": 8225793,
+      "sha256": "3f3a3a5e17c7e022736e7eb5ec20bc5c43247bc3135a858096eb9717583a3640",
+      "published": true,
+      "profiles": [
+        "tractcloud"
+      ],
+      "title_en": "TractCloud Deep-Learning Bundle Weights",
+      "title_zh": "TractCloud \u767d\u8d28\u675f\u6df1\u5ea6\u5b66\u4e60\u6743\u91cd",
+      "files": {
+        "bundles/tractcloud/TrainedModel/best_tract_f1_model.pth": "93b01cf532ff4e1739754866bb9d7b71c5f5dffc9e8e6d4cf95ac8c6a0431d6a",
+        "bundles/tractcloud/TrainedModel/cli_args.txt": "fd521ca95673fb440a84c14078e287f42214975be60b7ff523e6b0df90480fda",
+        "bundles/tractcloud/TrainData_800clu800ol/HCP_mass_center.npy": "62cbbae3dcf1c8d3792af3453c338bbce6fceed4705810a10e23b75b8d4b0fa9",
+        "bundles/tractcloud/LICENSE.txt": "36b11d65aa04ba6633bc2401fd70fcd2707e796e6c4e2f179b62877f8d21589d"
+      },
+      "upstream_files": {}
+    },
     "wma_org": {
       "id": "wma_org",
       "filename": "SlicerDSpace-v0.1.1-WMA-ORG.tar.gz",
@@ -131,33 +261,33 @@
       "os": "windows",
       "arch": "x86_64",
       "mode": "base",
-      "filename": "SlicerDSpace-v0.1.1-Windows-x64.zip",
-      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-Windows-x64.zip",
-      "size_bytes": 1600000000,
-      "sha256": "",
-      "published": false,
+      "filename": "SlicerDSpace-v1.0.0-Windows-x64.zip",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-Windows-x64.zip",
+      "size_bytes": 369899764,
+      "sha256": "237505e6612425bbd26629e8b8df5829c57cc6d363c323152812b579b0ccb746",
+      "published": true,
       "parts": []
     },
     "linux_x64_base": {
       "os": "linux",
       "arch": "x86_64",
       "mode": "base",
-      "filename": "SlicerDSpace-v0.1.1-Linux-x64.tar.gz",
-      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-Linux-x64.tar.gz",
-      "size_bytes": 1400000000,
-      "sha256": "",
-      "published": false,
+      "filename": "SlicerDSpace-v1.0.0-Linux-x64.tar.gz",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-Linux-x64.tar.gz",
+      "size_bytes": 518457433,
+      "sha256": "d43c56dfbce2cf31b68015586ad2c0602bae73f05badf8a05fb08678c0ab83b9",
+      "published": true,
       "parts": []
     },
     "macos_arm64_base": {
       "os": "macos",
       "arch": "arm64",
       "mode": "base",
-      "filename": "SlicerDSpace-v0.1.1-macOS-arm64.tar.gz",
-      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz",
-      "size_bytes": 1400000000,
-      "sha256": "",
-      "published": false,
+      "filename": "SlicerDSpace-v1.0.0-macOS-arm64.tar.gz",
+      "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-macOS-arm64.tar.gz",
+      "size_bytes": 366879531,
+      "sha256": "2c6a085ea2d98edde3e16de190d3a1aaad0de2577aa7a681cd47ef652cf1ec65",
+      "published": true,
       "parts": []
     }
   }

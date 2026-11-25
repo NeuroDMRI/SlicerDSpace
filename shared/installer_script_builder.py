@@ -11,7 +11,7 @@ from shared.network_config import RELEASE_PACKS_MANIFEST, load_release_packs_man
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_ARTIFACTS_JSON = REPO_ROOT / "docs" / "website" / "installer_artifacts.json"
-RELEASE_TAG = "v0.1.1"
+RELEASE_TAG = "v1.0.0"
 RELEASE_BASE_URL = f"https://github.com/NeuroDMRI/SlicerDSpace/releases/download/{RELEASE_TAG}"
 
 SUPPORTED_OS = ("windows", "macos", "linux")

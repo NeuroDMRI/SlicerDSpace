@@ -173,17 +173,17 @@
             <div class="code" data-code>
               <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
               <pre><code>export SLICER_LAUNCHER="$HOME/Slicer-5.10.0-linux-amd64/Slicer"
-curl -fL -o SlicerDSpace-v0.1.1-Linux-x64.tar.gz \
-  https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1/SlicerDSpace-v0.1.1-Linux-x64.tar.gz
+curl -fL -o SlicerDSpace-v1.0.0-Linux-x64.tar.gz \
+  https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-Linux-x64.tar.gz
 mkdir -p "$HOME/SlicerDSpace-ext"
-tar -xzf SlicerDSpace-v0.1.1-Linux-x64.tar.gz -C "$HOME/SlicerDSpace-ext"
+tar -xzf SlicerDSpace-v1.0.0-Linux-x64.tar.gz -C "$HOME/SlicerDSpace-ext"
 export DSPACE_REPO="$HOME/SlicerDSpace-ext/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules"</code></pre>
             </div>
             <dl class="start-kv-list">
               <dt>From Route A</dt>
               <dd>If SlicerDSpace is already installed through Route A, skip unpacking and point <code>DSPACE_REPO</code> to Slicer’s unpacked <code>Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules</code> directory.</dd>
               <dt>Windows / macOS</dt>
-              <dd>Unpack <code>SlicerDSpace-v0.1.1-Windows-x64.zip</code> (in PowerShell, run via <code>&amp; $Slicer --launch PythonSlicer ...</code>) or <code>SlicerDSpace-v0.1.1-macOS-arm64.tar.gz</code>, then point <code>DSPACE_REPO</code> to the unpacked <code>SlicerDSpace/Slicer.app/Contents/Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules</code> folder on macOS (or <code>SlicerDSpace\lib\Slicer-5.10\qt-scripted-modules</code> on Windows).</dd>
+              <dd>Unpack <code>SlicerDSpace-v1.0.0-Windows-x64.zip</code> (in PowerShell, run via <code>&amp; $Slicer --launch PythonSlicer ...</code>) or <code>SlicerDSpace-v1.0.0-macOS-arm64.tar.gz</code>, then point <code>DSPACE_REPO</code> to the unpacked <code>SlicerDSpace/Slicer.app/Contents/Extensions-34045/SlicerDSpace/lib/Slicer-5.10/qt-scripted-modules</code> folder on macOS (or <code>SlicerDSpace\lib\Slicer-5.10\qt-scripted-modules</code> on Windows).</dd>
               <dt>From source</dt>
               <dd>For developer checkouts, clone with sparse checkout (<code>scripts/extension_runtime/runtime_checkout.txt</code>), stage with <code>"$SLICER_LAUNCHER" --launch PythonSlicer scripts/stage_slicer_extension.py --install-root ~/SlicerDSpace-extension --slicer-version Slicer-5.10 --link-mode copy</code>, and prepare selected dependencies via <code>scripts/setup_selected.py --targets microstructure,tractography --execute --accept-licences</code>; see the <a href="https://github.com/NeuroDMRI/SlicerDSpace/blob/main/docs/setup/DOWNLOADS.md" target="_blank" rel="noopener">Download and source guide</a> for details.</dd>
             </dl>
@@ -192,7 +192,7 @@ export DSPACE_REPO="$HOME/SlicerDSpace-ext/SlicerDSpace/lib/Slicer-5.10/qt-scrip
         <li class="start-step">
           <div class="start-body">
             <h4>Apply the code update and optional resources</h4>
-            <p>A release archive holds the code of its build day. Apply the incremental code update once before running an analysis while no SlicerDSpace job or 3D Slicer session uses this installation (with the v0.1.1 archive on Linux, UKF tractography requires this update):</p>
+            <p>A release archive holds the code of its build day. Apply the incremental code update once before running an analysis while no SlicerDSpace job or 3D Slicer session uses this installation:</p>
             <div class="code" data-code>
               <div class="code-head"><span>bash</span><button class="copy" type="button" hidden>Copy</button></div>
               <pre><code>"$SLICER_LAUNCHER" --launch PythonSlicer - "$DSPACE_REPO" &lt;&lt;'PY'
@@ -209,7 +209,7 @@ PY</code></pre>
             </div>
             <dl class="start-kv-list">
               <dt>Optional assets</dt>
-              <dd>Base archives bundle Python packages, core deep-learning weights and native runtimes; fetch the NITRC <code>IITmean_b0_256.nii.gz</code> template for PNL CNN masking or optional WMA atlases (<code>wma</code>, <code>wma-naba</code>, <code>wma-east-west</code>) by previewing with <code>"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/scripts/setup_optional_assets.py" --profiles pnl-cnn</code> and then adding <code>--execute --accept-terms</code> to install.</dd>
+              <dd>OS base archives bundle Python packages and native runtimes; model weights are packaged as separate modular packs (installed by default in Route A Setup). When unpacking a manual CLI archive, fetch core model weights via <code>"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/scripts/download_model_assets.py" --profile core</code>, and fetch PNL CNN weights, TractCloud, the NITRC <code>IITmean_b0_256.nii.gz</code> template, or optional WMA atlases (<code>wma</code>, <code>wma-naba</code>, <code>wma-east-west</code>) by previewing with <code>"$SLICER_LAUNCHER" --launch PythonSlicer "$DSPACE_REPO/scripts/setup_optional_assets.py" --profiles pnl-cnn tractcloud surface-postprocess</code> and then adding <code>--execute --accept-terms</code> to install.</dd>
               <dt>FreeSurfer</dt>
               <dd>Optional cortical surface post-processing (<code>surface_postprocess</code>) requires your personal FreeSurfer license via <code>--postprocess-license-file /path/to/license.txt</code> or the <code>FS_LICENSE</code> environment variable.</dd>
             </dl>

@@ -4,7 +4,7 @@
 
   var zh = typeof document !== 'undefined' && document.documentElement &&
     String(document.documentElement.lang || '').toLowerCase().indexOf('zh') === 0;
-  var RELEASE_TAG = 'v0.1.1';
+  var RELEASE_TAG = 'v1.0.0';
   var RELEASE_BASE = 'https://github.com/NeuroDMRI/SlicerDSpace/releases/download/' + RELEASE_TAG;
   var WMA_RELEASE_BASE = 'https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v0.1.1';
   var IIT_BYTES = 7830929;
@@ -21,6 +21,46 @@
     },
     // __ARTIFACTS_MODEL_PACKS_BEGIN__
     model_packs: {
+      ddsurfer: {
+        id: 'ddsurfer',
+        filename: 'SlicerDSpace-v1.0.0-Model-DDSurfer.tar.gz',
+        url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Model-DDSurfer.tar.gz',
+        size_bytes: 220436307,
+        sha256: 'b7efeea47aa736301f569622c461fd8d032d4e8734c6174b7aadcd86f58f8277',
+        parts: []
+      },
+      ddseg: {
+        id: 'ddseg',
+        filename: 'SlicerDSpace-v1.0.0-Model-DDSeg.tar.gz',
+        url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Model-DDSeg.tar.gz',
+        size_bytes: 280945320,
+        sha256: 'f0146b958ac8a9ba35bd4fb7f4e2b334b7f7f3d324639428fa7d0f3b8adc19d4',
+        parts: []
+      },
+      ddparcel: {
+        id: 'ddparcel',
+        filename: 'SlicerDSpace-v1.0.0-Model-DDParcel.tar.gz',
+        url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Model-DDParcel.tar.gz',
+        size_bytes: 391935821,
+        sha256: '4f6e265f282c210647ed3c287fcfb7c2473b061c1802aac3c88db4c3d9ff50a6',
+        parts: []
+      },
+      pnl_cnn: {
+        id: 'pnl_cnn',
+        filename: 'SlicerDSpace-v1.0.0-Model-PNL-CNN.tar.gz',
+        url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Model-PNL-CNN.tar.gz',
+        size_bytes: 200140589,
+        sha256: 'cf8b677106604ae10fc14f83639aa95d3709b585c81e2f39ca7fac581b3cbd65',
+        parts: []
+      },
+      tractcloud: {
+        id: 'tractcloud',
+        filename: 'SlicerDSpace-v1.0.0-Model-TractCloud.tar.gz',
+        url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Model-TractCloud.tar.gz',
+        size_bytes: 8225793,
+        sha256: '3f3a3a5e17c7e022736e7eb5ec20bc5c43247bc3135a858096eb9717583a3640',
+        parts: []
+      }
     },
     // __ARTIFACTS_MODEL_PACKS_END__
     packs: {
@@ -108,24 +148,24 @@
     // __ARTIFACTS_BUNDLES_BEGIN__
     bundles: {
       windows_x64_base: {
-        filename: 'SlicerDSpace-v0.1.1-Windows-x64.zip',
-        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Windows-x64.zip',
-        size_bytes: 1471482327,
-        sha256: '0cd4825374dc209a697c7976d6daceb7f358173ddcb7066fdf9a18be73c667ac',
+        filename: 'SlicerDSpace-v1.0.0-Windows-x64.zip',
+        url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Windows-x64.zip',
+        size_bytes: 369899764,
+        sha256: '237505e6612425bbd26629e8b8df5829c57cc6d363c323152812b579b0ccb746',
         parts: []
       },
       linux_x64_base: {
-        filename: 'SlicerDSpace-v0.1.1-Linux-x64.tar.gz',
-        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-Linux-x64.tar.gz',
-        size_bytes: 1620043144,
-        sha256: 'b96db0274fe8d22cab04f8ce87d441b105196115674b1028de98303e03d85dd8',
+        filename: 'SlicerDSpace-v1.0.0-Linux-x64.tar.gz',
+        url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Linux-x64.tar.gz',
+        size_bytes: 518457433,
+        sha256: 'd43c56dfbce2cf31b68015586ad2c0602bae73f05badf8a05fb08678c0ab83b9',
         parts: []
       },
       macos_arm64_base: {
-        filename: 'SlicerDSpace-v0.1.1-macOS-arm64.tar.gz',
-        url: RELEASE_BASE + '/SlicerDSpace-v0.1.1-macOS-arm64.tar.gz',
-        size_bytes: 1468508163,
-        sha256: '3277f724e942f5dcd4e203e5d3da3a98dec404234b1871d429a027ac93fa2dab',
+        filename: 'SlicerDSpace-v1.0.0-macOS-arm64.tar.gz',
+        url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-macOS-arm64.tar.gz',
+        size_bytes: 366879531,
+        sha256: '2c6a085ea2d98edde3e16de190d3a1aaad0de2577aa7a681cd47ef652cf1ec65',
         parts: []
       }
     }
@@ -141,7 +181,7 @@
       modelPlaceholder: '~/Library/Application Support/SlicerDSpace/model-assets',
       setupZipName: 'SlicerDSpaceSetup-macOS.zip',
       scriptName: 'Install-SlicerDSpace.command',
-      baseEstimateBytes: 1468508163
+      baseEstimateBytes: 366879531
     },
     windows: {
       label: 'Windows',
@@ -151,7 +191,7 @@
       modelPlaceholder: '%LOCALAPPDATA%\\SlicerDSpace\\model-assets',
       setupZipName: 'SlicerDSpaceSetup-Windows.zip',
       scriptName: 'Install-SlicerDSpace.bat',
-      baseEstimateBytes: 1471482327
+      baseEstimateBytes: 369899764
     },
     linux: {
       label: 'Linux',
@@ -161,7 +201,7 @@
       modelPlaceholder: '~/.local/share/SlicerDSpace/model-assets',
       setupZipName: 'SlicerDSpaceSetup-Linux.zip',
       scriptName: 'Install-SlicerDSpace.sh',
-      baseEstimateBytes: 1620043144
+      baseEstimateBytes: 518457433
     }
   };
 

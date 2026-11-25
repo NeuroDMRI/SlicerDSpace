@@ -301,7 +301,7 @@ class WebsiteEditorialCopyTests(unittest.TestCase):
         self.assertIn('>命令行安装与运行</span>', zh_headings[1])
         cli_block = start.split('<div class="start-cli" id="cli"', 1)[1]
         self.assertIn('<ol class="start-steps">', cli_block)
-        for cli_marker in ('SlicerDSpace-v0.1.1-Linux-x64.tar.gz', 'code_updater',
+        for cli_marker in ('SlicerDSpace-v1.0.0-Linux-x64.tar.gz', 'code_updater',
                            'scripts/prepare_inputs.py', 'shared/run_subject_pipeline_cli.py',
                            'scripts/run_batch_pipeline.py'):
             self.assertIn(cli_marker, cli_block)

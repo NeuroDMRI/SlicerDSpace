@@ -485,6 +485,7 @@ def run_mkcurve(dwi_path, bval_path, bvec_path, mask_path, output_dir, *,
                             per_worker_ram_gib=1.0,
                             reserve_ram_gib=4.0,
                             max_workers=max(eff_workers, 8),
+                            enforce_on_linux=True,
                         )
                         if safe_spawn < eff_workers:
                             if safe_spawn <= 1:

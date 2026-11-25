@@ -140,11 +140,14 @@ def inspect_surface_resources(config: SurfaceConfig) -> dict:
 
 
 def _raw_command(config, resources, output_dir):
+    from shared.environment import effective_surface_max_gpu_gib
+
+    effective_max_gpu = effective_surface_max_gpu_gib(config.max_gpu_gib)
     bundle = config.input_bundle or find_subject_root(config.subject_root, config.subject_id)
     command = [BACKEND_ROOT / 'run_ddsurfer_pipeline.py', '--subject', config.subject_id,
                '--output-root', output_dir / 'upstream', '--predict-mode', config.predict_mode,
                '--device', config.device, '--precision', config.precision,
-               '--cpu-threads', str(config.cpu_threads), '--max-gpu-gib', str(config.max_gpu_gib),
+               '--cpu-threads', str(config.cpu_threads), '--max-gpu-gib', str(effective_max_gpu),
                '--checkpoint-root', resources['checkpoint_root'], '--template-dir', resources['template_dir']]
     for flag, attribute in (('dwi', 'dwi_path'), ('bval', 'bval_path'), ('bvec', 'bvec_path'), ('mask', 'mask_path')):
         path = getattr(bundle, attribute)
@@ -439,7 +442,11 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
         if config.execute:
             if not resources['available']:
                 raise FileNotFoundError('DDSurfer resources invalid: ' + ', '.join(resources['missing']))
-            from shared.environment import resolve_auto_torch_device, surface_gpu_memory_decision
+            from shared.environment import (
+                effective_surface_max_gpu_gib,
+                resolve_auto_torch_device,
+                surface_gpu_memory_decision,
+            )
             requested_surface_device = str(config.device or 'auto').strip().lower()
             surface_py = Path(python_executable(config.python_bin))
             resolved_surface_device = resolve_auto_torch_device(config.device, surface_py)
@@ -452,8 +459,10 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
                     manifest['gpu_memory_fallback_note'] = gpu_note
                     if log:
                         log(f'[DDSurfer] {gpu_note}')
-            config = replace(config, device=resolved_surface_device)
+            effective_max_gpu = effective_surface_max_gpu_gib(config.max_gpu_gib)
+            config = replace(config, device=resolved_surface_device, max_gpu_gib=effective_max_gpu)
             manifest['resolved_device'] = config.device
+            manifest['effective_max_gpu_gib'] = config.max_gpu_gib
             if log:
                 log(f'[DDSurfer] Requested {manifest["device"]}; resolved {config.device} in the surface runtime')
             manifest['status'] = 'running'

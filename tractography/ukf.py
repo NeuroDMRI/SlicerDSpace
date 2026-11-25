@@ -1761,6 +1761,12 @@ def _ukf_uses_gpu(*args, **kwargs) -> bool:
             binary,
         )
         schema, _, _ = inspect_schema(binary, env)
+    except Exception:
+        # Fail closed when the binary is not known CPU-only and GPU execution is requested
+        # or CUDA is available: a transient --xml probe timeout must not admit a subsequent
+        # retry inside run_ukf() with 0 reserved GPU slots.
+        return True
+    try:
         use_gpu, _, _ = resolve_ukf_gpu_dispatch(req, gpu_opts, schema, binary)
         return bool(use_gpu)
     except Exception:

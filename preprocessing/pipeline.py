@@ -62,6 +62,9 @@ PYTHON_MODULES = ("nibabel", "numpy", "dipy")
 ROUTE_ID = _ROUTE_ID
 # Old manifests (the removed DIPY between-volume route) still exist on disk and are read, never written.
 DIPY_BVEC_ROTATION_POLICY = "inverse_sampling_affine_polar_v1"
+# Bumped to 2 after fixing inplace Gibbs CUDA-timeout fallback double-processing (0c5b6b6)
+# so pre-fix cached preprocessing outputs with Gibbs enabled invalidate automatically.
+GIBBS_CONTRACT_VERSION = 2
 
 
 def preprocessing_gradients_current(manifest: dict) -> bool:
@@ -72,6 +75,23 @@ def preprocessing_gradients_current(manifest: dict) -> bool:
     parameters = key.get("parameters") or {}
     return (parameters.get("dipy_run_motion_correction") is False
             or parameters.get("dipy_bvec_rotation_policy") == DIPY_BVEC_ROTATION_POLICY)
+
+
+def preprocessing_gibbs_current(manifest: dict) -> bool:
+    """Reject pre-fix Gibbs preprocessing manifests that could retain double-processed slices after CUDA timeout."""
+    key = manifest.get("cache_key")
+    if not isinstance(key, dict):
+        return True
+    parameters = key.get("parameters")
+    if not isinstance(parameters, dict):
+        return True
+    if parameters.get("run_denoise") is False or not parameters.get("dipy_run_gibbs"):
+        return True
+    try:
+        version = int(parameters.get("gibbs_contract_version") or 1)
+    except (TypeError, ValueError):
+        return False
+    return version >= GIBBS_CONTRACT_VERSION
 
 
 def _default_eddy_threads() -> int:
@@ -551,6 +571,7 @@ def _preprocessing_cache_key(
         },
         "parameters": {
             "dipy_run_gibbs": bool(config.dipy_run_gibbs),
+            **({"gibbs_contract_version": GIBBS_CONTRACT_VERSION} if (config.run_denoise and config.dipy_run_gibbs) else {}),
             **({"run_denoise": False} if not config.run_denoise else {}),
             **({"run_eddy": False} if not config.run_eddy else {}),
             **({"run_topup": False} if not config.run_topup else {}),

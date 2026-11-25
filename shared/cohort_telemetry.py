@@ -106,16 +106,34 @@ def gpu_sample(pids, executable=None):
             devices=devices,
             utilization_scope=scope,
         )
-    if numeric_owned:
+    missing_owned = len(matched_rows) - len(numeric_owned)
+    if missing_owned == 0:
         return dict(
             available=True,
             owned_vram_mib=sum(numeric_owned),
+            owned_vram_complete=True,
+            devices=devices,
+            utilization_scope=scope,
+        )
+    if numeric_owned:
+        partial_mib = sum(numeric_owned)
+        return dict(
+            available=True,
+            owned_vram_mib=None,
+            owned_vram_partial_mib=partial_mib,
+            owned_vram_complete=False,
+            owned_vram_note=(
+                f"Windows WDDM nvidia-smi omitted per-process VRAM ([N/A]) for "
+                f"{missing_owned}/{len(matched_rows)} owned process(es); "
+                f"partial lower bound is {partial_mib:.1f} MiB, total owned_vram_mib omitted"
+            ),
             devices=devices,
             utilization_scope=scope,
         )
     return dict(
         available=True,
         owned_vram_mib=None,
+        owned_vram_complete=False,
         owned_vram_note='Windows WDDM nvidia-smi reports [N/A] for per-process compute VRAM',
         devices=devices,
         utilization_scope=scope,

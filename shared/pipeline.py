@@ -626,8 +626,8 @@ def current_preprocessed_outputs(
         return None
     if not isinstance(manifest, dict) or manifest.get("status") not in {"completed", "cached"}:
         return None
-    from preprocessing.pipeline import preprocessing_gradients_current
-    if not preprocessing_gradients_current(manifest):
+    from preprocessing.pipeline import preprocessing_gibbs_current, preprocessing_gradients_current
+    if not preprocessing_gradients_current(manifest) or not preprocessing_gibbs_current(manifest):
         return None
     cache_key = manifest.get("cache_key")
     if not isinstance(cache_key, dict) or cache_key.get("version") not in PREPROCESSING_CACHE_KEY_VERSIONS:

@@ -222,8 +222,10 @@ class SharedHardwareAdaptCrossPlatformTests(unittest.TestCase):
             os.environ.pop("SLICERDSPACE_STAGE_CPUS", None)
             with (
                 mock.patch.object(dki.sys, "platform", "linux"),
+                mock.patch.dict(dki.sys.modules, {"torch": None}),
                 mock.patch("microstructure.dki.os.sched_getaffinity", return_value=set(range(144)), create=True),
                 mock.patch("shared.hardware_adapt.host_total_ram_gib", return_value=500.0),
+                mock.patch("shared.hardware_adapt.query_host_available_ram_bytes", return_value=256 * 1024**3),
             ):
                 self.assertEqual(dki._resolve_dki_fork_workers(fake_cfg), 72)
             with (

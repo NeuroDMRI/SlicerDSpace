@@ -2589,6 +2589,15 @@ def _clamp_cuda_free_gib(value: Optional[float]) -> Optional[float]:
     return float(value)
 
 
+def effective_surface_max_gpu_gib(configured_max_gpu_gib: float) -> float:
+    """Clamp DDSurfer's ``--max-gpu-gib`` budget to the global VRAM cap when configured."""
+    value = float(configured_max_gpu_gib)
+    cap = _global_vram_cap_gib()
+    if cap is not None:
+        return min(value, cap)
+    return value
+
+
 def cuda_free_gib(
     device: str = "cuda:0", python_executable: Optional[Path] = None, *, cached_only: bool = False
 ) -> Optional[float]:

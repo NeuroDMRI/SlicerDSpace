@@ -39,7 +39,11 @@ def discover_subject_directories(input_root, subjects=None):
 
 
 def predict_subject(config):
-    from shared.environment import resolve_auto_torch_device, surface_gpu_memory_decision
+    from shared.environment import (
+        effective_surface_max_gpu_gib,
+        resolve_auto_torch_device,
+        surface_gpu_memory_decision,
+    )
     requested = str(config.device or 'auto').strip().lower()
     surface_py = Path(python_executable(config.python_bin))
     resolved = resolve_auto_torch_device(config.device, surface_py)
@@ -47,7 +51,8 @@ def predict_subject(config):
         gpu_action, _ = surface_gpu_memory_decision('auto', surface_py, resolved_device=resolved)
         if gpu_action == 'cpu':
             resolved = 'cpu'
-    config = replace(config, device=resolved)
+    effective_max_gpu = effective_surface_max_gpu_gib(config.max_gpu_gib)
+    config = replace(config, device=resolved, max_gpu_gib=effective_max_gpu)
     command = [BACKEND_ROOT / 'DDSurfer_predict.py', '--subjects', config.subject_id,
         '--surf_hemi', config.hemisphere, '--predict_mode', config.predict_mode,
         '--device', config.device, '--precision', config.precision,

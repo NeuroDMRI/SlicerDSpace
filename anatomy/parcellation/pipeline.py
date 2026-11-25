@@ -169,7 +169,9 @@ def _default_weights_dir(explicit: Optional[Path] = None) -> Path:
     return model_asset_path("parcellation/weights", repo_root=Path(__file__).resolve().parents[2])
 
 
-DDPARCEL_CONTRACT_VERSION = 1
+# Bumped to 2 after restoring exact FP32 probability accumulation in both RAM and
+# memmap modes (0c5b6b6) so pre-fix FP16-accumulated DDParcel outputs invalidate.
+DDPARCEL_CONTRACT_VERSION = 2
 
 
 def _normalized_parcellation_inputs(mapping) -> list[tuple[str, str]]:
@@ -202,7 +204,7 @@ def _registered_signature_matches(recorded, expected) -> bool:
     if not isinstance(recorded, dict) or not isinstance(expected, dict):
         return False
     if (recorded.get('version') != expected.get('version')
-            or recorded.get('contract_version', DDPARCEL_CONTRACT_VERSION) != expected.get('contract_version')
+            or recorded.get('contract_version') != expected.get('contract_version')
             or recorded.get('subject_id') != expected.get('subject_id')
             or recorded.get('flip') != expected.get('flip')):
         return False

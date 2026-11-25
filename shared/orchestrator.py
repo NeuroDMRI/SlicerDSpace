@@ -2549,9 +2549,12 @@ def _parcellation_complete(subject_root: Path, subject_id: str, output_root: Opt
     inputs = _resolve_analysis_inputs(subject_root, subject_id, output_root)
     receipt = outputs['wmparc'].parent / 'ddparcel_preparation.json'
     if receipt.exists():
+        from anatomy.parcellation.pipeline import DDPARCEL_CONTRACT_VERSION
         from shared.pipeline import _artifact_record
         try:
             record = _read_json(receipt)
+            if record.get('contract_version') != DDPARCEL_CONTRACT_VERSION:
+                return False
             rec_sources = record.get('source_inputs')
             if (not isinstance(rec_sources, dict)
                     or set(rec_sources.keys()) != set(inputs.keys())

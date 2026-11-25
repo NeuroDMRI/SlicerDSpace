@@ -603,12 +603,14 @@ def adaptive_spawn_workers(
     platform_name: str | None = None,
     total_ram_gib: float | None = None,
     available_ram_gib: float | None = None,
+    enforce_on_linux: bool = False,
 ) -> int:
-    """Cap multiprocessing ``spawn`` worker count on Windows/macOS or low-RAM hosts to prevent OOM.
+    """Cap multiprocessing ``spawn`` worker count to prevent OOM across all platforms.
 
-    High-RAM Linux servers (>48 GiB total and available RAM) preserve ``requested_workers`` unchanged.
     Both total physical RAM (minus ``reserve_ram_gib``) and currently available RAM strictly bound
-    the worker count so tight available memory throttles down to 1 worker instead of overcommitting.
+    the worker count on every platform so tight or moderate available memory can never overcommit.
+    When ``enforce_on_linux=True`` (explicit Linux ``spawn`` callers such as DKI/MK-Curve),
+    ``max_workers`` is strictly enforced on high-RAM Linux servers as well.
     """
     req = max(1, int(requested_workers))
     if req <= 1:
@@ -621,12 +623,21 @@ def adaptive_spawn_workers(
         avail = float(avail_b) / float(GIB) if avail_b > 0 else None
     else:
         avail = max(0.0, float(available_ram_gib))
-    if not is_spawn and tot is not None and tot > 48.0 and (avail is None or avail > 48.0):
-        return req
     if tot is None and avail is None:
-        return min(req, 4 if is_spawn else req)
+        if is_spawn or enforce_on_linux:
+            return min(req, int(max_workers), 4 if is_spawn else int(max_workers))
+        return req
     per_worker = max(0.5, float(per_worker_ram_gib))
-    limits: list[int] = [req, int(max_workers)]
+    limits: list[int] = [req]
+    high_ram_linux = (
+        not is_spawn
+        and not enforce_on_linux
+        and tot is not None
+        and tot > 48.0
+        and (avail is None or avail > 48.0)
+    )
+    if not high_ram_linux:
+        limits.append(int(max_workers))
     if tot is not None:
         tot_budget = max(1, int((tot - float(reserve_ram_gib)) // per_worker))
         if tot <= 12.0:

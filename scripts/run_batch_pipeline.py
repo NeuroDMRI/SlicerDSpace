@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import os
 import shutil
@@ -307,10 +308,50 @@ def _emit_relayed(subject_id: str, line: str) -> None:
     _emit(relay_line(subject_id, line))
 
 
+def _subject_log_stem(subject_id: str) -> str:
+    """Return a collision-free log filename stem for ``subject_id``.
+
+    Plain filesystem-safe IDs (ASCII/alphanumeric plus ``._-``) keep their exact
+    stem (e.g. ``sub-01``). Any ID requiring sanitization (such as ``Alpha beta``
+    vs ``Alpha_beta``) appends an 8-hex SHA-1 suffix of the raw subject ID so two
+    distinct subjects never overwrite the same log file.
+    """
+    base = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in subject_id)
+    if base and base not in {".", ".."} and base == subject_id:
+        return base
+    prefix = base if (base and base not in {".", ".."}) else "subject"
+    digest = hashlib.sha1(subject_id.encode("utf-8")).hexdigest()[:8]
+    return f"{prefix}_{digest}"
+
+
+def _assign_subject_log_stems(subjects: list[BatchSubject]) -> dict[str, str]:
+    """Assign unique (case-insensitive) log stems across a cohort batch."""
+    provisional = {subject.subject_id: _subject_log_stem(subject.subject_id) for subject in subjects}
+    by_folded: dict[str, list[str]] = {}
+    for subject_id, stem in provisional.items():
+        by_folded.setdefault(stem.casefold(), []).append(subject_id)
+    assigned: dict[str, str] = {}
+    used_folded: set[str] = set()
+    for subject in subjects:
+        sid = subject.subject_id
+        stem = provisional[sid]
+        if len(by_folded[stem.casefold()]) > 1 or stem.casefold() in used_folded:
+            digest = hashlib.sha1(sid.encode("utf-8")).hexdigest()[:8]
+            candidate = f"{stem}_{digest}"
+            counter = 2
+            while candidate.casefold() in used_folded:
+                candidate = f"{stem}_{digest}_{counter}"
+                counter += 1
+            stem = candidate
+        assigned[sid] = stem
+        used_folded.add(stem.casefold())
+    return assigned
+
+
 def _run_subject(command: list[str], subject: BatchSubject, log_dir: Path, *, environment=None,
-                 relay=_emit_relayed, parallel_subjects: int = 1) -> SubjectRunResult:
+                 relay=_emit_relayed, parallel_subjects: int = 1, log_stem: str | None = None) -> SubjectRunResult:
     log_dir.mkdir(parents=True, exist_ok=True)
-    safe_id = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in subject.subject_id)
+    safe_id = log_stem or _subject_log_stem(subject.subject_id)
     stdout_log = log_dir / f"{safe_id}.stdout.log"
     stderr_log = log_dir / f"{safe_id}.stderr.log"
     output = _command_option(command, '--output-root', '')
@@ -653,6 +694,7 @@ def main(argv: list[str] | None = None) -> int:
 
     write_progress()
     if subject_commands:
+        subject_log_stems = _assign_subject_log_stems([subject for subject, _command in subject_commands])
         pending_subjects = iter(subject_commands)
         parallel_subjects = min(args.jobs, len(subject_commands))
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as executor:
@@ -666,6 +708,7 @@ def main(argv: list[str] | None = None) -> int:
                 kwargs = {'environment': child_environment} if child_environment is not None else {}
                 if parallel_subjects > 1:
                     kwargs['parallel_subjects'] = parallel_subjects
+                kwargs['log_stem'] = subject_log_stems[subject.subject_id]
                 started_ids.append(subject.subject_id)
                 running_ids.add(subject.subject_id)
                 _emit(f"[Batch] start {subject.subject_id} ({len(started_ids)}/{total_subjects})")

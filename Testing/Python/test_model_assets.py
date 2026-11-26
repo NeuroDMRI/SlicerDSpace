@@ -784,6 +784,83 @@ class ModelAssetRootSecurityTest(unittest.TestCase):
 
             self.assertEqual(resolved, explicit_root.resolve())
 
+    # Install test 2026-11-26, finding 3 (run side): setup saves model_assets_dir after the first on-demand install.
+    # The run then looked for DDSeg / DDParcel only in that root, although the base package ships them in
+    # bundled-model-assets.
+
+    def _configured_root_layout(self, tmp: str, bundled_bytes: bytes | None, recorded_bytes: bytes) -> tuple[Path, Path]:
+        """An empty configured root, and a repo with a manifest and (optionally) one bundled DDSeg weight."""
+        from shared.model_asset_integrity import sha256_of_file
+
+        tmp_path = Path(tmp).resolve()
+        configured = tmp_path / "configured-assets"
+        configured.mkdir()
+        repo_root = tmp_path / "repo"
+        reference = tmp_path / "reference.bin"
+        reference.write_bytes(recorded_bytes)
+        self._write_manifest(repo_root, {"segmentation/weights/dti_axial.pt": {"sha256": sha256_of_file(reference)}})
+        if bundled_bytes is not None:
+            bundled = repo_root / "bundled-model-assets" / "segmentation" / "weights" / "dti_axial.pt"
+            bundled.parent.mkdir(parents=True)
+            bundled.write_bytes(bundled_bytes)
+        return configured, repo_root
+
+    def _without_asset_env(self):
+        env = {key: value for key, value in os.environ.items()
+               if key not in (self.model_assets_module.MODEL_ASSETS_ENV,
+                              self.model_assets_module.BUNDLED_MODEL_ASSETS_ENV)}
+        return mock.patch.dict(os.environ, env, clear=True)
+
+    def test_configured_root_without_the_asset_falls_back_to_the_verified_bundled_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, self._without_asset_env():
+            configured, repo_root = self._configured_root_layout(tmp, b"genuine weights", b"genuine weights")
+            expected = repo_root / "bundled-model-assets" / "segmentation" / "weights"
+
+            with self.subTest("run option"):
+                self.assertEqual(
+                    self.model_assets_module.model_asset_path(
+                        "segmentation/weights", repo_root=repo_root, explicit_root=configured),
+                    expected,
+                )
+            with self.subTest("environment variable"):
+                os.environ[self.model_assets_module.MODEL_ASSETS_ENV] = str(configured)
+                self.assertEqual(
+                    self.model_assets_module.model_asset_path("segmentation/weights", repo_root=repo_root),
+                    expected,
+                )
+
+    def test_configured_root_without_the_asset_raises_on_a_tampered_bundled_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, self._without_asset_env():
+            configured, repo_root = self._configured_root_layout(tmp, b"tampered weights", b"genuine weights")
+
+            with self.assertRaises(self.model_assets_module.ModelAssetIntegrityError):
+                self.model_assets_module.model_asset_path(
+                    "segmentation/weights", repo_root=repo_root, explicit_root=configured)
+
+    def test_configured_root_that_holds_the_asset_wins_over_the_bundled_copy(self) -> None:
+        # The configured root stays the user's own choice: its copy is returned as it is, unverified.
+        with tempfile.TemporaryDirectory() as tmp, self._without_asset_env():
+            configured, repo_root = self._configured_root_layout(tmp, b"genuine weights", b"genuine weights")
+            own = configured / "segmentation" / "weights" / "dti_axial.pt"
+            own.parent.mkdir(parents=True)
+            own.write_bytes(b"the user's own weights")
+
+            self.assertEqual(
+                self.model_assets_module.model_asset_path(
+                    "segmentation/weights", repo_root=repo_root, explicit_root=configured),
+                configured / "segmentation" / "weights",
+            )
+
+    def test_configured_root_stays_the_target_when_no_root_holds_the_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, self._without_asset_env():
+            configured, repo_root = self._configured_root_layout(tmp, None, b"genuine weights")
+
+            self.assertEqual(
+                self.model_assets_module.model_asset_path(
+                    "segmentation/weights", repo_root=repo_root, explicit_root=configured),
+                configured / "segmentation" / "weights",
+            )
+
     def test_directory_with_no_manifest_coverage_falls_back_to_plain_existence(self) -> None:
         # A required directory the manifest does not track at all (nothing
         # recorded to verify against) keeps the old, best-effort behavior.

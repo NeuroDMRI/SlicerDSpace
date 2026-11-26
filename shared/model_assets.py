@@ -298,7 +298,9 @@ def model_asset_path(relative: str, *, repo_root: Path, explicit_root: Path | No
     An explicitly user-supplied root (``explicit_root`` or the
     ``SLICERDSPACE_MODEL_ASSETS_DIR`` env var) is the user's own informed
     choice and is returned as-is, unverified -- same as
-    :func:`resolve_model_assets_root`. Otherwise, an existing candidate that
+    :func:`resolve_model_assets_root`. When that root does not hold the
+    asset, the copy in the extension's own ``bundled-model-assets`` is used
+    instead, and it must pass the sha256 check. Otherwise, an existing candidate that
     fails sha256 verification against ``models/assets_manifest.json`` raises
     :class:`~shared.model_asset_integrity.ModelAssetIntegrityError` rather
     than being silently returned: callers here hand the result straight to
@@ -308,7 +310,19 @@ def model_asset_path(relative: str, *, repo_root: Path, explicit_root: Path | No
 
     if (explicit_root is not None and str(explicit_root).strip()) or os.environ.get(MODEL_ASSETS_ENV):
         root = resolve_model_assets_root(explicit=explicit_root, repo_root=repo_root, required_paths=(relative,))
-        return root / relative
+        candidate = root / relative
+        if candidate.exists():
+            return candidate
+        # Setup saves the asset root after the first on-demand install. That root then lacks what the base package
+        # ships in ``bundled-model-assets``: use the bundled copy, verified like every automatic root.
+        manifest_records = _load_asset_manifest_records(repo_root)
+        for bundled_root in bundled_model_asset_roots(repo_root):
+            bundled = bundled_root / relative
+            if bundled.exists():
+                if _has_verified_required_asset(bundled_root, (relative,), manifest_records=manifest_records):
+                    return bundled
+                raise _unverified_asset_error(bundled_root, relative, bundled, manifest_records)
+        return candidate
 
     manifest_records = _load_asset_manifest_records(repo_root)
     root = resolve_model_assets_root(explicit=explicit_root, repo_root=repo_root, required_paths=(relative,))

@@ -173,6 +173,49 @@ class OnDemandResourceDetectionTests(unittest.TestCase):
                 )
                 self.assertEqual(still_missing, [])
 
+    def _detect_ddseg_ddparcel(self, asset_root: Path, bundled_root: Path) -> list[str]:
+        """The ids that the quick check lists for DDSeg + DDParcel with a configured ``model_assets_dir``."""
+        from unittest.mock import patch
+        from shared.model_assets import BUNDLED_MODEL_ASSETS_ENV, MODEL_ASSETS_ENV
+        from shared.ui_on_demand_resources import detect_missing_task_resources
+
+        with patch.dict(os.environ, {BUNDLED_MODEL_ASSETS_ENV: str(bundled_root)}):
+            os.environ.pop(MODEL_ASSETS_ENV, None)
+            missing = detect_missing_task_resources(
+                None,
+                targets=("segmentation", "parcellation"),
+                bundle_backends=("wmql",),
+                brain_mask_backend="provided",
+                backend_paths={"model_assets_dir": str(asset_root)},
+            )
+        return [item["id"] for item in missing]
+
+    def test_configured_model_assets_dir_still_finds_bundled_ddseg_and_ddparcel(self) -> None:
+        # Install test 2026-11-26, finding 3: the first on-demand setup saves model_assets_dir (the per-user root).
+        # The quick check then read only that root and asked to download DDSeg and DDParcel, which the base package
+        # ships in bundled-model-assets.
+        manifest = json.loads((REPO_ROOT / "models" / "assets_manifest.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as tmp:
+            asset_root = Path(tmp) / "user" / "model-assets"
+            asset_root.mkdir(parents=True)
+            bundled_root = Path(tmp) / "extension" / "bundled-model-assets"
+            for profile in ("segmentation", "parcellation"):
+                for relative in manifest["profiles"][profile]["required_paths"]:
+                    target = bundled_root / relative
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(b"weights")
+
+            self.assertEqual(self._detect_ddseg_ddparcel(asset_root, bundled_root), [])
+
+    def test_configured_model_assets_dir_lists_ddseg_and_ddparcel_when_no_root_has_them(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            asset_root = Path(tmp) / "user" / "model-assets"
+            asset_root.mkdir(parents=True)
+            bundled_root = Path(tmp) / "extension" / "bundled-model-assets"
+            bundled_root.mkdir(parents=True)
+
+            self.assertEqual(self._detect_ddseg_ddparcel(asset_root, bundled_root), ["segmentation", "parcellation"])
+
 
 class InstallerScriptBuilderTests(unittest.TestCase):
     def test_generates_parseable_scripts_for_base_with_and_without_wma(self) -> None:

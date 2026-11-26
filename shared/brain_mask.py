@@ -327,7 +327,7 @@ def inspect_brain_mask_backend(config: BrainMaskConfig | None = None, *, system:
         models = _path(config.pnl_mask_model_dir, "SLICERDSPACE_PNL_MASK_MODEL_DIR")
         if models is None:
             from shared.optional_assets import verified_resource_directory
-            models = verified_resource_directory("pnl-cnn", asset_root=config.model_assets_dir)
+            models = verified_resource_directory("pnl-cnn", asset_root=config.model_assets_dir, bundled_fallback=True)
         if models is None or not models.is_dir():
             missing.append("pnl_mask_model_dir")
         else:

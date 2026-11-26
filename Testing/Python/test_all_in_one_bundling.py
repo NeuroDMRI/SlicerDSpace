@@ -124,10 +124,69 @@ class AllInOneBundlingTests(unittest.TestCase):
                     patch.dict(os.environ, env_patch, clear=False):
                 os.environ.pop("SLICERDSPACE_MODEL_ASSETS_DIR", None)
                 self.assertEqual(optional_assets.verified_resource_directory("wma"), wma_dir)
+                # Install test 2026-11-26, finding 3: a run with a configured asset root still finds the bundled atlas.
+                for name in ("SLICERDSPACE_WMA_ATLAS_ORG_DIR", "SLICERDSPACE_WMA_ATLAS_DIR", "WMA_ATLAS_DIR"):
+                    os.environ.pop(name, None)
+                self.assertEqual(optional_assets.resolve_wma_atlas_directory(asset_root=empty_user_assets), wma_dir)
                 # Tampering with an extracted file still raises ModelAssetIntegrityError
                 (wma_dir / cluster_rel).write_bytes(b"corrupted")
                 with self.assertRaises(ModelAssetIntegrityError):
                     optional_assets.verified_resource_directory("wma")
+
+    def _bundled_optional_resources(self, base: Path):
+        """A catalog and a bundled root with one TractCloud file and the PNL files; the configured root is empty."""
+        configured = base / "configured-assets"
+        configured.mkdir()
+        bundled = base / "bundled-model-assets"
+        payloads = {"bundles/tractcloud/TrainedModel/best_tract_f1_model.pth": b"tractcloud model"}
+        payloads.update({"brain_mask/pnl_cnn_torch/" + name: name.encode() for name in (
+            "weights.json", "IITmean_b0_256.nii.gz", "sagittal.pt", "coronal.pt", "axial.pt")})
+        for relative, payload in payloads.items():
+            (bundled / relative).parent.mkdir(parents=True, exist_ok=True)
+            (bundled / relative).write_bytes(payload)
+        catalog = base / "catalog.json"
+        catalog.write_text(json.dumps({
+            "profiles": {
+                "tractcloud": {"directory": "bundles/tractcloud",
+                               "required_paths": [p for p in payloads if p.startswith("bundles/tractcloud/")]},
+                "pnl-cnn": {"directory": "brain_mask/pnl_cnn_torch",
+                            "required_paths": [p for p in payloads if p.startswith("brain_mask/")]},
+            },
+            "asset_records": {relative: {"sha256": hashlib.sha256(payload).hexdigest(), "size_bytes": len(payload)}
+                              for relative, payload in payloads.items()},
+        }), encoding="utf-8")
+        return configured, bundled, catalog
+
+    def test_run_with_a_configured_asset_root_uses_verified_bundled_optional_resources(self):
+        # Install test 2026-11-26, finding 3: setup saves model_assets_dir after the first on-demand install. The run
+        # and the environment check then lost TractCloud and the PNL weights that the base package bundles.
+        with tempfile.TemporaryDirectory() as tmp:
+            configured, bundled, catalog = self._bundled_optional_resources(Path(tmp).resolve())
+            with patch.object(optional_assets, "MANIFEST", catalog), \
+                    patch.object(optional_assets, "_persist_sha256_cache"), \
+                    patch.dict(os.environ, {"SLICERDSPACE_BUNDLED_MODEL_ASSETS_ROOT": str(bundled)}):
+                for name in ("SLICERDSPACE_MODEL_ASSETS_DIR", "SLICERDSPACE_TRACTCLOUD_DATA_DIR", "TRACTCLOUD_DATA_DIR",
+                             "SLICERDSPACE_PNL_MASK_MODEL_DIR"):
+                    os.environ.pop(name, None)
+                with self.subTest("TractCloud"):
+                    self.assertEqual(optional_assets.resolve_tractcloud_data_directory(asset_root=configured),
+                                     bundled / "bundles" / "tractcloud")
+                with self.subTest("PNL weights"):
+                    report = brain_mask.inspect_brain_mask_backend(brain_mask.BrainMaskConfig(
+                        backend="pnl_cnn", pnl_mask_route="native", model_assets_dir=configured))
+                    self.assertNotIn("pnl_mask_model_dir", report["missing_required"])
+                    self.assertEqual(report["tool_paths"].get("model_dir"),
+                                     str(bundled / "brain_mask" / "pnl_cnn_torch"))
+
+    def test_setup_question_about_a_configured_asset_root_does_not_count_bundled_resources(self):
+        # Setup asks whether THIS root holds the profile; the bundled copy must not answer for it.
+        with tempfile.TemporaryDirectory() as tmp:
+            configured, bundled, catalog = self._bundled_optional_resources(Path(tmp).resolve())
+            with patch.object(optional_assets, "MANIFEST", catalog), \
+                    patch.object(optional_assets, "_persist_sha256_cache"), \
+                    patch.dict(os.environ, {"SLICERDSPACE_BUNDLED_MODEL_ASSETS_ROOT": str(bundled)}):
+                os.environ.pop("SLICERDSPACE_MODEL_ASSETS_DIR", None)
+                self.assertIsNone(optional_assets.verified_resource_directory("tractcloud", asset_root=configured))
 
     def test_bundled_sources_and_linux_auto_pnl_route_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:

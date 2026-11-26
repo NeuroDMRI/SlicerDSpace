@@ -1934,7 +1934,8 @@ def build_dependency_specs(config: EnvironmentDoctorConfig) -> tuple[DependencyS
                 )
             if tractcloud_data_dir is None:
                 from shared.optional_assets import verified_resource_directory
-                tractcloud_data_dir = verified_resource_directory("tractcloud", asset_root=config.model_assets_dir)
+                tractcloud_data_dir = verified_resource_directory(
+                    "tractcloud", asset_root=config.model_assets_dir, bundled_fallback=True)
                 tractcloud_data_dir_source = "verified shared resource directory"
             if tractcloud_data_dir is not None:
                 _path(

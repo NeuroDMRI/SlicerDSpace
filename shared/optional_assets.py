@@ -68,13 +68,20 @@ def _verify_profile_in_root(profile, root: Path, manifest: dict, *, allow_omitte
     return root / definition["directory"]
 
 
-def verified_resource_directory(profile, *, asset_root=None):
+def verified_resource_directory(profile, *, asset_root=None, bundled_fallback=False):
+    """The verified folder of an optional profile in the configured asset root, or None.
+
+    Without a configured root (no ``asset_root``, no ``SLICERDSPACE_MODEL_ASSETS_DIR``) the extension's own
+    ``bundled-model-assets`` is read as well. ``bundled_fallback=True`` reads it with a configured root too: a run and
+    the environment check use it, because setup saves the asset root after the first on-demand install. Setup itself
+    keeps the default: it asks whether the configured root holds the profile.
+    """
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     root = configured_model_assets_root(asset_root)
     verified = _verify_profile_in_root(profile, root, manifest, allow_omitted_wma_archives=True)
     if verified is not None:
         return verified
-    if asset_root is None and not os.environ.get(MODEL_ASSETS_ENV):
+    if bundled_fallback or (asset_root is None and not os.environ.get(MODEL_ASSETS_ENV)):
         repo_root = Path(__file__).resolve().parents[1]
         for bundled_root in bundled_model_asset_roots(repo_root):
             verified = _verify_profile_in_root(profile, bundled_root, manifest, allow_omitted_wma_archives=True)
@@ -91,7 +98,8 @@ def resolve_wma_atlas_directory(explicit=None, *, asset_root=None, atlas_family=
     value = explicit or os.environ.get("SLICERDSPACE_WMA_ATLAS_" + atlas_family.upper().replace("-", "_") + "_DIR")
     if not value and atlas_family == "org":
         value = os.environ.get("SLICERDSPACE_WMA_ATLAS_DIR") or os.environ.get("WMA_ATLAS_DIR")
-    return Path(value).expanduser().absolute() if value else verified_resource_directory(definition["profile"], asset_root=asset_root)
+    return Path(value).expanduser().absolute() if value else verified_resource_directory(
+        definition["profile"], asset_root=asset_root, bundled_fallback=True)
 
 
 def inherited_wma_atlas_directory(value, atlas_family, asset_root=None):
@@ -115,7 +123,8 @@ def inherited_wma_atlas_directory(value, atlas_family, asset_root=None):
 def resolve_tractcloud_data_directory(explicit=None, *, asset_root=None):
     import os
     value = explicit or os.environ.get("SLICERDSPACE_TRACTCLOUD_DATA_DIR") or os.environ.get("TRACTCLOUD_DATA_DIR")
-    return Path(value).expanduser().absolute() if value else verified_resource_directory("tractcloud", asset_root=asset_root)
+    return Path(value).expanduser().absolute() if value else verified_resource_directory(
+        "tractcloud", asset_root=asset_root, bundled_fallback=True)
 
 
 PNL_MODEL_GAPS = ("pnl_mask_model_dir", "weights.json", "IITmean_b0_256.nii.gz", ".pt ")

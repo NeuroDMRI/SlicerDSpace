@@ -123,6 +123,67 @@ class GibbsAndDDParcelCacheInvalidationTests(unittest.TestCase):
             manifest_path.write_text(json.dumps({"status": "completed", "cache_key": new_key}), encoding="utf-8")
             self.assertIsNotNone(current_preprocessed_outputs(root, None, "sub01"))
 
+    def test_newly_exported_user_mask_overrides_preprocessed_mask_automatically(self) -> None:
+        from preprocessing.pipeline import DwiPreprocessingConfig, _preprocessing_cache_key
+        from shared.pipeline import RawInputBundle, current_preprocessed_outputs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            inp = root / "input"
+            inp.mkdir()
+            for name in ("data.nii.gz", "bvals", "bvecs"):
+                (inp / name).write_bytes(b"raw-" + name.encode())
+            preproc_dir = root / "preprocessed"
+            preproc_dir.mkdir(parents=True)
+            auto_mask = preproc_dir / "nodif_brain_mask.nii.gz"
+            auto_mask.write_bytes(b"auto-mask")
+            auto_mask.with_name("nodif_brain_mask.manifest.json").write_text("{}", encoding="utf-8")
+            raw = RawInputBundle(
+                subject_root=root,
+                subject_id="sub01",
+                input_dir=inp,
+                dwi_path=inp / "data.nii.gz",
+                bval_path=inp / "bvals",
+                bvec_path=inp / "bvecs",
+                mask_path=auto_mask,
+            )
+            cfg = DwiPreprocessingConfig(
+                subject_id="sub01",
+                input_root=root,
+                dipy_run_gibbs=True,
+                phase_encoding_direction="AP",
+                readout_time=0.05,
+                brain_mask_backend="pnl_cnn",
+            )
+            cache_key = _preprocessing_cache_key(
+                raw, cfg, {"execution_backend": "legacy", "commands": {}}, {"backend": "pnl_cnn"}
+            )
+            for suffix in ("dwi_final.nii.gz", "dwi_final.bval", "dwi_final.bvec", "brain_mask_final.nii.gz"):
+                (preproc_dir / f"sub01_{suffix}").write_bytes(b"preproc")
+            (preproc_dir / "sub01_preproc_manifest.json").write_text(
+                json.dumps({"status": "completed", "cache_key": cache_key}),
+                encoding="utf-8",
+            )
+
+            before = current_preprocessed_outputs(root, None, "sub01")
+            self.assertIsNotNone(before)
+            self.assertEqual(before.mask_path, preproc_dir / "sub01_brain_mask_final.nii.gz")
+
+            # Exporting an edited mask to input/nodif_brain_mask.nii.gz must be picked up automatically
+            # while still reusing sub01_dwi_final.nii.gz (even across repeated edits).
+            edited_mask = inp / "nodif_brain_mask.nii.gz"
+            edited_mask.write_bytes(b"edited-user-mask")
+            after = current_preprocessed_outputs(root, None, "sub01")
+            self.assertIsNotNone(after)
+            self.assertEqual(after.dwi_path, preproc_dir / "sub01_dwi_final.nii.gz")
+            self.assertEqual(after.mask_path, edited_mask)
+
+            edited_mask.write_bytes(b"edited-user-mask-v2")
+            after_v2 = current_preprocessed_outputs(root, None, "sub01")
+            self.assertIsNotNone(after_v2)
+            self.assertEqual(after_v2.dwi_path, preproc_dir / "sub01_dwi_final.nii.gz")
+            self.assertEqual(after_v2.mask_path, edited_mask)
+
     @unittest.skipUnless(HAS_NIBABEL, "nibabel unavailable")
     def test_ddparcel_contract_version_2_invalidates_stale_v1_and_unversioned_receipts(self) -> None:
         import nibabel as nib

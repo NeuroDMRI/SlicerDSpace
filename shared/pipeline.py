@@ -636,6 +636,8 @@ def current_preprocessed_outputs(
     if not isinstance(inputs, dict):
         return None
     input_dir = root / "input"
+    user_mask = input_dir / RAW_INPUT_FILES["mask"]
+    effective_mask = paths["mask"]
     for key, name in RAW_INPUT_FILES.items():
         record = inputs.get(key)
         expected_path = input_dir / name
@@ -644,11 +646,13 @@ def current_preprocessed_outputs(
             matched = next((cand for cand in candidates if cand.is_file() and _input_record_matches(record, cand)), None)
             if matched is None:
                 return None
+            if _is_user_supplied_mask(user_mask) and matched.resolve() != user_mask.resolve():
+                effective_mask = user_mask
         elif not _input_record_matches(record, expected_path):
             return None
     return PreprocessedOutputs(
         subject_id=found_id, preproc_dir=files_dir, dwi_path=paths["dwi"], bval_path=paths["bval"],
-        bvec_path=paths["bvec"], mask_path=paths["mask"], manifest_path=manifest_path, qc_path=qc_path,
+        bvec_path=paths["bvec"], mask_path=effective_mask, manifest_path=manifest_path, qc_path=qc_path,
         manifest=manifest,
     )
 

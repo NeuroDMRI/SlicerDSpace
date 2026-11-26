@@ -791,6 +791,16 @@ class ConnectomePipelineTest(unittest.TestCase):
             ref_assigned = np.asarray([assigner(pt) for pt in points], dtype=np.int64)
             np.testing.assert_array_equal(batch_assigned, ref_assigned)
 
+    def test_orchestrator_finish_task_timer_releases_stage_memory(self) -> None:
+        from shared import orchestrator
+
+        messages = []
+        started = orchestrator._start_task_timer("Connectome stage", messages.append)
+        orchestrator._finish_task_timer("Connectome stage", started, messages.append)
+        self.assertEqual(len(messages), 2)
+        self.assertIn("Connectome stage started", messages[0])
+        self.assertIn("Connectome stage completed", messages[1])
+
 
 if __name__ == "__main__":
     unittest.main()

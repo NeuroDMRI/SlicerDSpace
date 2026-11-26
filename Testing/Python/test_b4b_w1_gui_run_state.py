@@ -838,19 +838,37 @@ class LeHooksTest(unittest.TestCase):
         self.assertIn("Runnable targets: microstructure", text)
 
     def test_le4_plan_warnings_are_shown(self) -> None:
+        from shared.ui_run_controller import modal_plan_warnings
+
         plan = _plan([("microstructure", "will_run", "ready", "runnable")],
                      warnings=["Low disk space: 3.0 GiB free, about 12 GiB needed.", "  "])
         self.assertEqual(plan_warning_lines(plan), ["Low disk space: 3.0 GiB free, about 12 GiB needed."])
+        self.assertEqual(modal_plan_warnings(plan_warning_lines(plan)), ["Low disk space: 3.0 GiB free, about 12 GiB needed."])
         text = plan_notice_text({}, ("microstructure",), plan_warning_lines(plan))
         self.assertIn("Warnings:\n- Low disk space", text)
         self.assertNotIn("Blocked:", text)
+
+        # Soft recommended-RAM advisory should stay in logs without popping a blocking modal, while
+        # critical host-memory warnings still surface as a modal notice.
+        advisory = (
+            "Available host memory for DDParcel is 4.8 GiB available RAM "
+            "(below the recommended 5.5 GiB); close other memory-heavy applications."
+        )
+        critical = (
+            "DDParcel host memory critically low (2.1 GiB available RAM; minimum working set ~3.2 GiB)."
+        )
+        self.assertEqual(modal_plan_warnings([advisory]), [])
+        self.assertEqual(modal_plan_warnings([advisory, critical]), [critical])
 
     def test_le_widget_uses_the_actionable_blockers_and_warnings(self) -> None:
         source = MODULE_WIDGET_PATH.read_text(encoding="utf-8")
         run = source[source.index("    def _onRunSelectedClicked"):source.index("    def _show_topup_error")]
         self.assertIn("actionable_plan_blockers(plan)", run)
         self.assertIn("plan_warning_lines(plan)", run)
+        self.assertIn("modal_plan_warnings(plan_warnings)", run)
         self.assertNotIn("environment_blockers_from_plan(plan)", run)
+        notice_fn = source[source.index("    def _show_partial_run_notice"):source.index("    def _setStatus")]
+        self.assertIn('"SlicerDSpace partial run" if blockers else "SlicerDSpace notice"', notice_fn)
 
     def test_le10_validation_receives_the_selected_targets(self) -> None:
         previous = sys.modules.get("slicer")

@@ -626,12 +626,18 @@ def scan_component_updates(
                             rt_json = json.loads((cand / "runtime.json").read_text(encoding="utf-8"))
                             if rt_json.get("recipe_sha256") != surf_rec.get("recipe_sha256"):
                                 continue
+                            expected_sha = str(surf_rec.get("sha256") or "").strip().lower()
+                            stamp = cand / ".slicerdspace_archive_sha256"
+                            if stamp.is_file():
+                                stamp_sha = stamp.read_text(encoding="utf-8").strip().lower()
+                                if expected_sha and stamp_sha == expected_sha:
+                                    surf_up_to_date = True
+                                    break
+                                if expected_sha and stamp_sha != expected_sha:
+                                    continue
                             files_dict = rt_json.get("files") or {}
                             unpacked = sum(int(v.get("bytes") or 0) for v in files_dict.values() if isinstance(v, dict))
                             if int(surf_rec.get("unpacked_bytes") or 0) and unpacked != int(surf_rec["unpacked_bytes"]):
-                                continue
-                            stamp = cand / ".slicerdspace_archive_sha256"
-                            if stamp.is_file() and stamp.read_text(encoding="utf-8").strip().lower() != str(surf_rec["sha256"]).lower():
                                 continue
                             surf_up_to_date = True
                             break

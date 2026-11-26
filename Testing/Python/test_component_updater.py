@@ -402,6 +402,52 @@ class ComponentUpdaterTests(unittest.TestCase):
                 srv.shutdown()
                 srv.server_close()
 
+    def test_windows_surface_runtime_manifest_unpacked_bytes_and_stamp_prevent_update_loop(self) -> None:
+        from shared.component_updater import scan_component_updates
+
+        catalog = json.loads((REPO_ROOT / "models" / "runtime_bundles.json").read_text(encoding="utf-8"))
+        win_rec = next(
+            r for r in catalog["surface"] if r["system"] == "Windows" and r["machine"] == "x86_64"
+        )
+        # Must match the runtime.json inside surface-runtime-windows-x86_64.tar.gz (71 files, 154970962 bytes),
+        # otherwise fresh Windows installs enter an infinite 63.1 MB re-download loop.
+        self.assertEqual(win_rec["files"], 71)
+        self.assertEqual(win_rec["unpacked_bytes"], 154970962)
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            ext_root = tmp / "SlicerDSpace"
+            mod_root = ext_root / "lib" / "Slicer-5.10" / "qt-scripted-modules"
+            mod_root.mkdir(parents=True)
+            surf_dir = ext_root / "bundled-runtimes" / "surface-runtime-windows-x86_64"
+            (surf_dir / "bin").mkdir(parents=True)
+            payload = b"fake-exe-payload"
+            (surf_dir / "bin" / "mris_inflate.exe").write_bytes(payload)
+            (surf_dir / "runtime.json").write_text(
+                json.dumps(
+                    {
+                        "activation_key_included": False,
+                        "recipe_sha256": win_rec["recipe_sha256"],
+                        "files": {"bin/mris_inflate.exe": {"bytes": len(payload), "sha256": _sha256_bytes(payload)}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            # Even if unpacked_bytes metadata drifted, a matching archive SHA-256 stamp must stop any update loop.
+            (surf_dir / ".slicerdspace_archive_sha256").write_text(win_rec["sha256"] + "\n", encoding="utf-8")
+
+            components = {
+                "version": 1,
+                "model_packs": {},
+                "wma_packs": {},
+                "algorithm_sources": {},
+                "runtimes": {"surface": [win_rec], "ukf_standalone": [], "native": []},
+            }
+            with patch("shared.component_updater._host_platform_pair", return_value=("Windows", "x86_64")), patch.dict(
+                os.environ, {"SLICERDSPACE_SURFACE_RUNTIME": "", "FREESURFER_HOME": ""}, clear=False
+            ):
+                self.assertEqual(scan_component_updates(mod_root, components), [])
+
 
 if __name__ == "__main__":
     unittest.main()

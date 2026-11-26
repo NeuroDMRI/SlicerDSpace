@@ -1741,6 +1741,19 @@ def plan_warning_lines(plan: Any) -> list[str]:
     return [str(text).strip() for text in (getattr(plan, "warnings", ()) or ()) if str(text).strip()]
 
 
+def is_advisory_memory_warning(warning_text: str) -> bool:
+    """Return True for soft recommended-RAM advice that should be logged without a blocking modal."""
+
+    text = str(warning_text or "").strip()
+    return text.startswith("Available host memory for ") and "below the recommended " in text
+
+
+def modal_plan_warnings(warnings: list[str]) -> list[str]:
+    """Filter plan warnings down to high-severity items worth interrupting the user with a modal."""
+
+    return [text for text in warnings if not is_advisory_memory_warning(text)]
+
+
 def plan_notice_text(blockers: dict[str, str], runnable_targets: tuple[str, ...], warnings: list[str]) -> str:
     """The notice shown before a run starts: blocked products with their reasons, then warnings."""
 

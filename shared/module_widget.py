@@ -116,6 +116,7 @@ from shared.ui_run_controller import (
     blocked_plan_items,
     blocked_plan_log_text,
     environment_blockers_from_plan,
+    modal_plan_warnings,
     partial_run_notice_text,
     plan_notice_text,
     plan_warning_lines,
@@ -2216,10 +2217,18 @@ class SharedWidgetMixin:
                     return
                 _consume_result(exit_code=-1)
 
+            from shared.external_process import normalize_slicer_python_launch
+
+            try:
+                launch_program, launch_args = normalize_slicer_python_launch(launcher, args)
+            except Exception as exc:
+                self._cleanup_input_preview_process(terminate=False)
+                apply_prepared(None, PreviewError("bad_data", f"Could not launch input preview worker ({exc})."))
+                return
             process.connect("readyReadStandardOutput()", _on_ready_read)
             process.connect("finished(int,QProcess::ExitStatus)", _on_finished)
             process.connect("errorOccurred(QProcess::ProcessError)", _on_error)
-            process.start(launcher, args)
+            process.start(launch_program, launch_args)
             if hasattr(process, "waitForStarted") and not process.waitForStarted(5000):
                 _consume_result(exit_code=-1)
             return
@@ -5475,8 +5484,9 @@ class SharedWidgetMixin:
             plan_warnings = plan_warning_lines(plan)
             for warning_text in plan_warnings:
                 self.appendLog("[Plan] WARNING: " + warning_text)
-            if plan_blockers or plan_warnings:
-                self._show_partial_run_notice(plan_blockers, runnable_targets_from_plan(plan), plan_warnings)
+            modal_warnings = plan_warnings if plan_blockers else modal_plan_warnings(plan_warnings)
+            if plan_blockers or modal_warnings:
+                self._show_partial_run_notice(plan_blockers, runnable_targets_from_plan(plan), modal_warnings)
         except Exception as exc:
             self.appendLog(f"Run planning failed: {exc}")
             self._show_actionable_error(
@@ -5540,7 +5550,8 @@ class SharedWidgetMixin:
         warnings: Optional[list[str]] = None,
     ) -> None:
         message = plan_notice_text(blockers, runnable_targets, list(warnings or []))
-        slicer.util.infoDisplay(message, windowTitle="SlicerDSpace partial run", parent=self.parent)
+        title = "SlicerDSpace partial run" if blockers else "SlicerDSpace notice"
+        slicer.util.infoDisplay(message, windowTitle=title, parent=self.parent)
 
     def _setStatus(self, kind: str, message: str) -> None:
         self._statusMessageSource = str(message or "")

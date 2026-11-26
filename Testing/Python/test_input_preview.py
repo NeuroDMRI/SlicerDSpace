@@ -1679,6 +1679,89 @@ class WiringTest(unittest.TestCase):
             self.assertEqual(shown, ["nifti"])
             self.assertEqual(assigned["source"], str(Path("/tmp/sub/drop_dwi.nii.gz")))
 
+    def test_macos_input_preview_qprocess_normalizes_slicer_launch_to_pythonslicer(self):
+        import json
+        import shutil
+        from Testing.Python.test_b2_fix_round import widget_methods
+        from shared import input_preview as ip
+
+        started = {}
+
+        class FakeQProcess:
+            MergedChannels = 1
+
+            def __init__(self, _parent=None):
+                self.signals = {}
+
+            def setWorkingDirectory(self, _d):
+                pass
+
+            def setProcessChannelMode(self, _m):
+                pass
+
+            def setProcessEnvironment(self, _e):
+                pass
+
+            def connect(self, sig, fn):
+                self.signals[sig] = fn
+
+            def start(self, program, args):
+                started["program"] = program
+                started["args"] = list(args)
+
+            def waitForStarted(self, _ms):
+                return True
+
+        fake_qt = SimpleNamespace(QProcess=FakeQProcess)
+        fake_slicer = SimpleNamespace(name="slicer")
+        Widget = widget_methods(
+            "_on_input_preview_clicked",
+            "_input_preview_is_batch",
+            "_cleanup_input_preview_process",
+            qt=fake_qt,
+            slicer=fake_slicer,
+            tempfile=tempfile,
+            json=json,
+            shutil=shutil,
+            qprocess_is_running=lambda _p: False,
+            __file__=str(REPO_ROOT / "shared" / "module_widget.py"),
+        )
+        with tempfile.TemporaryDirectory() as td:
+            app_contents = Path(td) / "Slicer.app" / "Contents"
+            launcher = app_contents / "MacOS" / "Slicer"
+            py_slicer = app_contents / "bin" / "PythonSlicer"
+            launcher.parent.mkdir(parents=True)
+            py_slicer.parent.mkdir(parents=True)
+            launcher.write_text("", encoding="utf-8")
+            py_slicer.write_text("", encoding="utf-8")
+
+            me = Widget()
+            me._onboardingLanguage = "en"
+            me._inputPreviewPending = me._inputImportPending = me._cleanedUp = False
+            me._parameterNode = SimpleNamespace(batchMode=False)
+            me._slicer_launcher_program = lambda: str(launcher)
+            me._resolve_input_preview_source = lambda: PreviewSource(
+                "nrrd", Path(td) / "100307_dwi.nrrd", None, None, "100307_dwi"
+            )
+            me._input_preview_key = lambda s=None: ("source", str(getattr(s, "dwi", "")))
+            me._input_preview_failed = lambda message, key=None: None
+            me._set_input_preview_status = lambda text, error=False, key=None: None
+            me._refresh_input_preview_controls = lambda: None
+            me._refresh_input_preview_stepper = lambda: None
+            me._input_preview_cache_dir = lambda: Path(td) / "cache"
+            me.appendLog = lambda _msg: None
+
+            with mock.patch("sys.platform", "darwin"), \
+                    mock.patch.object(ip, "check_preview_dependencies", lambda s=None: None), \
+                    mock.patch.object(ip, "remove_preview_nodes", lambda s: None):
+                me._on_input_preview_clicked()
+            me._cleanup_input_preview_process(terminate=False)
+
+            self.assertEqual(Path(started["program"]), py_slicer)
+            self.assertEqual(started["args"][:1], ["-u"])
+            self.assertNotIn("--launch", started["args"])
+            self.assertTrue(started["args"][1].endswith("input_preview_cli.py"))
+
 
 if __name__ == "__main__":
     unittest.main()

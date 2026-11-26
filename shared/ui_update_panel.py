@@ -106,12 +106,12 @@ def _sync_idle_texts(owner: Any, *, zh: bool | None = None) -> None:
     elif phase == "checking":
         elapsed = int(state.get("elapsed_sec") or 0)
         suffix = f" ({elapsed}s)" if elapsed > 0 else ""
-        label.setText(_t(use_zh, f"Checking for code updates...{suffix}", f"正在检查代码更新...{suffix}"))
+        label.setText(_t(use_zh, f"Checking for updates...{suffix}", f"正在检查更新...{suffix}"))
         button.setText(_t(use_zh, "Checking...", "正在检查..."))
         button.setEnabled(False)
     elif phase == "downloading":
         pct = int(state.get("percent") or 0)
-        label.setText(_t(use_zh, f"Downloading code update... {pct}%", f"正在下载增量更新... {pct}%"))
+        label.setText(_t(use_zh, f"Downloading update... {pct}%", f"正在下载更新... {pct}%"))
         button.setText(_t(use_zh, f"Updating... {pct}%", f"正在更新... {pct}%"))
         button.setEnabled(False)
     elif phase == "up_to_date":
@@ -128,7 +128,7 @@ def _sync_idle_texts(owner: Any, *, zh: bool | None = None) -> None:
         button.setEnabled(True)
     elif phase == "update_available":
         size_text = _format_mb(int(state.get("size_bytes") or 0))
-        label.setText(_t(use_zh, f"Update available ({size_text})", f"发现代码更新 ({size_text})"))
+        label.setText(_t(use_zh, f"Update available ({size_text})", f"发现可用更新 ({size_text})"))
         button.setText(_t(use_zh, "Check for updates", "检查更新"))
         button.setEnabled(True)
     else:
@@ -139,13 +139,30 @@ def _sync_idle_texts(owner: Any, *, zh: bool | None = None) -> None:
     button.setToolTip(
         _t(
             use_zh,
-            "Check NeuroDMRI/SlicerDSpace Releases for small (~2-3 MB) incremental code updates.",
-            "检查 NeuroDMRI/SlicerDSpace Release 中的轻量级（约 2-3 MB）增量代码更新。",
+            "Check NeuroDMRI/SlicerDSpace Releases for incremental updates to code, models, and runtimes.",
+            "检查 NeuroDMRI/SlicerDSpace Release 中的增量更新（仅替换有改动的代码、模型与运行组件）。",
         )
     )
 
 
-def _handle_check_result(owner: Any, result: dict[str, Any]) -> None:
+def _invalidate_environment_cache(owner: Any) -> None:
+    for attr in ("_lastEnvironmentCheckResult", "_environmentDoctorResult"):
+        if hasattr(owner, attr):
+            try:
+                setattr(owner, attr, None)
+            except Exception:
+                pass
+    try:
+        import slicer
+
+        settings = slicer.app.userSettings()
+        if settings is not None:
+            settings.remove("SlicerDSpace/UserSettings/lastEnvironmentCheck")
+    except Exception:
+        pass
+
+
+def _handle_check_result(owner: Any, result: dict[str, Any], *, silent_when_up_to_date: bool = False) -> None:
     import qt
 
     zh = _is_zh(owner)
@@ -154,12 +171,18 @@ def _handle_check_result(owner: Any, result: dict[str, Any]) -> None:
     remote = dict(result.get("remote") or {})
     version = str(remote.get("version") or EXTENSION_VERSION)
     short_sha = str(remote.get("git_short_commit") or "")
-    size_bytes = int(result.get("overlay_size_bytes") or 0)
+    size_bytes = int(result.get("total_size_bytes") or result.get("overlay_size_bytes") or 0)
+    code_update = bool(result.get("code_update_available", status == "update_available" and not result.get("components_only")))
+    components_only = bool(result.get("components_only")) or (not code_update and bool(result.get("component_updates")))
     summary = str(result.get("summary") or "").strip()
     state["version"] = version
     state["size_bytes"] = size_bytes
 
     if status == "up_to_date":
+        if silent_when_up_to_date:
+            state["phase"] = "idle"
+            _sync_idle_texts(owner, zh=zh)
+            return
         state["phase"] = "up_to_date"
         _sync_idle_texts(owner, zh=zh)
         _log(owner, f"[Updater] Already up to date (v{version}{', ' + short_sha if short_sha else ''}).")
@@ -190,6 +213,10 @@ def _handle_check_result(owner: Any, result: dict[str, Any]) -> None:
         return
 
     if bool(result.get("is_git_checkout")):
+        if silent_when_up_to_date:
+            state["phase"] = "idle"
+            _sync_idle_texts(owner, zh=zh)
+            return
         state["phase"] = "update_available"
         _sync_idle_texts(owner, zh=zh)
         _log(owner, "[Updater] Update available, skipped because installation is a Git checkout.")
@@ -204,7 +231,7 @@ def _handle_check_result(owner: Any, result: dict[str, Any]) -> None:
         )
         return
 
-    if not bool(result.get("writable")):
+    if code_update and not bool(result.get("writable")):
         state["phase"] = "update_available"
         _sync_idle_texts(owner, zh=zh)
         mod_root = str((result.get("local") or {}).get("module_root") or "")
@@ -214,8 +241,8 @@ def _handle_check_result(owner: Any, result: dict[str, Any]) -> None:
             _t(zh, "Directory Not Writable", "插件目录不可写"),
             _t(
                 zh,
-                f"A code update (~{_format_mb(size_bytes)}) is available, but Slicer lacks write permission to:\n{mod_root}\n\nRestart Slicer with write access or reinstall the latest package.",
-                f"发现约 {_format_mb(size_bytes)} 的增量代码更新，但当前无权写入插件目录：\n{mod_root}\n\n请以具备写权限的用户运行或重新安装最新版。",
+                f"An update (~{_format_mb(size_bytes)}) is available, but Slicer lacks write permission to:\n{mod_root}\n\nRestart Slicer with write access or reinstall the latest package.",
+                f"发现约 {_format_mb(size_bytes)} 的可用更新，但当前无权写入插件目录：\n{mod_root}\n\n请以具备写权限的用户运行或重新安装最新版。",
             ),
         )
         return
@@ -224,31 +251,31 @@ def _handle_check_result(owner: Any, result: dict[str, Any]) -> None:
     _sync_idle_texts(owner, zh=zh)
     ver_line = f"v{version}" + (f" ({short_sha})" if short_sha else "")
     _log(owner, f"[Updater] Update available: {ver_line}, size {_format_mb(size_bytes)}.")
-    notes_line = f"\n{summary}\n" if summary else "\n"
+    notes_line = f"\n{summary}\n" if summary and code_update else "\n"
     prompt = _t(
         zh,
-        f"A lightweight incremental code update is available for SlicerDSpace.\n\n"
+        f"An update is available for SlicerDSpace.\n\n"
         f"Target: {ver_line}\n"
         f"Download size: {_format_mb(size_bytes)}"
         f"{notes_line}\n"
-        "Your models, WMA atlases, and settings will NOT be re-downloaded.\n"
+        "Only updated components and resources will be downloaded; unchanged models, atlases, and settings will be kept.\n"
         "Download and apply now?",
-        f"发现 SlicerDSpace 轻量级增量代码更新。\n\n"
+        f"检测到 SlicerDSpace 可用更新。\n\n"
         f"目标版本：{ver_line}\n"
         f"下载体积：{_format_mb(size_bytes)}"
         f"{notes_line}\n"
-        "内置模型权重、WMA 图谱与用户设置均会保留，无需重下。\n"
+        "将自动替换有变动的组件与资源，未改动的模型、图谱与用户设置无需重下。\n"
         "是否立即下载并应用？",
     )
     reply = qt.QMessageBox.question(
         _parent_window(owner),
-        _t(zh, "Code Update Available", "发现增量更新"),
+        _t(zh, "Update Available", "检测到可用更新"),
         prompt,
         qt.QMessageBox.Yes | qt.QMessageBox.No,
         qt.QMessageBox.Yes,
     )
     if reply == qt.QMessageBox.Yes:
-        _start_apply_worker(owner, remote)
+        _start_apply_worker(owner, remote, components_only=components_only)
 
 
 def _handle_apply_result(owner: Any, result: dict[str, Any]) -> None:
@@ -265,21 +292,40 @@ def _handle_apply_result(owner: Any, result: dict[str, Any]) -> None:
         _log(owner, f"[Updater] Already up to date (v{version}{', ' + short_sha if short_sha else ''}).")
         return
 
+    updated_count = int(result.get("updated_files") or 0)
+    comp_count = int(result.get("updated_component_count") or 0)
+    if comp_count > 0:
+        _invalidate_environment_cache(owner)
+
+    if not bool(result.get("restart_required", True)):
+        state["phase"] = "up_to_date"
+        _sync_idle_texts(owner, zh=zh)
+        _log(owner, f"[Updater] Updated {comp_count} companion component(s) for v{version}.")
+        qt.QMessageBox.information(
+            _parent_window(owner),
+            _t(zh, "Update Complete", "更新完成"),
+            _t(
+                zh,
+                f"SlicerDSpace v{version} components and resources have been updated and are ready to use.",
+                f"SlicerDSpace v{version} 相关组件与资源已更新完成，现在可直接使用。",
+            ),
+        )
+        return
+
     state["phase"] = "restart_required"
     _sync_idle_texts(owner, zh=zh)
-    updated_count = int(result.get("updated_files") or 0)
     _log(
         owner,
-        f"[Updater] Applied incremental update v{version} ({short_sha}, {updated_count} files). Restart Slicer to load new code.",
+        f"[Updater] Applied update v{version} ({short_sha}, {updated_count} code files, {comp_count} components). Restart Slicer to load new code.",
     )
     box = qt.QMessageBox(_parent_window(owner))
     box.setIcon(qt.QMessageBox.Information)
-    box.setWindowTitle(_t(zh, "Update Applied", "增量更新完成"))
+    box.setWindowTitle(_t(zh, "Update Applied", "更新完成"))
     box.setText(
         _t(
             zh,
-            f"Code update v{version} ({updated_count} files) has been verified and installed.\n\nRestart 3D Slicer now to load the updated extension?",
-            f"增量代码更新 v{version}（{updated_count} 个文件）已校验并安装完成。\n\n是否立即重启 3D Slicer 以启用最新版本？",
+            f"SlicerDSpace v{version} has been verified and updated.\n\nRestart 3D Slicer now to load the updated extension?",
+            f"SlicerDSpace v{version} 已校验并更新完成。\n\n是否立即重启 3D Slicer 以启用最新版本？",
         )
     )
     restart_btn = box.addButton(_t(zh, "Restart Slicer Now", "立即重启 Slicer"), qt.QMessageBox.AcceptRole)
@@ -521,10 +567,17 @@ def _finalize_worker(
         result = payload["result"]
         if kind == "check":
             _handle_check_result(owner, result)
+        elif kind == "check_local":
+            _handle_check_result(owner, result, silent_when_up_to_date=True)
         elif kind == "apply":
             _handle_apply_result(owner, result)
         else:
             _sync_idle_texts(owner)
+        return
+
+    if kind == "check_local":
+        state["phase"] = "idle"
+        _sync_idle_texts(owner)
         return
 
     if isinstance(payload, dict) and payload.get("ok") is False:
@@ -662,7 +715,7 @@ def _start_check_worker(owner: Any) -> None:
     )
 
 
-def _start_apply_worker(owner: Any, remote_manifest: dict[str, Any]) -> None:
+def _start_apply_worker(owner: Any, remote_manifest: dict[str, Any], *, components_only: bool = False) -> None:
     state = owner._codeUpdateState
     if state.get("busy"):
         return
@@ -671,26 +724,70 @@ def _start_apply_worker(owner: Any, remote_manifest: dict[str, Any]) -> None:
     state["percent"] = 0
     _sync_idle_texts(owner)
     version = str(remote_manifest.get("version") or EXTENSION_VERSION)
-    _log(owner, f"[Updater] Downloading and applying code update v{version}...")
+    _log(owner, f"[Updater] Downloading and applying update v{version}...")
 
     tmp_dir = Path(tempfile.mkdtemp(prefix="slicerdspace_upd_app_"))
-    manifest_file = tmp_dir / "manifest.json"
     result_file = tmp_dir / "result.json"
-    manifest_file.write_text(json.dumps(remote_manifest, ensure_ascii=False), encoding="utf-8")
     module_root = Path(__file__).resolve().parents[1]
+    worker_args = [
+        "apply",
+        "--module-root",
+        str(module_root),
+        "--result-file",
+        str(result_file),
+    ]
+    if components_only:
+        worker_args.append("--components-only")
+    else:
+        manifest_file = tmp_dir / "manifest.json"
+        manifest_file.write_text(json.dumps(remote_manifest, ensure_ascii=False), encoding="utf-8")
+        worker_args.extend(["--manifest-file", str(manifest_file)])
     _start_worker_process(
         owner,
         kind="apply",
+        worker_args=worker_args,
+        watchdog_seconds=_APPLY_WATCHDOG_SECONDS,
+        tmp_dir=tmp_dir,
+        result_file=result_file,
+    )
+
+
+def maybe_prompt_pending_companion_updates(owner: Any) -> None:
+    """Run a one-time fast local scan after Slicer starts so v0.1.1 -> v1.0.x upgrades auto-complete."""
+
+    if getattr(owner, "_companionUpdateCheckedOnce", False) or getattr(owner, "_cleanedUp", False):
+        return
+    state = getattr(owner, "_codeUpdateState", None)
+    if not isinstance(state, dict) or state.get("busy") or state.get("phase") == "restart_required":
+        return
+    try:
+        import slicer
+
+        mw_fn = getattr(slicer.util, "mainWindow", None)
+        mw = mw_fn() if callable(mw_fn) else None
+        if mw is None or (hasattr(mw, "isVisible") and not mw.isVisible()):
+            return
+    except Exception:
+        return
+    if getattr(owner, "_backgroundRunProcess", None) is not None:
+        return
+
+    owner._companionUpdateCheckedOnce = True
+    state["busy"] = True
+    tmp_dir = Path(tempfile.mkdtemp(prefix="slicerdspace_upd_loc_"))
+    result_file = tmp_dir / "result.json"
+    module_root = Path(__file__).resolve().parents[1]
+    _start_worker_process(
+        owner,
+        kind="check_local",
         worker_args=[
-            "apply",
+            "check-local",
             "--module-root",
             str(module_root),
-            "--manifest-file",
-            str(manifest_file),
             "--result-file",
             str(result_file),
         ],
-        watchdog_seconds=_APPLY_WATCHDOG_SECONDS,
+        watchdog_seconds=_CHECK_WATCHDOG_SECONDS,
         tmp_dir=tmp_dir,
         result_file=result_file,
     )

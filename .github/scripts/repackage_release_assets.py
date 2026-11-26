@@ -1404,6 +1404,14 @@ def build_code_overlay(
             "sha256": overlay_sha,
         },
     }
+    try:
+        from shared.component_updater import build_components_manifest
+
+        components_meta = build_components_manifest(REPO_ROOT)
+        if components_meta:
+            manifest["components"] = components_meta
+    except Exception as exc:
+        print(f"[warn] Could not attach component metadata to update_manifest.json: {exc}", flush=True)
     manifest_path = out_dir / "update_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(

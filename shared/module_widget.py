@@ -3658,6 +3658,12 @@ class SharedWidgetMixin:
         fit = getattr(self, "_queueCompactFit", None)
         if callable(fit):
             fit()
+        try:
+            from shared.ui_update_panel import maybe_prompt_pending_companion_updates
+
+            qt.QTimer.singleShot(450, lambda: maybe_prompt_pending_companion_updates(self))
+        except Exception:
+            pass
 
     def exit(self) -> None:
         close_input_format_help_popovers(self, destroy=False)

@@ -369,6 +369,18 @@ def resolve_executable(explicit=None, name="UKFTractography"):
                         resolved_standalone = path.resolve()
                         if usable(resolved_standalone):
                             return resolved_standalone
+        try:
+            from shared.native_runtimes import runtime_root
+
+            user_rt = runtime_root()
+            if user_rt.is_dir():
+                for path in sorted(user_rt.glob("ukf-*/bin/*")):
+                    if path.is_file() and path.name.lower() in standalone_names_lower:
+                        resolved_standalone = path.resolve()
+                        if usable(resolved_standalone):
+                            return resolved_standalone
+        except Exception:
+            pass
     found = shutil.which(name)
     if found and usable(Path(found).resolve()):
         return Path(found).resolve()

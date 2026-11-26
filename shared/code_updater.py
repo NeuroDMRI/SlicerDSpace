@@ -273,6 +273,111 @@ def check_for_code_update(
     }
 
 
+def check_for_updates(
+    *,
+    module_root: Path | None = None,
+    manifest_url: str | None = None,
+    manifest: dict[str, Any] | None = None,
+    timeout: int = 12,
+    offline_dir: Path | str | None = None,
+    mirror_prefix: str | None = None,
+    proxy_url: str | None = None,
+    urlopen_fn: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
+    """Check remote code overlay plus local companion models, sources, and runtimes."""
+
+    resolved_root = (module_root or REPO_ROOT).expanduser().resolve()
+    base = check_for_code_update(
+        module_root=resolved_root,
+        manifest_url=manifest_url,
+        manifest=manifest,
+        timeout=timeout,
+        offline_dir=offline_dir,
+        mirror_prefix=mirror_prefix,
+        proxy_url=proxy_url,
+        urlopen_fn=urlopen_fn,
+    )
+    if base["status"] == "runtime_upgrade_required":
+        return {
+            **base,
+            "code_update_available": False,
+            "component_updates": [],
+            "component_size_bytes": 0,
+            "total_size_bytes": int(base["overlay_size_bytes"]),
+        }
+
+    code_update_available = base["status"] == "update_available"
+    comp_updates: list[dict[str, Any]] = []
+    if not base["is_git_checkout"]:
+        try:
+            from shared.component_updater import scan_component_updates
+
+            remote_components = base["remote"].get("components")
+            comp_updates = scan_component_updates(
+                resolved_root,
+                remote_components if isinstance(remote_components, dict) else None,
+            )
+        except Exception:
+            comp_updates = []
+
+    comp_bytes = sum(max(0, int(item.get("size_bytes") or 0)) for item in comp_updates)
+    overlay_bytes = int(base["overlay_size_bytes"]) if code_update_available else 0
+    status = "update_available" if (code_update_available or bool(comp_updates)) else "up_to_date"
+    return {
+        **base,
+        "status": status,
+        "code_update_available": code_update_available,
+        "component_updates": comp_updates,
+        "component_size_bytes": comp_bytes,
+        "total_size_bytes": overlay_bytes + comp_bytes,
+    }
+
+
+def check_local_component_updates(
+    *,
+    module_root: Path | None = None,
+) -> dict[str, Any]:
+    """Fast zero-network scan of installed companion components against local manifests."""
+
+    resolved_root = (module_root or REPO_ROOT).expanduser().resolve()
+    local = current_installation_info(resolved_root)
+    comp_updates: list[dict[str, Any]] = []
+    if not local["is_git_checkout"]:
+        try:
+            from shared.component_updater import scan_component_updates
+
+            comp_updates = scan_component_updates(resolved_root, None)
+        except Exception:
+            comp_updates = []
+    comp_bytes = sum(max(0, int(item.get("size_bytes") or 0)) for item in comp_updates)
+    status = "update_available" if comp_updates else "up_to_date"
+    return {
+        "status": status,
+        "local": local,
+        "remote": {
+            "schema_version": 1,
+            "version": EXTENSION_VERSION,
+            "release_tag": f"v{EXTENSION_VERSION}",
+            "runtime_abi_version": RUNTIME_ABI_VERSION,
+            "git_commit": "",
+            "git_short_commit": "",
+            "code_sha256": local["code_sha256"],
+            "summary": "",
+            "release_url": f"https://github.com/{GITHUB_REPO}/releases/tag/v{EXTENSION_VERSION}",
+        },
+        "is_git_checkout": bool(local["is_git_checkout"]),
+        "writable": True,
+        "code_update_available": False,
+        "components_only": True,
+        "component_updates": comp_updates,
+        "component_size_bytes": comp_bytes,
+        "overlay_size_bytes": 0,
+        "total_size_bytes": comp_bytes,
+        "release_url": f"https://github.com/{GITHUB_REPO}/releases/tag/v{EXTENSION_VERSION}",
+        "summary": "",
+    }
+
+
 def _safe_overlay_member_path(name: str) -> PurePosixPath:
     raw = str(name or "").replace("\\", "/")
     if raw.startswith("/"):
@@ -625,23 +730,174 @@ def download_and_apply_code_overlay(
         release_update_lock(update_lock)
 
 
+def download_and_apply_updates(
+    *,
+    module_root: Path | None = None,
+    manifest_url: str | None = None,
+    manifest: dict[str, Any] | None = None,
+    components_only: bool = False,
+    timeout: int = 180,
+    offline_dir: Path | str | None = None,
+    mirror_prefix: str | None = None,
+    proxy_url: str | None = None,
+    urlopen_fn: Callable[..., Any] | None = None,
+    progress_callback: ProgressCallback | None = None,
+    phase_callback: PhaseCallback | None = None,
+    allow_git_checkout: bool = False,
+) -> dict[str, Any]:
+    """Unified apply for incremental code overlay and changed companion components."""
+
+    resolved_root = (module_root or REPO_ROOT).expanduser().resolve()
+    overlay_applied = False
+    updated_files = 0
+    removed_files = 0
+    target_version = EXTENSION_VERSION
+    target_tag = f"v{EXTENSION_VERSION}"
+    short_commit = ""
+    code_sha = ""
+    remote_components: dict[str, Any] | None = None
+    overlay_bytes = 0
+
+    if not components_only:
+        check = check_for_updates(
+            module_root=resolved_root,
+            manifest_url=manifest_url,
+            manifest=manifest,
+            timeout=min(timeout, 30),
+            offline_dir=offline_dir,
+            mirror_prefix=mirror_prefix,
+            proxy_url=proxy_url,
+            urlopen_fn=urlopen_fn,
+        )
+        remote = check["remote"]
+        target_version = str(remote.get("version") or EXTENSION_VERSION)
+        target_tag = str(remote.get("release_tag") or f"v{target_version}")
+        short_commit = str(remote.get("git_short_commit") or "")
+        code_sha = str(remote.get("code_sha256") or "")
+        if isinstance(remote.get("components"), dict):
+            remote_components = remote["components"]
+
+        if check["status"] == "runtime_upgrade_required":
+            local = check["local"]
+            raise RuntimeError(
+                "This update requires a newer Python/native runtime package "
+                f"(remote ABI {remote['runtime_abi_version']} > local ABI {local['runtime_abi_version']}). "
+                f"Please update from {remote['release_url']}."
+            )
+
+        if check.get("code_update_available"):
+            overlay_bytes = int(check.get("overlay_size_bytes") or 0)
+            est_comp_bytes = int(check.get("component_size_bytes") or 0)
+            est_total = max(1, overlay_bytes + est_comp_bytes)
+
+            def _overlay_prog(downloaded: int, _ov_total: int) -> None:
+                if progress_callback is not None:
+                    progress_callback(min(overlay_bytes, downloaded), est_total)
+
+            ov_res = download_and_apply_code_overlay(
+                module_root=resolved_root,
+                manifest=remote,
+                timeout=timeout,
+                offline_dir=offline_dir,
+                mirror_prefix=mirror_prefix,
+                proxy_url=proxy_url,
+                urlopen_fn=urlopen_fn,
+                progress_callback=_overlay_prog,
+                phase_callback=phase_callback,
+                allow_git_checkout=allow_git_checkout,
+            )
+            if ov_res.get("status") == "applied":
+                overlay_applied = True
+                updated_files = int(ov_res.get("updated_files") or 0)
+                removed_files = int(ov_res.get("removed_files") or 0)
+                code_sha = str(ov_res.get("code_sha256") or code_sha)
+    else:
+        local_info = current_installation_info(resolved_root)
+        code_sha = str(local_info.get("code_sha256") or "")
+
+    comp_updated: list[str] = []
+    if not ((resolved_root / ".git").exists() and not allow_git_checkout):
+        try:
+            from shared.component_updater import apply_component_updates, scan_component_updates
+        except ImportError:
+            apply_component_updates = None  # type: ignore[assignment]
+            scan_component_updates = None  # type: ignore[assignment]
+
+        if scan_component_updates is not None and apply_component_updates is not None:
+            # Re-scan after any code overlay so freshly updated manifests in resolved_root take effect.
+            pending = scan_component_updates(
+                resolved_root,
+                remote_components,
+                allow_git_checkout=allow_git_checkout,
+            )
+            if pending:
+                comp_total = sum(max(0, int(u.get("size_bytes") or 0)) for u in pending)
+                grand_total = max(1, overlay_bytes + comp_total)
+                comp_res = apply_component_updates(
+                    resolved_root,
+                    pending,
+                    timeout=timeout,
+                    offline_dir=offline_dir,
+                    mirror_prefix=mirror_prefix,
+                    proxy_url=proxy_url,
+                    urlopen_fn=urlopen_fn,
+                    progress_callback=progress_callback,
+                    phase_callback=phase_callback,
+                    base_completed_bytes=overlay_bytes,
+                    grand_total_bytes=grand_total,
+                )
+                comp_updated = list(comp_res.get("updated_components") or ())
+
+    if not overlay_applied and not comp_updated:
+        return {
+            "status": "up_to_date",
+            "version": target_version,
+            "release_tag": target_tag,
+            "git_short_commit": short_commit,
+            "code_sha256": code_sha,
+            "updated_files": 0,
+            "removed_files": 0,
+            "updated_components": [],
+            "updated_component_count": 0,
+            "restart_required": False,
+        }
+
+    return {
+        "status": "applied",
+        "version": target_version,
+        "release_tag": target_tag,
+        "git_short_commit": short_commit,
+        "code_sha256": code_sha,
+        "updated_files": updated_files,
+        "removed_files": removed_files,
+        "updated_components": comp_updated,
+        "updated_component_count": len(comp_updated),
+        "restart_required": bool(overlay_applied),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI worker entrypoint so Slicer UI runs update checks/applies out-of-process."""
 
-    parser = argparse.ArgumentParser(description="SlicerDSpace incremental code updater worker")
+    parser = argparse.ArgumentParser(description="SlicerDSpace incremental updater worker")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    check_p = sub.add_parser("check", help="Check whether an incremental code update is available")
+    check_p = sub.add_parser("check", help="Check whether code or companion component updates are available")
     check_p.add_argument("--module-root", required=True)
     check_p.add_argument("--result-file", required=True)
     check_p.add_argument("--manifest-url", default=None)
     check_p.add_argument("--timeout", type=int, default=12)
 
-    apply_p = sub.add_parser("apply", help="Download and apply an incremental code overlay")
+    local_p = sub.add_parser("check-local", help="Check installed companion components against local manifests")
+    local_p.add_argument("--module-root", required=True)
+    local_p.add_argument("--result-file", required=True)
+
+    apply_p = sub.add_parser("apply", help="Download and apply incremental code and companion component updates")
     apply_p.add_argument("--module-root", required=True)
-    apply_p.add_argument("--manifest-file", required=True)
+    apply_p.add_argument("--manifest-file", default=None)
+    apply_p.add_argument("--components-only", action="store_true")
     apply_p.add_argument("--result-file", required=True)
-    apply_p.add_argument("--timeout", type=int, default=60)
+    apply_p.add_argument("--timeout", type=int, default=180)
 
     args = parser.parse_args(argv)
     result_file = Path(args.result_file).expanduser()
@@ -650,31 +906,40 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "check":
             print("SLICERDSPACE_UPDATE_STAGE:checking", flush=True)
-            res = check_for_code_update(
+            res = check_for_updates(
                 module_root=module_root,
                 manifest_url=args.manifest_url,
                 timeout=int(args.timeout),
             )
+        elif args.command == "check-local":
+            print("SLICERDSPACE_UPDATE_STAGE:checking", flush=True)
+            res = check_local_component_updates(module_root=module_root)
         else:
-            manifest_payload = json.loads(
-                Path(args.manifest_file).expanduser().read_text(encoding="utf-8")
-            )
+            manifest_payload = None
+            if args.manifest_file:
+                manifest_payload = json.loads(
+                    Path(args.manifest_file).expanduser().read_text(encoding="utf-8")
+                )
             last_pct = [-1]
+            last_beat = [0.0]
 
             def _on_progress(downloaded: int, total: int) -> None:
                 if total <= 0:
                     return
                 pct = max(0, min(100, int(downloaded * 100 / total)))
-                if pct != last_pct[0]:
+                now = time.monotonic()
+                if pct != last_pct[0] or (now - last_beat[0]) >= 2.0:
                     last_pct[0] = pct
+                    last_beat[0] = now
                     print(f"SLICERDSPACE_UPDATE_PROGRESS:{pct}", flush=True)
 
             def _on_phase(phase: str) -> None:
                 print(f"SLICERDSPACE_UPDATE_STAGE:{phase}", flush=True)
 
-            res = download_and_apply_code_overlay(
+            res = download_and_apply_updates(
                 module_root=module_root,
                 manifest=manifest_payload,
+                components_only=bool(args.components_only),
                 timeout=int(args.timeout),
                 progress_callback=_on_progress,
                 phase_callback=_on_phase,

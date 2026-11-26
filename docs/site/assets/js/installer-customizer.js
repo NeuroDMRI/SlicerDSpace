@@ -2419,11 +2419,12 @@
     }
 
     function osMeta(osKey) {
+      var tag = ARTIFACTS.release_tag || RELEASE_TAG;
       var gb = baseSizeGb(osKey);
       if (gb) {
-        return t('.zip · ~' + gb + ' base', '.zip · 约 ' + gb + ' 底座');
+        return t(tag + ' · .zip · ~' + gb, tag + ' · .zip · 约 ' + gb);
       }
-      return '.zip · ' + (ARTIFACTS.release_tag || RELEASE_TAG);
+      return tag + ' · .zip';
     }
 
     function render() {

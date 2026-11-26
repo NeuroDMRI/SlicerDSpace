@@ -231,6 +231,36 @@ class UIEnvironmentPanelTest(unittest.TestCase):
         self.assertIn("Path: /data/atlas", path_text)
         self.assertIn("Expected type: directory", path_text)
 
+    def test_item_text_of_a_path_row_shows_a_hint_that_equals_the_reason_once(self) -> None:
+        # Install test of 26 November 2026, finding 4 (backlog item "panel item text"): for a bundled model file of
+        # another release the hint is the whole message and equals the notes. The "Install / setup" dialog shows
+        # this text; a path row printed neither the reason nor the hint, so the dialog gave no guidance.
+        from shared.model_assets import other_release_message
+
+        message = other_release_message(Path("/ext/bundled-model-assets/surface/weights/ddsurfer_lh_wm.pt"))
+
+        def row(hint: str, kind: str = "path") -> DependencyStatus:
+            return DependencyStatus(
+                key="path:ddsurfer_ddsurfer_lh_wm_pt", kind=kind, label="DDSurfer lh wm", status="missing",
+                required=True, targets=("surface",), install_hint=hint,
+                details={"path": "/x/placeholder", "path_kind": "file", "notes": message},
+            )
+
+        for zh in (False, True):
+            with self.subTest(zh=zh):
+                text = environment_item_text(row(message), zh=zh)
+                self.assertEqual(text.count(message), 1, text)
+                self.assertIn("Download the current model files", text)
+                self.assertNotIn("Suggested fix", text)  # b2-os decision 4: no "Suggested fix" equal to the reason
+                self.assertNotIn("建议操作", text)
+
+        # Unchanged: a hint that differs from the notes is the "Suggested fix"; the notes of a path row stay out.
+        other = environment_item_text(row("Choose a model asset root."))
+        self.assertIn("Suggested fix: Choose a model asset root.", other)
+        self.assertNotIn(message, other)
+        # Unchanged: a setting row prints the reason once.
+        self.assertEqual(environment_item_text(row(message, kind="setting")).count(message), 1)
+
     def test_environment_dialog_state_collects_render_decisions(self) -> None:
         result = self._sample_result()
         state = environment_dialog_state(result, python_install_target="Python target.")

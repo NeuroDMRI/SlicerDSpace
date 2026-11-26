@@ -199,10 +199,16 @@ def resolve_pending_source(
     if bvec_path is not None and not bvec_path.is_file():
         bvec_path = None
     if bval_path is None or not bval_path.is_file() or bvec_path is None:
-        from shared.convertible_input import find_convertible_input
+        from shared.convertible_input import _matching_gradients, find_convertible_input
 
         found = find_convertible_input(path)
         extra = found[3] if found else {}
+        if not extra:
+            sibling_bval, sibling_bvec = _matching_gradients(path)
+            if sibling_bval is not None:
+                extra["bval_path"] = sibling_bval
+            if sibling_bvec is not None:
+                extra["bvec_path"] = sibling_bvec
         if bval_path is None or not bval_path.is_file():
             bval_path = Path(extra["bval_path"]) if extra.get("bval_path") else None
         if bvec_path is None and extra.get("bvec_path"):

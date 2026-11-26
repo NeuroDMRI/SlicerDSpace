@@ -2028,13 +2028,15 @@ class SharedWidgetMixin:
         self._refresh_input_preview_stepper()
         self._inputPreviewPending = True
         self._set_input_preview_status("")
-        set_input_preview_button_loading(self, True, language="zh" if zh else "en")
+        try:
+            set_input_preview_button_loading(self, True, language="zh" if zh else "en")
+        except Exception:
+            self._inputPreviewPending = False
+            raise
         self._refresh_input_preview_controls()
         cache_dir = self._input_preview_cache_dir()
 
         def apply_prepared(prepared: Any, err: Optional[BaseException] = None) -> None:
-            self._inputPreviewPending = False
-            set_input_preview_button_loading(self, False, language="zh" if zh else "en")
             try:
                 if err is not None:
                     raise err
@@ -2072,8 +2074,11 @@ class SharedWidgetMixin:
                     detail = str(prepared.mean_b0)
                 self.appendLog(f"[Input preview] {text} ({detail})")
                 self._set_input_preview_status(text, key=key)
-            self._refresh_input_preview_controls()
-            self._refresh_input_preview_stepper()
+            finally:
+                self._inputPreviewPending = False
+                set_input_preview_button_loading(self, False, language="zh" if zh else "en")
+                self._refresh_input_preview_controls()
+                self._refresh_input_preview_stepper()
 
         launcher = str(self._slicer_launcher_program() or "").strip() if hasattr(self, "_slicer_launcher_program") else ""
         use_qprocess = bool(launcher) and hasattr(qt, "QProcess")

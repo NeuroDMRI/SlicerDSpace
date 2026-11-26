@@ -1172,6 +1172,8 @@ class ClickFlowTest(unittest.TestCase):
         from shared import ui_compact
 
         class AnimButton:
+            __slots__ = ("text", "tooltip", "accessible", "stylesheet", "min_width")
+
             def __init__(self):
                 self.text = "View input"
                 self.tooltip = ""
@@ -1203,7 +1205,7 @@ class ClickFlowTest(unittest.TestCase):
         ui_compact.set_input_preview_button_loading(owner, True)
         self.assertEqual(btn.text, "Loading…")
         self.assertEqual(btn.min_width, 86)
-        self.assertTrue(btn._dspaceLoading)
+        self.assertEqual(owner._inputPreviewLoadingText, "Loading…")
         self.assertIn("background: transparent", btn.stylesheet)
         self.assertIn("border: 1px solid transparent", btn.stylesheet)
         # Bilingual refresh while pending must keep loading text rather than resetting to View input.
@@ -1213,7 +1215,7 @@ class ClickFlowTest(unittest.TestCase):
         owner._inputPreviewPending = False
         ui_compact.set_input_preview_button_loading(owner, False, language="en")
         self.assertEqual(btn.text, "View input")
-        self.assertFalse(btn._dspaceLoading)
+        self.assertEqual(owner._inputPreviewLoadingText, "")
         self.assertEqual(btn.stylesheet, "")
         self.assertEqual(btn.min_width, 0)
         # Text-shimmer stops move monotonically left to right across phases in both themes.

@@ -445,6 +445,12 @@ def show_input_format(owner, kind):
         from shared.ui_compact import refresh_compact_algorithms
 
         refresh_compact_algorithms(owner)
+        refresh_preview = getattr(owner, "_refresh_input_preview_controls", None)
+        if callable(refresh_preview):
+            try:
+                refresh_preview()
+            except Exception:
+                pass
         _schedule_settings_save(owner)  # C1: the format tab is remembered
 
 

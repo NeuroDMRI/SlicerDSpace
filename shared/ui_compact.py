@@ -1579,7 +1579,6 @@ def set_input_preview_button_loading(owner: Any, loading: bool, *, language: str
             button.setToolTip(loading_tip)
         owner._inputPreviewAnimPhase = 0.0
         dark = _input_preview_dark_mode(owner, button)
-        button._dspaceLoading = True
         if hasattr(button, "setStyleSheet"):
             try:
                 button.setStyleSheet(input_preview_loading_stylesheet(dark=dark))
@@ -1621,7 +1620,6 @@ def set_input_preview_button_loading(owner: Any, loading: bool, *, language: str
     stop_input_preview_loading_animation(owner)
     owner._inputPreviewAnimPhase = 0.0
     owner._inputPreviewLoadingText = ""
-    button._dspaceLoading = False
     if qt is not None and hasattr(qt, "QIcon") and hasattr(button, "setIcon"):
         try:
             button.setIcon(qt.QIcon())

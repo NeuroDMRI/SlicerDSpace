@@ -2,8 +2,10 @@
 
 import json
 import os
+import sys
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -45,6 +47,21 @@ class ModelGranularityTests(unittest.TestCase):
         self.assertTrue(math.isinf(reservation_time(head, active, limits, 10)))
 
     def test_failed_monitor_cannot_leak_a_reservation(self):
+        monitors = []
+
+        def fail(monitor, outcome):
+            monitors.append(monitor)
+            raise RuntimeError('probe failed')
+
+        def stop_samplers():
+            # The mocked finish never stops the sampler thread; stop and join it here (Opus P2).
+            for monitor in monitors:
+                monitor.stop_event.set()
+                thread = getattr(monitor, 'thread', None)
+                if thread:
+                    thread.join(timeout=5)
+                    self.assertFalse(thread.is_alive())
+        self.addCleanup(stop_samplers)
         with tempfile.TemporaryDirectory() as tmp:
             folder = create_schedule(Path(tmp)/'queue', cpu_budget=2, memory_gb=2,
                                      stage_cpus=1, stage_memory_gb=1, policy='fair_backfill')
@@ -52,7 +69,7 @@ class ModelGranularityTests(unittest.TestCase):
             def fit(config):
                 return 1
             with patch.dict(os.environ, {ENV: str(folder)}), \
-                 patch('shared.cohort_profile.StageMonitor.finish', side_effect=RuntimeError('probe failed')), \
+                 patch('shared.cohort_profile.StageMonitor.finish', autospec=True, side_effect=fail), \
                  self.assertWarns(RuntimeWarning):
                 self.assertEqual(fit(SimpleNamespace(device='cpu')), 1)
             self.assertEqual(json.loads((folder/'state.json').read_text()), dict(active=[], waiting=[]))
@@ -141,6 +158,45 @@ class ModelGranularityTests(unittest.TestCase):
             self.assertIn('rss_bytes', rows[0])
             with self.assertRaises(FileExistsError):
                 CohortTelemetry(path).start()
+
+
+def _sampler_threads():
+    """Alive threads whose target function lives in shared.cohort_profile (StageMonitor sampler)."""
+    return {t for t in threading.enumerate()
+            if t.is_alive() and getattr(getattr(t, '_target', None), '__module__', None) == 'shared.cohort_profile'}
+
+
+class MonitorThreadCleanupTests(unittest.TestCase):
+    def test_failed_monitor_test_leaves_no_cohort_profile_sampler_thread(self):
+        try:
+            import psutil  # noqa: F401
+        except ImportError:
+            self.skipTest("psutil is not installed: the inner test cannot create a schedule "
+                          "(shared/cohort_schedule.py:37), so no sampler thread starts")
+        # Finding: test_failed_monitor_cannot_leak_a_reservation mocked StageMonitor.finish, so the
+        # daemon sampler thread was never stopped and ran for the rest of the process (Opus P2).
+        # Only threads created during this run count, so a thread leaked by another module cannot fail it.
+        before = _sampler_threads()
+        case = ModelGranularityTests('test_failed_monitor_cannot_leak_a_reservation')
+        result = unittest.TestResult()
+        case.run(result)
+        leaked = _sampler_threads() - before
+        # If this fails, the leaked threads keep running: nothing reachable from a thread object stops them.
+        self.assertEqual(result.testsRun, 1)
+        self.assertTrue(result.wasSuccessful(), f'errors={result.errors} failures={result.failures}')
+        self.assertFalse(leaked, f'leaked StageMonitor sampler threads: {leaked}')
+
+    def test_monitor_cleanup_check_skips_without_psutil(self):
+        # Finding (CI run 45743369148): without psutil the inner test errors at create_schedule, so the
+        # cleanup check reported a duplicate failure for a missing dependency instead of skipping.
+        with patch.dict(sys.modules, {'psutil': None}):
+            result = unittest.TestResult()
+            MonitorThreadCleanupTests(
+                'test_failed_monitor_test_leaves_no_cohort_profile_sampler_thread').run(result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertEqual(len(result.skipped), 1)
+        self.assertEqual(result.failures, [])
+        self.assertEqual(result.errors, [])
 
 
 if __name__ == '__main__':

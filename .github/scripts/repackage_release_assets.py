@@ -1980,12 +1980,6 @@ def _migration_items_for_group(group: str, *, repo: str = GITHUB_REPO) -> list[t
                 "bdc60b267630cd737a6a9e8cf22db771147a5daba6c9e623998d0b5f4c5985c1",
                 1465003883,
             ),
-            (
-                "SlicerDSpace-Example-HCP-100307-NIfTI.zip",
-                f"{dl}/v0.1.1/SlicerDSpace-Example-HCP-100307-NIfTI.zip",
-                "fada1b1f8c3f0ec52817b4db8b0cde7249490682d396f08dfab19a9693d71db0",
-                1258033642,
-            ),
         ]
     if group == "wma-east-west":
         return [
@@ -2157,6 +2151,241 @@ def cmd_migrate_assets(args: argparse.Namespace) -> int:
     return 0
 
 
+def convert_hcp_nifti_zip_to_nrrd_zip(nifti_zip: Path, out_zip: Path, *, work_dir: Path) -> dict[str, Any]:
+    """Convert HCP 100307 NIfTI example zip into a Slicer/DWIConvert-native gzipped int16 NRRD zip."""
+    import math
+    import struct
+    import numpy as np
+    from shared import gradient_frame
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    extract_dir = work_dir / "hcp-src"
+    shutil.rmtree(extract_dir, ignore_errors=True)
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(nifti_zip, "r") as zf:
+        zf.extractall(extract_dir)
+
+    src_root = extract_dir / "HCP-100307"
+    dwi_nii = src_root / "input" / "data.nii.gz"
+    bvals_path = src_root / "input" / "bvals"
+    bvecs_path = src_root / "input" / "bvecs"
+    mask_path = src_root / "input" / "nodif_brain_mask.nii.gz"
+    terms_path = src_root / "README_HCP_DATA_USE_TERMS.txt"
+    for req_p in (dwi_nii, bvals_path, bvecs_path, mask_path, terms_path):
+        if not req_p.is_file():
+            raise FileNotFoundError(f"Expected file missing from HCP NIfTI zip: {req_p}")
+
+    bvals = np.loadtxt(bvals_path).reshape(-1)
+    bvecs = np.loadtxt(bvecs_path)
+    bvecs_rows = bvecs.T if bvecs.shape == (3, len(bvals)) else bvecs
+
+    with gzip.open(dwi_nii, "rb") as fh:
+        hdr = fh.read(348)
+        dim = struct.unpack_from("<8h", hdr, 40)
+        datatype, bitpix = struct.unpack_from("<2h", hdr, 70)
+        vox_offset, scl_slope, scl_inter = struct.unpack_from("<3f", hdr, 108)
+        srow_x = struct.unpack_from("<4f", hdr, 280)
+        srow_y = struct.unpack_from("<4f", hdr, 296)
+        srow_z = struct.unpack_from("<4f", hdr, 312)
+
+    if dim[0] != 4 or datatype != 16 or bitpix != 32:
+        raise RuntimeError(f"Unexpected HCP NIfTI header: dim={dim}, datatype={datatype}, bitpix={bitpix}")
+    nx, ny, nz, nt = (int(v) for v in dim[1:5])
+    if nt != len(bvals) or bvecs_rows.shape != (nt, 3):
+        raise RuntimeError(f"Gradient count mismatch: nt={nt}, bvals={len(bvals)}, bvecs={bvecs_rows.shape}")
+    if (scl_slope not in (0.0, 1.0)) or scl_inter != 0.0:
+        raise RuntimeError(f"Unexpected NIfTI scaling slope={scl_slope}, inter={scl_inter}")
+
+    affine = np.array([srow_x, srow_y, srow_z, [0.0, 0.0, 0.0, 1.0]], dtype=np.float64)
+    if not np.allclose(affine[:3, :3], np.diag([-1.25, 1.25, 1.25]), atol=1e-5):
+        raise RuntimeError(f"Unexpected HCP NIfTI affine:\n{affine}")
+
+    # Canonical LPS layout matching DWIConvert FSLToNrrd (positive spacing, Y-flipped voxel order):
+    # S = diag(-1, -1, 1) maps RAS <-> LPS.
+    S = np.diag([-1.0, -1.0, 1.0])
+    lps_origin = S @ (affine[:3, 3] + affine[:3, 1] * (ny - 1))
+    max_b = float(bvals.max())
+    world_g = gradient_frame.fsl_to_world(bvecs_rows, affine)
+
+    header_lines = [
+        "NRRD0005",
+        "# Complete NRRD file format specification at:",
+        "# http://teem.sourceforge.net/nrrd/format.html",
+        "type: short",
+        "dimension: 4",
+        "space: left-posterior-superior",
+        f"sizes: {nx} {ny} {nz} {nt}",
+        "thicknesses: NaN NaN 1.25 NaN",
+        "space directions: (1.25,0,0) (0,1.25,0) (0,0,1.25) none",
+        "centerings: cell cell cell ???",
+        "kinds: space space space list",
+        "endian: little",
+        "encoding: gzip",
+        'space units: "mm" "mm" "mm"',
+        f"space origin: ({lps_origin[0]:g},{lps_origin[1]:g},{lps_origin[2]:g})",
+        "measurement frame: (1,0,0) (0,1,0) (0,0,1)",
+        "modality:=DWMRI",
+        f"DWMRI_b-value:={max_b:g}",
+    ]
+    for i in range(nt):
+        g = world_g[i]
+        gn = float(np.linalg.norm(g))
+        if bvals[i] <= 0 or gn <= 1e-12:
+            gv = np.zeros(3)
+        else:
+            g_lps = S @ (g / gn)
+            gv = g_lps * math.sqrt(float(bvals[i]) / max_b)
+        header_lines.append(f"DWMRI_gradient_{i:04d}:={gradient_frame.format_nrrd_vector(gv)}")
+    header_bytes = ("\n".join(header_lines) + "\n\n").encode("ascii")
+
+    nrrd_path = work_dir / "100307_dwi.nrrd"
+    nvox = nx * ny * nz
+    clamped_count = 0
+    with gzip.open(dwi_nii, "rb") as src_fh, nrrd_path.open("wb") as out_fh:
+        src_fh.read(int(vox_offset))
+        out_fh.write(header_bytes)
+        with gzip.GzipFile(fileobj=out_fh, mode="wb", compresslevel=6, mtime=0, filename="") as gz_out:
+            for t in range(nt):
+                raw_vol = src_fh.read(nvox * 4)
+                if len(raw_vol) != nvox * 4:
+                    raise EOFError(f"Truncated NIfTI volume at index {t}")
+                vol_3d = np.frombuffer(raw_vol, dtype="<f4").reshape((nx, ny, nz), order="F")
+                vol_lps = vol_3d[:, ::-1, :]
+                clamped_count += int((vol_lps > 32767.0).sum() + (vol_lps < 0.0).sum())
+                vol_i16 = np.clip(np.rint(vol_lps), 0.0, 32767.0).astype("<i2")
+                gz_out.write(vol_i16.tobytes(order="F"))
+
+    # Self-verify NRRD header gradients and gzip payload byte count
+    with nrrd_path.open("rb") as verify_fh:
+        head_chunks = bytearray()
+        while True:
+            ch = verify_fh.read(4096)
+            if not ch:
+                raise RuntimeError("Missing NRRD header terminator")
+            head_chunks.extend(ch)
+            sep = head_chunks.find(b"\n\n")
+            if sep >= 0:
+                payload_offset = sep + 2
+                parsed_head = head_chunks[:sep].decode("ascii")
+                break
+        g_vals = [
+            gradient_frame.parse_nrrd_vector(ln.split(":=", 1)[1])
+            for ln in parsed_head.splitlines()
+            if ln.startswith("DWMRI_gradient_")
+        ]
+        if len(g_vals) != nt:
+            raise RuntimeError(f"Verified NRRD gradient count mismatch: {len(g_vals)} != {nt}")
+        rt_world = gradient_frame.nrrd_to_world(np.array(g_vals), "left-posterior-superior", np.eye(3))
+        max_ang = float(gradient_frame.axis_angle_degrees(world_g, rt_world).max())
+        if max_ang > 1e-4:
+            raise RuntimeError(f"Verified NRRD gradient angle drift too high: {max_ang} deg")
+        verify_fh.seek(payload_offset)
+        decoded_bytes = 0
+        with gzip.GzipFile(fileobj=verify_fh, mode="rb") as gz_in:
+            while True:
+                buf = gz_in.read(4 * 1024 * 1024)
+                if not buf:
+                    break
+                decoded_bytes += len(buf)
+        expected_bytes = nvox * nt * 2
+        if decoded_bytes != expected_bytes:
+            raise RuntimeError(f"Verified NRRD payload size mismatch: {decoded_bytes} != {expected_bytes}")
+
+    out_zip.parent.mkdir(parents=True, exist_ok=True)
+    tmp_zip = out_zip.with_name(out_zip.name + ".tmp")
+    try:
+        with zipfile.ZipFile(tmp_zip, "w", allowZip64=True) as zf:
+            for arc_name, src_file, comp in (
+                ("HCP-100307/README_HCP_DATA_USE_TERMS.txt", terms_path, zipfile.ZIP_DEFLATED),
+                ("HCP-100307/100307_dwi.nrrd", nrrd_path, zipfile.ZIP_STORED),
+                ("HCP-100307/nodif_brain_mask.nii.gz", mask_path, zipfile.ZIP_STORED),
+            ):
+                zi = zipfile.ZipInfo(filename=arc_name, date_time=(2026, 1, 1, 0, 0, 0))
+                zi.compress_type = comp
+                zi.external_attr = (stat.S_IFREG | 0o644) << 16
+                with src_file.open("rb") as in_fh, zf.open(zi, "w") as out_fh:
+                    shutil.copyfileobj(in_fh, out_fh, length=4 * 1024 * 1024)
+        os.replace(tmp_zip, out_zip)
+    finally:
+        tmp_zip.unlink(missing_ok=True)
+        nrrd_path.unlink(missing_ok=True)
+        shutil.rmtree(extract_dir, ignore_errors=True)
+
+    return {
+        "filename": out_zip.name,
+        "size_bytes": out_zip.stat().st_size,
+        "sha256": sha256_file(out_zip),
+        "shape": [nx, ny, nz, nt],
+        "clamped_voxels": clamped_count,
+        "max_angle_error_deg": max_ang,
+    }
+
+
+def cmd_build_example_hcp_nrrd(args: argparse.Namespace) -> int:
+    assets_tag = str(args.assets_tag or ASSETS_RELEASE_TAG).strip()
+    repo = str(args.repo or GITHUB_REPO)
+    _assert_mutable_release_tag(assets_tag, dry_run=bool(args.dry_run))
+    work_dir = args.work_dir.expanduser().resolve()
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    nrrd_name = "SlicerDSpace-Example-HCP-100307-NRRD.zip"
+    nifti_name = "SlicerDSpace-Example-HCP-100307-NIfTI.zip"
+    nifti_sha = "fada1b1f8c3f0ec52817b4db8b0cde7249490682d396f08dfab19a9693d71db0"
+    nifti_size = 1258033642
+
+    remote_assets = {} if args.dry_run else _fetch_remote_release_assets(assets_tag, repo)
+    existing = remote_assets.get(nrrd_name)
+    already_uploaded = (
+        isinstance(existing, dict)
+        and str(existing.get("state") or "").lower() == "uploaded"
+        and int(existing.get("size") or 0) > 100_000_000
+    )
+
+    if already_uploaded:
+        print(
+            f"[example-hcp-nrrd] Already uploaded on {assets_tag}: {nrrd_name} "
+            f"({int(existing.get('size') or 0):,} B, digest={existing.get('digest')})",
+            flush=True,
+        )
+    elif args.dry_run:
+        print(f"[example-hcp-nrrd] [dry-run] Would convert {nifti_name} -> {nrrd_name} on {assets_tag}", flush=True)
+    else:
+        src_zip = work_dir / nifti_name
+        out_zip = work_dir / nrrd_name
+        dl = f"https://github.com/{repo}/releases/download"
+        source_urls = [f"{dl}/{assets_tag}/{nifti_name}", f"{dl}/v0.1.1/{nifti_name}"]
+        downloaded = False
+        last_exc: Exception | None = None
+        for u in source_urls:
+            try:
+                _download_exact_url(u, src_zip, expected_sha256=nifti_sha, expected_size=nifti_size)
+                downloaded = True
+                break
+            except Exception as exc:
+                last_exc = exc
+        if not downloaded:
+            raise RuntimeError(f"Could not download source {nifti_name}: {last_exc}")
+        try:
+            info = convert_hcp_nifti_zip_to_nrrd_zip(src_zip, out_zip, work_dir=work_dir / "conv")
+            print(f"[example-hcp-nrrd] Built {json.dumps(info)}", flush=True)
+            _upload_release_files([out_zip], release_tag=assets_tag, repo=repo)
+            already_uploaded = True
+        finally:
+            src_zip.unlink(missing_ok=True)
+            out_zip.unlink(missing_ok=True)
+
+    if args.prune_nifti and not args.dry_run and already_uploaded:
+        remote_after = _fetch_remote_release_assets(assets_tag, repo)
+        if nifti_name in remote_after and nrrd_name in remote_after:
+            print(f"[example-hcp-nrrd] Removing superseded {nifti_name} from {assets_tag}", flush=True)
+            subprocess.run(
+                ["gh", "release", "delete-asset", assets_tag, nifti_name, "--repo", repo, "--yes"],
+                check=True,
+            )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -2245,7 +2474,19 @@ def main(argv: list[str] | None = None) -> int:
     p_migrate.add_argument("--repo", default=GITHUB_REPO)
     p_migrate.add_argument("--dry-run", action="store_true")
 
+    p_hcp = sub.add_parser(
+        "build-example-hcp-nrrd",
+        help="Convert HCP 100307 example NIfTI zip to Slicer/DWIConvert-native gzipped int16 NRRD zip and upload to assets.",
+    )
+    p_hcp.add_argument("--work-dir", required=True, type=Path)
+    p_hcp.add_argument("--assets-tag", default=ASSETS_RELEASE_TAG)
+    p_hcp.add_argument("--repo", default=GITHUB_REPO)
+    p_hcp.add_argument("--prune-nifti", action="store_true")
+    p_hcp.add_argument("--dry-run", action="store_true")
+
     args = parser.parse_args(argv)
+    if args.command == "build-example-hcp-nrrd":
+        return cmd_build_example_hcp_nrrd(args)
     if args.command == "migrate-assets":
         return cmd_migrate_assets(args)
     if args.command == "build-model-pack":

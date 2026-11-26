@@ -16,6 +16,7 @@ on:
         options:
           - "full-release"
           - "migrate-assets"
+          - "example-hcp-nrrd"
           - "model-packs"
           - "os-bases"
           - "code-overlay"
@@ -49,7 +50,7 @@ env:
 
 jobs:
   ensure-assets-release:
-    if: (github.event_name == 'push' && github.ref_name == 'assets') || (github.event_name == 'workflow_dispatch' && (inputs.phase == 'migrate-assets' || inputs.phase == 'model-packs' || inputs.phase == 'atlases' || inputs.phase == 'standalone-ukf' || inputs.phase == 'macos-ukf'))
+    if: (github.event_name == 'push' && github.ref_name == 'assets') || (github.event_name == 'workflow_dispatch' && (inputs.phase == 'migrate-assets' || inputs.phase == 'example-hcp-nrrd' || inputs.phase == 'model-packs' || inputs.phase == 'atlases' || inputs.phase == 'standalone-ukf' || inputs.phase == 'macos-ukf'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -113,6 +114,37 @@ jobs:
             --assets-tag "assets" \
             --repo "$GITHUB_REPOSITORY" \
             --work-dir "${{ runner.temp }}/migrate-${{ matrix.group }}"
+
+  build-example-hcp-nrrd:
+    if: (github.event_name == 'push' && github.ref_name == 'assets') || (github.event_name == 'workflow_dispatch' && (inputs.phase == 'migrate-assets' || inputs.phase == 'example-hcp-nrrd'))
+    needs: [ensure-assets-release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install NumPy for streaming HCP NIfTI -> NRRD conversion
+        run: python -m pip install --no-cache-dir numpy
+
+      - name: Convert & upload HCP 100307 NRRD example zip to assets release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python .github/scripts/repackage_release_assets.py build-example-hcp-nrrd \
+            --assets-tag "assets" \
+            --repo "$GITHUB_REPOSITORY" \
+            --work-dir "${{ runner.temp }}/example-hcp-nrrd"
 
   ensure-release:
     if: (github.event_name == 'push' && startsWith(github.ref_name, 'v')) || inputs.phase == 'full-release' || inputs.phase == 'model-packs' || inputs.phase == 'os-bases'

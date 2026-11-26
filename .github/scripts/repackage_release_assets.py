@@ -438,6 +438,31 @@ def cmd_build_model_pack(args: argparse.Namespace) -> int:
     if any(m.endswith("/IITmean_b0_256.nii.gz") for m in members):
         raise RuntimeError(f"Refusing upstream-only IIT template in pack {pack_id}")
 
+    # Also mirror any individual SHA-256-prefixed asset files missing from the permanent assets release
+    # so incremental per-file updates (shared.component_updater / download_model_assets.py) can fetch them directly.
+    if not args.dry_run:
+        remote_assets = _fetch_remote_release_assets(assets_tag, repo)
+        mirror_dir = work_dir / f"mirror-upload-{pack_id}"
+        mirror_dir.mkdir(parents=True, exist_ok=True)
+        mirror_uploads: list[Path] = []
+        for rel, expected_sha in files.items():
+            src_file = assets_dir / rel
+            if not src_file.is_file():
+                continue
+            mirrored_name = f"{expected_sha}-{Path(rel).name}"
+            if mirrored_name in remote_assets and int(remote_assets[mirrored_name].get("size") or 0) == src_file.stat().st_size:
+                continue
+            staged = mirror_dir / mirrored_name
+            shutil.copy2(src_file, staged)
+            mirror_uploads.append(staged)
+        if mirror_uploads:
+            print(
+                f"[model-pack] Mirroring {len(mirror_uploads)} updated individual file(s) for {pack_id} into {assets_tag}",
+                flush=True,
+            )
+            _upload_release_files(mirror_uploads, release_tag=assets_tag, repo=repo)
+        shutil.rmtree(mirror_dir, ignore_errors=True)
+
     if not getattr(args, "asset_root", None):
         shutil.rmtree(assets_dir, ignore_errors=True)
 

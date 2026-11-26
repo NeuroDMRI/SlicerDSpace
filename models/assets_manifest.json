@@ -152,50 +152,50 @@
       ]
     },
     "surface/weights/SHA256SUMS": {
-      "sha256": "986fe52ba0341e76a6dc9cbc33bb6a52112beb02d70950104de2909c5ff419cc",
+      "sha256": "c6677087eafc08e14e13356ca82a4e732016abf7f1e57f717addc4ca47314a71",
       "size_bytes": 340,
       "urls": [
-        "https://raw.githubusercontent.com/NeuroDMRI/DDSurfer/7d28dbddd73f339b9f1b97e475e35377df767672/weights/SHA256SUMS"
+        "https://raw.githubusercontent.com/NeuroDMRI/DDSurfer/a5c6894cf7e64c1253e3d377904bec7831ce52db/weights/SHA256SUMS"
       ],
       "source_ids": [
         "slicerdsurfer_models_release"
       ]
     },
     "surface/weights/ddsurfer_lh_wm.pt": {
-      "sha256": "b1ab6ae874e52c80fed4866c8aa03b586c4e7d463b2db688f703627db01a2454",
-      "size_bytes": 45716667,
+      "sha256": "f35d6dbc16da8e5792543f794c8deb5fe7469fc279084022073d6a84d1ebed15",
+      "size_bytes": 45736497,
       "urls": [
-        "https://raw.githubusercontent.com/NeuroDMRI/DDSurfer/7d28dbddd73f339b9f1b97e475e35377df767672/weights/ddsurfer_lh_wm.pt"
+        "https://raw.githubusercontent.com/NeuroDMRI/DDSurfer/a5c6894cf7e64c1253e3d377904bec7831ce52db/weights/ddsurfer_lh_wm.pt"
       ],
       "source_ids": [
         "slicerdsurfer_models_release"
       ]
     },
     "surface/weights/ddsurfer_rh_wm.pt": {
-      "sha256": "da8277a627e55dc576886bebcc3637bee89c1e8a77ce0c77ab0a3163ba955fcd",
-      "size_bytes": 45716667,
+      "sha256": "e16405c06c5766f2a25a844c4c67ff154e8610b634d9d22d4bbb24bfeda66bee",
+      "size_bytes": 45736497,
       "urls": [
-        "https://raw.githubusercontent.com/NeuroDMRI/DDSurfer/7d28dbddd73f339b9f1b97e475e35377df767672/weights/ddsurfer_rh_wm.pt"
+        "https://raw.githubusercontent.com/NeuroDMRI/DDSurfer/a5c6894cf7e64c1253e3d377904bec7831ce52db/weights/ddsurfer_rh_wm.pt"
       ],
       "source_ids": [
         "slicerdsurfer_models_release"
       ]
     },
     "surface/weights/ddsurfer_lh_pial.pt": {
-      "sha256": "58f93a8ea32ee0c0d59d9ca3875d8ef906fff15dc29c87d1fc313a7a25e28393",
-      "size_bytes": 45718165,
+      "sha256": "f538849c79287c39883fa374bc0d589637ef2ddd2a4efa52037ec52f3688ae34",
+      "size_bytes": 45736497,
       "urls": [
-        "https://raw.githubusercontent.com/NeuroDMRI/DDSurfer/7d28dbddd73f339b9f1b97e475e35377df767672/weights/ddsurfer_lh_pial.pt"
+        "https://raw.githubusercontent.com/NeuroDMRI/DDSurfer/a5c6894cf7e64c1253e3d377904bec7831ce52db/weights/ddsurfer_lh_pial.pt"
       ],
       "source_ids": [
         "slicerdsurfer_models_release"
       ]
     },
     "surface/weights/ddsurfer_rh_pial.pt": {
-      "sha256": "480961adf7730985b2c2288cac9b66067dcd72b722214ff0ed1183b6dcd0eec0",
-      "size_bytes": 45718165,
+      "sha256": "70cb4784cf78bf3f68fd23d9248185ac021883d16c509467544bc91f595d4dd9",
+      "size_bytes": 45736497,
       "urls": [
-        "https://raw.githubusercontent.com/NeuroDMRI/DDSurfer/7d28dbddd73f339b9f1b97e475e35377df767672/weights/ddsurfer_rh_pial.pt"
+        "https://raw.githubusercontent.com/NeuroDMRI/DDSurfer/a5c6894cf7e64c1253e3d377904bec7831ce52db/weights/ddsurfer_rh_pial.pt"
       ],
       "source_ids": [
         "slicerdsurfer_models_release"
@@ -352,5 +352,5 @@
       "all_lfs": true
     }
   },
-  "ddsurfer_upstream_commit": "7d28dbddd73f339b9f1b97e475e35377df767672"
+  "ddsurfer_upstream_commit": "a5c6894cf7e64c1253e3d377904bec7831ce52db"
 }

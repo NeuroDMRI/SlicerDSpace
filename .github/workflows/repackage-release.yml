@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       phase:
-        description: "Phase to execute: 'full-release' (3 slimmed OS bases + Setup zips + overlay + website), 'migrate-assets' (populate permanent assets release), 'model-packs' (5 modular model weight packs), 'os-bases', 'code-overlay', 'standalone-ukf', 'macos-ukf', 'setup-zips', or 'atlases'"
+        description: "Phase to execute: 'full-release' (3 slimmed OS bases + Setup zips + overlay + website), 'migrate-assets' (populate permanent assets release), 'model-packs' (5 modular model weight packs), 'surface-refine' (precompile 3-OS DDSurfer refine libs), 'os-bases', 'code-overlay', 'standalone-ukf', 'macos-ukf', 'setup-zips', or 'atlases'"
         required: true
         type: choice
         default: "full-release"
@@ -18,6 +18,7 @@ on:
           - "migrate-assets"
           - "example-hcp-nrrd"
           - "model-packs"
+          - "surface-refine"
           - "os-bases"
           - "code-overlay"
           - "standalone-ukf"
@@ -260,6 +261,76 @@ jobs:
             --clobber \
             "${{ runner.temp }}/ukf-out/ukf-standalone-darwin-arm64.tar.gz" \
             "${{ runner.temp }}/ukf-out/ukf-standalone-darwin-arm64.tar.gz.sha256"
+
+  build-surface-refine:
+    if: github.event_name == 'workflow_dispatch' && inputs.phase == 'surface-refine'
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux-x64, windows-x64, macos-universal2]
+    runs-on: ${{ matrix.target == 'windows-x64' && 'windows-2022' || (matrix.target == 'linux-x64' && 'ubuntu-22.04' || 'macos-15') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build & verify precompiled surface_refine library (${{ matrix.target }})
+        run: python scripts/build_surface_refine.py --out-dir "${{ runner.temp }}/surface-refine-out"
+
+      - name: Inspect library dependencies (${{ matrix.target }})
+        shell: bash
+        run: |
+          ls -lh "${{ runner.temp }}/surface-refine-out"
+          if [ "${{ matrix.target }}" = "macos-universal2" ]; then
+            lipo -info "${{ runner.temp }}/surface-refine-out"/libsurface_refine_*.dylib
+            otool -L "${{ runner.temp }}/surface-refine-out"/libsurface_refine_*.dylib
+          elif [ "${{ matrix.target }}" = "linux-x64" ]; then
+            ldd "${{ runner.temp }}/surface-refine-out"/libsurface_refine_*.so
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: surface-refine-bin-${{ matrix.target }}
+          path: ${{ runner.temp }}/surface-refine-out/libsurface_refine_*
+          if-no-files-found: error
+
+  commit-surface-refine:
+    if: github.event_name == 'workflow_dispatch' && inputs.phase == 'surface-refine'
+    needs: [build-surface-refine]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          lfs: false
+
+      - name: Download all 3 precompiled surface_refine libraries into repo
+        uses: actions/download-artifact@v4
+        with:
+          pattern: surface-refine-bin-*
+          path: anatomy/surface/ddsurfer_backend/inference/bin
+          merge-multiple: true
+
+      - name: Commit & push precompiled surface_refine binaries to main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -lh anatomy/surface/ddsurfer_backend/inference/bin
+          git pull --rebase origin main
+          if [ -n "$(git status --porcelain anatomy/surface/ddsurfer_backend/inference/bin)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add anatomy/surface/ddsurfer_backend/inference/bin
+            git commit -m "chore(surface): update 3-OS precompiled DDSurfer surface_refine libraries"
+            git push origin HEAD:main
+          fi
 
   model-packs:
     if: github.event_name == 'workflow_dispatch' && inputs.phase == 'model-packs'

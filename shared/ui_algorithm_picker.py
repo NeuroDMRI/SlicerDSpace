@@ -295,6 +295,78 @@ def _unavailable_reason(qt, owner, algorithm, reason, marker, resize_popup, dark
     return label
 
 
+def _missing_asset_action_widget(qt, owner, algorithm, missing_asset, on_download, dark=None):
+    """Always-visible compact download row (and atlas selector for WMA) tucked directly under a missing-asset row."""
+    from shared.ui_on_demand_resources import _format_compact_size
+    from shared.ui_styles import is_dark_mode, style_combobox_popup
+
+    use_dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else bool(dark)
+    zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+    container = qt.QWidget()
+    container.setObjectName("algorithmMissingAssetPanel_" + algorithm)
+    action_row = qt.QHBoxLayout(container)
+    if hasattr(action_row, "setContentsMargins"):
+        action_row.setContentsMargins(22, 0, 0, 2)
+    if hasattr(action_row, "setSpacing"):
+        action_row.setSpacing(6)
+
+    atlas_choices = missing_asset.get("atlas_choices") or ()
+    atlas_combo = None
+    if atlas_choices:
+        atlas_combo = qt.QComboBox()
+        atlas_combo.setObjectName("algorithmDownloadAtlas_" + algorithm)
+        for idx, entry in enumerate(atlas_choices):
+            atlas_combo.addItem(entry["label"], idx)
+        try:
+            style_combobox_popup(atlas_combo, dark=use_dark)
+        except Exception:
+            pass
+        action_row.addWidget(atlas_combo, 1)
+
+    sz_txt = _format_compact_size(int(missing_asset.get("size_bytes") or 0))
+    if atlas_choices:
+        btn_text = "下载..." if zh else "Download..."
+    else:
+        btn_text = (f"下载 ({sz_txt})..." if sz_txt else "下载...") if zh else (f"Download ({sz_txt})..." if sz_txt else "Download...")
+    dl_btn = qt.QPushButton(btn_text)
+    dl_btn.setObjectName("algorithmDownloadButton_" + algorithm)
+    if hasattr(dl_btn, "setAutoDefault"):
+        dl_btn.setAutoDefault(False)
+    pointing = getattr(qt.Qt, "PointingHandCursor", None)
+    if pointing is not None and hasattr(dl_btn, "setCursor"):
+        dl_btn.setCursor(pointing)
+    btn_bg = "#1F6FEB" if use_dark else "#0B6E99"
+    btn_hover = "#388BFD" if use_dark else "#095A7E"
+    dl_btn.setStyleSheet(
+        f"QPushButton#algorithmDownloadButton_{algorithm} {{"
+        f" background-color: {btn_bg}; color: #FFFFFF; border: none; border-radius: 4px;"
+        " padding: 3px 10px; font-size: 11px; font-weight: 600; }"
+        f"QPushButton#algorithmDownloadButton_{algorithm}:hover {{ background-color: {btn_hover}; }}"
+    )
+
+    def _trigger_download(*_a):
+        chosen_spec = dict(missing_asset)
+        if atlas_combo is not None and atlas_choices:
+            try:
+                cur_idx = atlas_combo.currentIndex() if callable(getattr(atlas_combo, "currentIndex", None)) else int(atlas_combo.currentIndex)
+                if 0 <= cur_idx < len(atlas_choices):
+                    chosen_spec = dict(atlas_choices[cur_idx])
+            except Exception:
+                chosen_spec = dict(atlas_choices[0])
+        on_download(chosen_spec)
+
+    sig = getattr(dl_btn, "clicked", None)
+    if sig is not None and hasattr(sig, "connect"):
+        sig.connect(_trigger_download)
+    elif hasattr(dl_btn, "connect"):
+        dl_btn.connect("clicked()", _trigger_download)
+
+    action_row.addWidget(dl_btn)
+    if not atlas_choices and hasattr(action_row, "addStretch"):
+        action_row.addStretch(1)
+    return container
+
+
 def _gear_icon(qt, *, use_dark: bool, disabled: bool):
     ink = ("#7D8590" if use_dark else "#94A3B8") if disabled else ("#E6EDF3" if use_dark else "#334155")
     artwork = (
@@ -406,8 +478,19 @@ def _qt_supports_panel_widgets(qt, *, needs_spin: bool = False, needs_double_spi
     return True
 
 
+def _missing_direct_asset_blocks(owner, family, zh) -> dict:
+    """Algorithm id -> missing-asset descriptor for direct uninstalled weights/atlases in ``family``."""
+    try:
+        from shared.ui_on_demand_resources import detect_missing_direct_algorithms
+
+        return detect_missing_direct_algorithms(owner, family, zh=zh)
+    except Exception:
+        return {}
+
+
 def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, resize_popup, dark=None,
-                       disabled=False, disabled_tooltip="", create_marker=False, shared_editors=None):
+                       disabled=False, disabled_tooltip="", create_marker=False, shared_editors=None,
+                       missing_asset=None, on_download=None):
     specs = ALGORITHM_SETTINGS.get((family, algorithm), ())
     need_marker = bool(disabled or create_marker)
     marker = _unavailable_marker(qt, owner, algorithm, disabled_tooltip, dark) if need_marker else None
@@ -454,6 +537,8 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
             qt, owner, algorithm, disabled_tooltip, marker, resize_popup, dark, state=reason_state
         )
         layout.addWidget(reason_label)
+        if isinstance(missing_asset, dict) and callable(on_download):
+            layout.addWidget(_missing_asset_action_widget(qt, owner, algorithm, missing_asset, on_download, dark=dark))
         return {
             "gear": None,
             "panel": None,
@@ -490,6 +575,8 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
             qt, owner, algorithm, disabled_tooltip, marker, resize_popup, dark, state=reason_state
         )
         layout.addWidget(reason_label)
+    if isinstance(missing_asset, dict) and callable(on_download):
+        layout.addWidget(_missing_asset_action_widget(qt, owner, algorithm, missing_asset, on_download, dark=dark))
     panel = qt.QWidget()
     form = qt.QFormLayout(panel)
     form.setRowWrapPolicy(qt.QFormLayout.WrapLongRows)
@@ -1428,7 +1515,8 @@ def choose_algorithms(owner, family):
         header_row.addWidget(close_btn)
         layout.addLayout(header_row)
 
-    anchor = (owner._anatomicalPriorsRow[-1] if is_anatomical else
+    anat_row = getattr(owner, "_anatomicalPriorsRow", None)
+    anchor = ((anat_row[-1] if anat_row else None) if is_anatomical else
               (getattr(owner, "_algorithmButtons", None) or {}).get(family))
     scroll = qt.QScrollArea(dialog)
     scroll.setObjectName("algorithmPickerScrollArea")
@@ -1500,14 +1588,30 @@ def choose_algorithms(owner, family):
         topup_reverse_tip = topup_unavailable_reason(initial_reverse, batch_mode=is_batch, zh=zh)
     # B2: algorithms that the chosen DATA cannot run. They stay in the stored selection (see Apply below).
     data_tips = {} if is_anatomical else _data_block_texts(owner, choices, zh)
+    missing_assets = _missing_direct_asset_blocks(owner, family, zh)
+    pending_download = [None]
+
+    def _request_asset_download(spec):
+        pending_download[0] = spec
+        _finish_popup(False)
+
     for value in choices:
         label = ANATOMICAL_PRIORS[value][int(zh)] if is_anatomical else LABELS[value]
         box = qt.QCheckBox(label)
         box.objectName = "algorithm_" + value
         fsl_blocked = fsl_missing and value in FSL_STAGES
         topup_blocked = family == "preprocessing" and value == "topup" and not fsl_blocked and bool(topup_reverse_tip)
-        blocked_tip = fsl_tip if fsl_blocked else (topup_reverse_tip if topup_blocked else data_tips.get(value, ""))
-        blocked = fsl_blocked or topup_blocked or value in data_tips
+        asset_spec = None if (fsl_blocked or topup_blocked or value in data_tips) else missing_assets.get(value)
+        blocked_tip = (
+            fsl_tip if fsl_blocked else (
+                topup_reverse_tip if topup_blocked else (
+                    data_tips[value] if value in data_tips else (
+                        str(asset_spec.get("reason") or "") if asset_spec else ""
+                    )
+                )
+            )
+        )
+        blocked = fsl_blocked or topup_blocked or (value in data_tips) or (asset_spec is not None)
         box.checked = value in current and not blocked
         if blocked:
             box.setEnabled(False)
@@ -1520,6 +1624,7 @@ def choose_algorithms(owner, family):
             qt, owner, body_layout, box, family, value, staged, zh, resize_popup,
             dark=dark, disabled=blocked, disabled_tooltip=blocked_tip,
             create_marker=inline_topup_picker, shared_editors=shared_editors,
+            missing_asset=asset_spec, on_download=_request_asset_download if asset_spec is not None else None,
         )
         if inline_topup_picker:
             _add_topup_reverse_b0_controls(
@@ -1774,6 +1879,14 @@ def choose_algorithms(owner, family):
         dialog.deleteLater()
     except Exception:  # popup-mac: the dialog may already be destroyed when the wait ended
         pass
+    if pending_download[0] is not None:
+        from shared.ui_on_demand_resources import prompt_download_missing_resource
+
+        spec_to_download = pending_download[0]
+        if hasattr(qt, "QTimer") and hasattr(qt.QTimer, "singleShot"):
+            qt.QTimer.singleShot(0, lambda s=spec_to_download: prompt_download_missing_resource(owner, s))
+        else:
+            prompt_download_missing_resource(owner, spec_to_download)
     return accepted
 
 
@@ -1846,8 +1959,16 @@ def install_algorithm_pickers(owner):
                 _refresh_anatomical_priors(owner, isinstance(lang, str) and lang.startswith("zh"))
                 return
             if checked:
-                fields = _remembered_anatomical_priors(owner) or tuple(ANATOMICAL_PRIORS)
-                _set_anatomical_priors(owner, fields)
+                lang = getattr(owner, "_onboardingLanguage", "en")
+                zh_now = isinstance(lang, str) and lang.startswith("zh")
+                missing_anat = _missing_direct_asset_blocks(owner, "anatomical_priors", zh_now)
+                candidates = _remembered_anatomical_priors(owner) or tuple(ANATOMICAL_PRIORS)
+                available_fields = tuple(f for f in candidates if f not in missing_anat)
+                if not available_fields and missing_anat:
+                    _refresh_anatomical_priors(owner, zh_now)
+                    choose_algorithms(owner, "anatomical_priors")
+                    return
+                _set_anatomical_priors(owner, available_fields or candidates)
             else:
                 _set_anatomical_priors(owner, (), clear_memory=False)
             if checked and hasattr(qt, "QTimer"):

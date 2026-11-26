@@ -187,6 +187,8 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument('--checkpoint-root', type=Path, default=PROJECT_ROOT / 'weights')
     parser.add_argument('--template-dir', type=Path, default=PROJECT_ROOT / 'template')
     parser.add_argument('--save-debug', action='store_true', help='Save crop-coordinate predictions in cache; use --keep-cache to retain.')
+    parser.add_argument('--no-surface-refinement', dest='surface_refinement', action='store_false', default=True,
+                        help='Disable default native-space surface refinement.')
     parser.add_argument('--post-process', '--freesurfer', dest='freesurfer', action='store_true',
                         help='Enable surface postprocessing using a local build or FreeSurfer (disabled by default).')
     parser.add_argument('--keep-cache', action='store_true',
@@ -295,14 +297,49 @@ def build_prediction_command(
     return command
 
 
+def resolve_native_mask(args: argparse.Namespace) -> Path | None:
+    if getattr(args, 'mask', None) is not None and Path(args.mask).is_file():
+        return Path(args.mask)
+    candidates = [
+        subject_directory(args) / 'dti' / f'{args.subject}-brainmask.nii.gz',
+        cache_directory(args) / 'dti' / args.subject / f'{args.subject}-mask-input.nii.gz',
+        cache_directory(args) / 'dti' / args.subject / f'{args.subject}-mask-input.nii',
+        cache_directory(args) / 'dti' / args.subject / f'{args.subject}-mask.nhdr',
+    ]
+    for path in candidates:
+        if path.is_file():
+            return path
+    record = cache_directory(args) / 'dti' / args.subject / 'raw_inputs.json'
+    if record.is_file():
+        try:
+            mask_info = json.loads(record.read_text()).get('inputs', {}).get('mask', {})
+            mask_path = mask_info.get('path')
+            if mask_path and Path(mask_path).is_file():
+                return Path(mask_path)
+        except (OSError, ValueError):
+            pass
+    return None
+
+
 def build_native_conversion_command(args: argparse.Namespace) -> List[str]:
-    return [
+    command = [
         sys.executable, str(PROJECT_ROOT / 'inference/native.py'),
         '--subject', args.subject, '--data-root', str(cache_directory(args) / 'volumes'),
         '--pred-root', str(cache_directory(args) / 'predictions'), '--predict-mode', args.predict_mode,
         '--output-dir', str(subject_directory(args) / 'ddsurfer'),
         '--metadata-dir', str(cache_directory(args) / 'logs/native'),
     ]
+    if getattr(args, 'surface_refinement', True):
+        mask_path = resolve_native_mask(args)
+        if mask_path is not None:
+            threads = max(int(args.cpu_threads), min(16, os.cpu_count() or 4))
+            command += [
+                '--refine',
+                '--dti-dir', str(subject_directory(args) / 'dti'),
+                '--mask', str(mask_path),
+                '--threads', str(threads),
+            ]
+    return command
 
 
 def build_native_dti_export_command(args: argparse.Namespace) -> List[str]:

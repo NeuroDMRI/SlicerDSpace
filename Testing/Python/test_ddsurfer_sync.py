@@ -56,7 +56,8 @@ class DDSurferSyncTests(unittest.TestCase):
         record = json.loads((BACKEND_ROOT / 'UPSTREAM.json').read_text())
         # R5 (W4-W6): the native tensor fit also patches dti.py, preflight.py and the tests that model the old CLIs.
         self.assertEqual(set(record['local_patches']), {
-            'inference/native.py', 'inference/predict.py', 'model/ddsurfer.py',
+            'inference/native.py', 'inference/predict.py', 'inference/surface_refine.cpp',
+            'inference/surface_refine.py', 'model/ddsurfer.py',
             'postprocessing/core/archive.py', 'postprocessing/core/build.py',
             'postprocessing/core/cmake/help_header.py', 'postprocessing/core/compare.py',
             'postprocessing/core/config.py', 'postprocessing/core/runtime.py',
@@ -80,6 +81,75 @@ class DDSurferSyncTests(unittest.TestCase):
         selected = set(runtime_files(ROOT))
         self.assertIn('anatomy/surface/ddsurfer_backend/utils/LICENSE.pytorch3d', selected)
         self.assertIn('anatomy/surface/ddsurfer_backend/CITATION.cff', selected)
+        self.assertIn('anatomy/surface/ddsurfer_backend/inference/surface_refine.cpp', selected)
+        self.assertIn('anatomy/surface/ddsurfer_backend/inference/surface_refine.py', selected)
+        self.assertIn('anatomy/surface/ddsurfer_backend/inference/assets/medial_masks.npz', selected)
+
+    def test_surface_refine_dti_resolution_and_registered_refine_flag(self):
+        import importlib.util
+        import platform
+        from anatomy.surface.pipeline import _run_registered
+
+        spec = importlib.util.spec_from_file_location(
+            'ddsurfer_surface_refine',
+            BACKEND_ROOT / 'inference/surface_refine.py',
+        )
+        sr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sr)
+        self.assertTrue(sr.MEDIAL_MASKS_PATH.is_file())
+        if platform.system().lower() == 'darwin':
+            lib = sr._build_or_load_lib()
+            self.assertIsNotNone(lib)
+            self.assertEqual(sr.refinement_library_source(), 'bundled')
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            mask = root / 'Mask.nhdr'
+            mask.write_bytes(b'mask')
+
+            # Layout 1: upstream {subject}-FA.nii.gz
+            d1 = root / 'upstream_dti'
+            d1.mkdir()
+            for suffix in ('FA', 'MD', 'MaxEigenvalue', 'MidEigenvalue', 'MinEigenvalue'):
+                (d1 / f'sub1-{suffix}.nii.gz').write_bytes(b'x')
+            self.assertIsNotNone(sr.resolve_dti_paths(d1, 'sub1', mask))
+
+            # Layout 2: registered-style {subject}-dti-*.nii.gz
+            d2 = root / 'nii_dti'
+            d2.mkdir()
+            for suffix in ('FractionalAnisotropy', 'MeanDiffusivity', 'MaxEigenvalue', 'MidEigenvalue', 'MinEigenvalue'):
+                (d2 / f'sub1-dti-{suffix}.nii.gz').write_bytes(b'x')
+            self.assertIsNotNone(sr.resolve_dti_paths(d2, 'sub1', mask))
+
+            # Layout 3: SlicerDSpace NativeDTIBundle DTI_*.nrrd
+            d3 = root / 'nrrd_dti'
+            d3.mkdir()
+            for name in ('DTI_FA.nrrd', 'DTI_MeanDiffusivity.nrrd', 'DTI_MaxEigenvalue.nrrd',
+                         'DTI_MidEigenvalue.nrrd', 'DTI_MinEigenvalue.nrrd'):
+                (d3 / name).write_bytes(b'x')
+            resolved = sr.resolve_dti_paths(d3, 'sub1', mask)
+            self.assertIsNotNone(resolved)
+            self.assertEqual(resolved['fa'], d3 / 'DTI_FA.nrrd')
+
+            # Verify _run_registered passes --refine --dti-dir --mask --threads when native inputs are provided
+            prep = SimpleNamespace(
+                raw_dir=root / 'raw',
+                preprocessed_dir=root / 'prep' / 'sub1',
+            )
+            pred = SimpleNamespace(wm_mesh_path=root / 'wm.obj', pial_mesh_path=root / 'pial.obj')
+            cfg = SurfaceConfig('sub1', root, root / 'out', device='cpu', cpu_threads=4)
+            res = dict(registration_atlas=str(root / 'atlas.nii.gz'),
+                       template_dir=str(root / 'tpl'), checkpoint_root=str(root / 'ckpt'))
+            with patch('anatomy.surface.preprocessing.preprocess_subject', return_value=prep), \
+                    patch('anatomy.surface.prediction.predict_subject', return_value=pred), \
+                    patch('anatomy.surface.pipeline.run_backend') as run_mock:
+                _run_registered(cfg, res, root / 'out', root / 'reg',
+                                native_dti_dir=d3, native_mask_path=mask)
+            cmd = run_mock.call_args.args[0]
+            self.assertIn('--refine', cmd)
+            self.assertEqual(cmd[cmd.index('--dti-dir') + 1], d3)
+            self.assertEqual(cmd[cmd.index('--mask') + 1], mask)
+            self.assertIn('--threads', cmd)
 
     def test_surface_postprocess_dependencies_match_modern_and_fallback_backend(self):
         from shared.environment import EnvironmentDoctorConfig, build_dependency_specs, _is_freesurfer_home

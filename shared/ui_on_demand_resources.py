@@ -64,6 +64,14 @@ def optional_profile_title(profile: str, zh: bool) -> str:
     return labels[0] if zh else labels[1]
 
 
+def core_profile_title(profile: str, zh: bool) -> str:
+    """The friendly title of one core model-asset profile (surface / segmentation / parcellation)."""
+    labels = _RESOURCE_LABELS.get(str(profile))
+    if not labels:
+        return str(profile)
+    return labels[0] if zh else labels[1]
+
+
 def _text(zh: bool, english: str, chinese: str) -> str:
     return chinese if zh else english
 
@@ -361,6 +369,420 @@ def detect_missing_task_resources(
                     add_item("wma_org", pack_size or _DEFAULT_PACK_SIZES_BYTES["wma_org"], "wma_org")
 
     return missing
+
+
+def _format_compact_size(num_bytes: int) -> str:
+    b = int(num_bytes or 0)
+    if b <= 0:
+        return ""
+    if b >= 1073741824:
+        return f"~{b / 1073741824.0:.2f} GB"
+    return f"~{max(1, int(round(b / 1048576.0)))} MB"
+
+
+def installed_wma_atlases(
+    owner: Any = None,
+    *,
+    backend_paths: dict[str, str] | None = None,
+) -> tuple[str, ...]:
+    """Return the WMA atlas families (subset of org, naba, east-west) currently present locally."""
+    if backend_paths is None:
+        getter = getattr(owner, "_environment_dependency_path_kwargs", None)
+        backend_paths = getter() if callable(getter) else {}
+    paths_map = dict(backend_paths or {})
+    roots = _candidate_asset_roots(paths_map.get("model_assets_dir"))
+    explicit_wma = paths_map.get("wma_atlas_dir")
+    return tuple(
+        family
+        for family in ("org", "naba", "east-west")
+        if _wma_atlas_ready(roots, family, explicit_wma_dir=explicit_wma)
+    )
+
+
+def detect_missing_direct_algorithms(
+    owner: Any,
+    family: str,
+    *,
+    zh: bool = False,
+    backend_paths: dict[str, str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Fast check for direct missing model/atlas weights for one Analysis picker family.
+
+    Only direct weight-bearing algorithms are checked (Anatomical priors: DDSurfer/DDSeg/DDParcel;
+    Preprocessing: PNL CNN brain mask; Fiber bundles: TractCloud and WMA when no WMA atlas is installed).
+    Downstream algorithms with indirect dependencies (CSD/ACT, SAF, WMQL, Connectome, Surface postprocess)
+    are intentionally left enabled here and handled by the pre-run preparation prompt if needed.
+    """
+    if family not in ("anatomical_priors", "preprocessing", "bundles"):
+        return {}
+    if backend_paths is None:
+        getter = getattr(owner, "_environment_dependency_path_kwargs", None)
+        if not callable(getter):
+            return {}
+        try:
+            backend_paths = getter() or {}
+        except Exception:
+            return {}
+    paths_map = dict(backend_paths or {})
+    node = getattr(owner, "_parameterNode", None) if owner is not None else None
+    roots = _candidate_asset_roots(paths_map.get("model_assets_dir"))
+    core_sizes = _json_manifest_sizes("assets_manifest.json")
+    ext_sizes = _json_manifest_sizes("external_assets_manifest.json")
+    packs = load_release_packs_manifest().get("packs") or {}
+    out: dict[str, dict[str, Any]] = {}
+
+    if family == "anatomical_priors":
+        for field, profile, pack_id, en_name, zh_name in (
+            ("targetSurface", "surface", "ddsurfer", "Cortical Surfaces", "皮层表面"),
+            ("targetSegmentation", "segmentation", "ddseg", "Tissue Segmentation", "组织分割"),
+            ("targetParcellation", "parcellation", "ddparcel", "Brain Parcellation", "大脑分区"),
+        ):
+            req_paths = _core_profile_paths(profile)
+            if req_paths and not _all_files_nonempty(roots, req_paths):
+                pack_size = int((packs.get(pack_id) or {}).get("size_bytes") or 0)
+                size = pack_size or sum(core_sizes.get(p, 0) for p in req_paths) or _DEFAULT_PACK_SIZES_BYTES[profile]
+                sz_txt = _format_compact_size(size)
+                zh_title, en_title = _RESOURCE_LABELS[profile]
+                out[field] = {
+                    "id": profile,
+                    "pack_id": pack_id,
+                    "profile": profile,
+                    "kind": "core",
+                    "title_zh": zh_title,
+                    "title_en": en_title,
+                    "size_bytes": int(size),
+                    "reason": (
+                        f"未安装 {zh_title}（{sz_txt}）。补充下载后即可启用{zh_name}。"
+                        if zh
+                        else f"{en_title} ({sz_txt}) are not installed. Download them to enable {en_name}."
+                    ),
+                }
+        return out
+
+    if family == "preprocessing":
+        mask_backend = str(getattr(node, "brainMaskBackend", "pnl_cnn") or "pnl_cnn") if node is not None else "pnl_cnn"
+        pnl_route = str(getattr(node, "pnlMaskRoute", "auto") or "auto") if node is not None else "auto"
+        if mask_backend == "pnl_cnn":
+            from shared.brain_mask import resolve_pnl_mask_route
+
+            if resolve_pnl_mask_route(pnl_route) == "native":
+                explicit_pnl = paths_map.get("pnl_mask_model_dir")
+                pnl_paths = _ext_profile_paths("pnl-cnn")
+                pnl_ok = False
+                if explicit_pnl:
+                    pnl_dir = Path(explicit_pnl).expanduser()
+                    if all((pnl_dir / Path(p).name).is_file() for p in pnl_paths):
+                        pnl_ok = True
+                if not pnl_ok and pnl_paths and _all_files_nonempty(roots, pnl_paths):
+                    pnl_ok = True
+                if not pnl_ok:
+                    iit_rel = "brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz"
+                    pack_size = int((packs.get("pnl_cnn") or {}).get("size_bytes") or 0)
+                    iit_size = int(ext_sizes.get(iit_rel, 7_830_929))
+                    size = (pack_size + iit_size if pack_size else 0) or sum(ext_sizes.get(p, 0) for p in pnl_paths) or _DEFAULT_PACK_SIZES_BYTES["pnl_cnn"]
+                    sz_txt = _format_compact_size(size)
+                    zh_title, en_title = _RESOURCE_LABELS["pnl_cnn"]
+                    out["brain_mask"] = {
+                        "id": "pnl_cnn",
+                        "pack_id": "pnl_cnn",
+                        "profile": "pnl-cnn",
+                        "kind": "optional",
+                        "title_zh": zh_title,
+                        "title_en": en_title,
+                        "size_bytes": int(size),
+                        "reason": (
+                            f"未安装 {zh_title}（{sz_txt}）。补充下载后可自动提取脑掩膜；若输入目录已提供脑掩膜，则无需下载也可直接运行后续分析。"
+                            if zh
+                            else f"{en_title} ({sz_txt}) are not installed. Download them for automatic DWI brain masking, or provide your own brain mask under Inputs."
+                        ),
+                    }
+        return out
+
+    if family == "bundles":
+        explicit_tc = paths_map.get("tractcloud_data_dir")
+        tc_ok = bool(
+            explicit_tc
+            and Path(explicit_tc).expanduser().is_dir()
+            and (Path(explicit_tc).expanduser() / "TrainedModel/best_tract_f1_model.pth").is_file()
+        )
+        if not tc_ok:
+            tc_paths = _ext_profile_paths("tractcloud")
+            tc_ok = bool(tc_paths) and _all_files_nonempty(roots, tc_paths)
+        if not tc_ok:
+            pack_size = int((packs.get("tractcloud") or {}).get("size_bytes") or 0)
+            size = pack_size or sum(ext_sizes.get(p, 0) for p in _ext_profile_paths("tractcloud")) or _DEFAULT_PACK_SIZES_BYTES["tractcloud"]
+            sz_txt = _format_compact_size(size)
+            zh_title, en_title = _RESOURCE_LABELS["tractcloud"]
+            out["tractcloud"] = {
+                "id": "tractcloud",
+                "pack_id": "tractcloud",
+                "profile": "tractcloud",
+                "kind": "optional",
+                "title_zh": zh_title,
+                "title_en": en_title,
+                "size_bytes": int(size),
+                "reason": (
+                    f"未安装 {zh_title}（{sz_txt}）。补充下载后即可启用 TractCloud。"
+                    if zh
+                    else f"{en_title} ({sz_txt}) are not installed. Download them to enable TractCloud."
+                ),
+            }
+
+        if not installed_wma_atlases(owner, backend_paths=paths_map):
+            atlas_choices = []
+            for a_fam, a_id, a_prof, a_name in (
+                ("org", "wma_org", "wma", "ORG"),
+                ("naba", "wma_naba", "wma-naba", "NABA"),
+                ("east-west", "wma_east_west", "wma-east-west", "East-West"),
+            ):
+                sz = int((packs.get(a_id) or {}).get("size_bytes") or _DEFAULT_PACK_SIZES_BYTES[a_id])
+                zh_t, en_t = _RESOURCE_LABELS[a_id]
+                atlas_choices.append(
+                    {
+                        "atlas_family": a_fam,
+                        "id": a_id,
+                        "pack_id": a_id,
+                        "profile": a_prof,
+                        "kind": "optional",
+                        "title_zh": zh_t,
+                        "title_en": en_t,
+                        "size_bytes": sz,
+                        "label": f"{a_name} ({_format_compact_size(sz)})",
+                    }
+                )
+            first = atlas_choices[0]
+            out["wma"] = {
+                **first,
+                "atlas_choices": atlas_choices,
+                "reason": (
+                    "本地尚未安装任何 WMA 白质纤维图谱。请在下方选择所需图谱并下载，安装完成后即可启用 WMA。"
+                    if zh
+                    else "No WMA white-matter atlas is installed locally. Choose an atlas below to download and enable WMA."
+                ),
+            }
+        return out
+
+    return out
+
+
+def build_single_resource_supplement_dialog(
+    owner: Any,
+    item_spec: dict[str, Any],
+    *,
+    zh: bool | None = None,
+) -> tuple[Any, Callable[[], dict[str, str]]]:
+    """Build the On-Demand Resource Supplement dialog for one missing model or atlas pack."""
+    import qt
+    import slicer
+
+    use_zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh") if zh is None else bool(zh)
+    item = {
+        "id": str(item_spec.get("id") or ""),
+        "title_zh": str(item_spec.get("title_zh") or item_spec.get("title_en") or item_spec.get("id") or ""),
+        "title_en": str(item_spec.get("title_en") or item_spec.get("title_zh") or item_spec.get("id") or ""),
+        "size_bytes": int(item_spec.get("size_bytes") or 0),
+    }
+    total_size = _format_size(item["size_bytes"])
+    title_text = item["title_zh"] if use_zh else item["title_en"]
+    headline = (
+        f"即将下载并热补装 <b>{html.escape(title_text)}</b>（约 {total_size}），完成后即可在分析中勾选使用。"
+        if use_zh
+        else f"Download and install <b>{html.escape(title_text)}</b> (~{total_size}) to enable this algorithm?"
+    )
+
+    dialog = qt.QDialog(slicer.util.mainWindow() if hasattr(slicer.util, "mainWindow") else None)
+    dialog.setObjectName("onDemandSupplementDialog")
+    dialog.setProperty("popupCard", True)
+    dialog.setWindowTitle(_text(use_zh, "On-Demand Resource Supplement", "按需补装模型与图谱"))
+    try:
+        from shared.ui_styles import apply_placeholder_palette, ui_stylesheet
+
+        dialog.setStyleSheet(ui_stylesheet(widget=getattr(owner, "_uiWidget", None)))
+        apply_placeholder_palette(dialog)
+    except Exception:
+        pass
+
+    layout = qt.QVBoxLayout(dialog)
+    layout.setContentsMargins(18, 16, 18, 16)
+    layout.setSpacing(12)
+
+    sub_note = (
+        "无需重装扩展或重启 3D Slicer；可在下方选择加速镜像、代理或本地离线包目录。"
+        if use_zh
+        else "No extension reinstall or Slicer restart needed. Configure a mirror, proxy, or local offline pack folder below if needed."
+    )
+    if item["id"] == "pnl_cnn":
+        sub_note += (
+            " 若输入目录已提供脑掩膜，也可跳过下载直接运行后续分析。"
+            if use_zh
+            else " If you already provide a brain mask under Inputs, you may skip this download."
+        )
+    info = qt.QLabel(f"{headline}<br><br><span style='font-size:12px'>{html.escape(sub_note)}</span>", dialog)
+    info.wordWrap = True
+    layout.addWidget(info)
+
+    net_panel, read_net_values = build_network_and_offline_panel(dialog, zh=use_zh)
+    layout.addWidget(net_panel)
+
+    buttons = qt.QDialogButtonBox(dialog)
+    install_btn = buttons.addButton(
+        _text(use_zh, "Download and Install", "一键下载补齐"),
+        qt.QDialogButtonBox.AcceptRole,
+    )
+    buttons.addButton(
+        _text(use_zh, "Cancel", "取消"),
+        qt.QDialogButtonBox.RejectRole,
+    )
+    install_btn.setDefault(True)
+    try:
+        install_btn.setProperty("primaryAction", True)
+        st = install_btn.style()
+        if st is not None:
+            st.unpolish(install_btn)
+            st.polish(install_btn)
+        install_btn.setFocus()
+    except Exception:
+        pass
+    buttons.accepted.connect(dialog.accept)
+    buttons.rejected.connect(dialog.reject)
+    layout.addWidget(buttons)
+    dialog.setMinimumWidth(460)
+    return dialog, read_net_values
+
+
+def prompt_download_missing_resource(owner: Any, item_spec: dict[str, Any]) -> bool:
+    """Confirm and asynchronously download one directly missing model/atlas pack from a picker '?' action."""
+    if owner is None or not isinstance(item_spec, dict):
+        return False
+    import qt
+    import slicer
+    import sys
+
+    if (
+        getattr(owner, "_setupJob", None)
+        or getattr(owner, "_pipelineActive", False)
+        or getattr(owner, "_selectedSetupActive", False)
+    ):
+        zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+        slicer.util.infoDisplay(
+            _text(zh, "Wait for the active job or cancel it first.", "请先等待当前任务结束，或取消当前任务。")
+        )
+        return False
+
+    zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+    dialog, read_net_values = build_single_resource_supplement_dialog(owner, item_spec, zh=zh)
+    accepted = dialog.exec_() == qt.QDialog.Accepted
+    net_values = read_net_values()
+    dialog.deleteLater()
+    if not accepted:
+        return False
+
+    save_network_settings(**net_values)
+    getter = getattr(owner, "_environment_dependency_path_kwargs", None)
+    backend_paths = dict(getter() or {}) if callable(getter) else {}
+    asset_root = configured_model_assets_root(backend_paths.get("model_assets_dir"))
+    asset_root.mkdir(parents=True, exist_ok=True)
+
+    launcher_fn = getattr(owner, "_slicer_launcher_program", None)
+    launcher_prog = launcher_fn() if callable(launcher_fn) else None
+    if launcher_prog:
+        program, prefix = str(launcher_prog), ["--launch", "PythonSlicer"]
+    else:
+        program, prefix = sys.executable, []
+
+    profile = str(item_spec.get("profile") or "")
+    kind = str(item_spec.get("kind") or "optional")
+    from datetime import datetime
+    from shared.user_config import default_user_config_path
+
+    log_folder = default_user_config_path().parent / "setup-history" / ("supplement-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
+    log_folder.mkdir(parents=True, exist_ok=True)
+
+    if kind == "core":
+        script_path = REPO_ROOT / "scripts" / "download_model_assets.py"
+        args = [
+            *prefix, "-u", str(script_path),
+            "--profile", profile,
+            "--asset-root", str(asset_root),
+            "--source", "url",
+            "--source-id", "slicerdsurfer_models_release",
+        ]
+    else:
+        script_path = REPO_ROOT / "scripts" / "setup_optional_assets.py"
+        receipt_path = log_folder / "optional-resources-result.json"
+        args = [
+            *prefix, "-u", str(script_path),
+            "--profiles", profile,
+            "--asset-root", str(asset_root),
+            "--execute",
+            "--accept-terms",
+            "--result", str(receipt_path),
+        ]
+
+    title_text = str(item_spec.get("title_zh") if zh else item_spec.get("title_en") or profile)
+    job_title = (f"正在下载 {title_text}" if zh else f"Downloading {title_text}")
+
+    owner._selectedSetupActive = True
+    try:
+        from shared.ui_selected_setup import _safe_set_live_stage_text, _safe_set_run_state, _sync_owner_busy_controls
+
+        _safe_set_run_state(owner, "setup")
+        _safe_set_live_stage_text(owner, job_title + "…")
+        _sync_owner_busy_controls(owner)
+    except Exception:
+        pass
+
+    def _on_done(status: str, details: str, _log_path: Any) -> None:
+        owner._selectedSetupActive = False
+        owner._lastEnvironmentResult = None
+        owner._lastEnvironmentSignature = None
+        try:
+            from shared.ui_selected_setup import _safe_set_run_state, _sync_owner_busy_controls
+
+            _safe_set_run_state(owner, "idle" if status == "completed" else ("cancelled" if status == "cancelled" else "failed"))
+            _sync_owner_busy_controls(owner)
+        except Exception:
+            pass
+        if status == "completed":
+            atlas_fam = item_spec.get("atlas_family")
+            node = getattr(owner, "_parameterNode", None)
+            if atlas_fam and node is not None:
+                try:
+                    with slicer.util.NodeModify(node):
+                        node.wmaAtlas = str(atlas_fam)
+                except Exception:
+                    try:
+                        node.wmaAtlas = str(atlas_fam)
+                    except Exception:
+                        pass
+            try:
+                from shared.ui_compact import refresh_compact_algorithms
+
+                refresh_compact_algorithms(owner)
+            except Exception:
+                pass
+            setter = getattr(owner, "_setStatus", None)
+            if callable(setter):
+                setter(
+                    "ready",
+                    f"已安装 {title_text}，现在可在 2. Analysis 中勾选使用。"
+                    if zh
+                    else f"Installed {title_text}. You can now select it under 2. Analysis.",
+                )
+        else:
+            setter = getattr(owner, "_setStatus", None)
+            if callable(setter):
+                setter(
+                    "warning",
+                    f"下载未完成（{status}），请查看日志后重试。"
+                    if zh
+                    else f"Download did not finish ({status}); inspect logs and retry.",
+                )
+
+    from shared.ui_setup_jobs import start_setup_job
+
+    start_setup_job(owner, job_title, [(program, args, {})], _on_done)
+    return True
 
 
 def build_network_and_offline_panel(parent: Any, *, zh: bool) -> tuple[Any, Callable[[], dict[str, str]]]:

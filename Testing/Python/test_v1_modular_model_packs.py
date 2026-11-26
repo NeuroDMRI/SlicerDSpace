@@ -33,13 +33,13 @@ from scripts.package_modular_assets import (
 )
 from shared.installer_script_builder import generate_installer_script
 
-NEW_DDSURFER_COMMIT = "7d28dbddd73f339b9f1b97e475e35377df767672"
+NEW_DDSURFER_COMMIT = "a5c6894cf7e64c1253e3d377904bec7831ce52db"
 NEW_DDSURFER_HASHES = {
-    "surface/weights/SHA256SUMS": "986fe52ba0341e76a6dc9cbc33bb6a52112beb02d70950104de2909c5ff419cc",
-    "surface/weights/ddsurfer_lh_wm.pt": "b1ab6ae874e52c80fed4866c8aa03b586c4e7d463b2db688f703627db01a2454",
-    "surface/weights/ddsurfer_rh_wm.pt": "da8277a627e55dc576886bebcc3637bee89c1e8a77ce0c77ab0a3163ba955fcd",
-    "surface/weights/ddsurfer_lh_pial.pt": "58f93a8ea32ee0c0d59d9ca3875d8ef906fff15dc29c87d1fc313a7a25e28393",
-    "surface/weights/ddsurfer_rh_pial.pt": "480961adf7730985b2c2288cac9b66067dcd72b722214ff0ed1183b6dcd0eec0",
+    "surface/weights/SHA256SUMS": "c6677087eafc08e14e13356ca82a4e732016abf7f1e57f717addc4ca47314a71",
+    "surface/weights/ddsurfer_lh_wm.pt": "f35d6dbc16da8e5792543f794c8deb5fe7469fc279084022073d6a84d1ebed15",
+    "surface/weights/ddsurfer_rh_wm.pt": "e16405c06c5766f2a25a844c4c67ff154e8610b634d9d22d4bbb24bfeda66bee",
+    "surface/weights/ddsurfer_lh_pial.pt": "f538849c79287c39883fa374bc0d589637ef2ddd2a4efa52037ec52f3688ae34",
+    "surface/weights/ddsurfer_rh_pial.pt": "70cb4784cf78bf3f68fd23d9248185ac021883d16c509467544bc91f595d4dd9",
 }
 
 
@@ -404,6 +404,169 @@ class V1InstallerModularPackFlowTests(unittest.TestCase):
                 self.assertEqual(matched, [expected_pid], profile)
             core_plan = resolve_asset_plan(manifest, "core")
             self.assertEqual({p["id"] for p in _matching_release_packs(core_plan)}, {"ddsurfer", "ddseg", "ddparcel"})
+
+    def test_setup_gui_customize_subset_skips_unselected_models_and_iit(self) -> None:
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not installed in PATH")
+
+        import hashlib
+        import io
+        import test_installer_prune_fallback as prune
+        from test_installer_gui_reinstall_gap import load_setup_module
+
+        def _sha256_file(path: Path) -> str:
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            offline = tmp / "offline"
+            offline.mkdir()
+            bundle_arc = offline / "SlicerDSpace-linux-x64.tar.gz"
+            bundle_arc.write_bytes(b"fake-base-bundle")
+
+            model_packs_art: dict[str, dict[str, object]] = {}
+            for pid in CORE_MODEL_PACK_ORDER:
+                rel = f"sub/{pid}/weights.bin"
+                raw = f"weights-{pid}".encode("utf-8")
+                arc = offline / f"SlicerDSpace-model-{pid}.zip"
+                with zipfile.ZipFile(arc, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    zf.writestr(rel, raw)
+                model_packs_art[pid] = {
+                    "id": pid,
+                    "filename": arc.name,
+                    "url": f"https://example.invalid/{arc.name}",
+                    "size_bytes": arc.stat().st_size,
+                    "sha256": _sha256_file(arc),
+                }
+
+            wma_arc = offline / "SlicerDSpace-atlas-wma-org.zip"
+            with zipfile.ZipFile(wma_arc, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("bundles/wma/org/atlas.txt", b"org-atlas")
+            packs_art = {
+                "wma_org": {
+                    "id": "wma_org",
+                    "filename": wma_arc.name,
+                    "url": f"https://example.invalid/{wma_arc.name}",
+                    "size_bytes": wma_arc.stat().st_size,
+                    "sha256": _sha256_file(wma_arc),
+                }
+            }
+            iit_path = offline / "IITmean_b0_256.nii.gz"
+            iit_path.write_bytes(b"fake-iit-template")
+            artifacts = {
+                "bundles": {
+                    "linux_x64_base": {
+                        "filename": bundle_arc.name,
+                        "url": f"https://example.invalid/{bundle_arc.name}",
+                        "size_bytes": bundle_arc.stat().st_size,
+                        "sha256": _sha256_file(bundle_arc),
+                    }
+                },
+                "model_packs": model_packs_art,
+                "packs": packs_art,
+                "iit_template": {
+                    "relpath": "brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz",
+                    "urls": ["https://example.invalid/IITmean_b0_256.nii.gz"],
+                    "size_bytes": iit_path.stat().st_size,
+                    "sha256": _sha256_file(iit_path),
+                },
+            }
+
+            js_path = REPO_ROOT / "docs" / "site" / "assets" / "js" / "installer-customizer.js"
+            code = (
+                "const ic = require(process.argv[1]);"
+                "process.stdout.write(ic.buildSetupExtensionFiles(ic.defaultSetupState('linux'))"
+                ".find((f) => f.name.endsWith('SlicerDSpaceSetup.py')).data);"
+            )
+            setup_src = subprocess.run(
+                [node, "-e", code, str(js_path)], capture_output=True, text=True, encoding="utf-8", check=True
+            ).stdout
+
+            ns = load_setup_module(source=setup_src)
+            project = prune._Project(tmp / "proj_custom", release_package=False)
+            project.assets = tmp / "assets_custom"
+            ns["CONFIG"] = dict(
+                ns["CONFIG"],
+                os="linux",
+                model_assets_dir=str(project.assets),
+                selected_packs=[],
+                selected_model_packs=list(CORE_MODEL_PACK_ORDER),
+                artifacts=artifacts,
+            )
+            ns["_host_bundle_key"] = lambda: "linux_x64_base"
+            ns["_is_intel_mac"] = lambda: False
+            ns["_warn_linux_glibc_floor"] = lambda *a, **k: None
+            ns["_pick_cache_dir"] = lambda need=0: tmp / "cache_custom"
+
+            # Size calculation drops pnl_cnn + iit_template when unchecked and includes wma_org when checked.
+            full_bytes = ns["_calc_download_bytes"](artifacts, list(CORE_MODEL_PACK_ORDER), [])
+            no_pnl_bytes = ns["_calc_download_bytes"](artifacts, ["ddsurfer", "ddseg", "ddparcel", "tractcloud"], [])
+            self.assertEqual(
+                full_bytes - no_pnl_bytes,
+                int(model_packs_art["pnl_cnn"]["size_bytes"]) + int(artifacts["iit_template"]["size_bytes"]),
+            )
+            with_org_bytes = ns["_calc_download_bytes"](artifacts, ["ddseg", "ddparcel"], ["wma_org"])
+            self.assertEqual(
+                with_org_bytes,
+                int(artifacts["bundles"]["linux_x64_base"]["size_bytes"])
+                + int(model_packs_art["ddseg"]["size_bytes"])
+                + int(model_packs_art["ddparcel"]["size_bytes"])
+                + int(packs_art["wma_org"]["size_bytes"]),
+            )
+
+            # Worker job JSON forwards sel_model_packs to Phase A; unchecking pnl_cnn skips IIT template too.
+            job_file = tmp / "download-job.json"
+            job_file.write_text(
+                json.dumps(
+                    {
+                        "sel_packs": ["wma_org"],
+                        "sel_model_packs": ["ddseg", "ddparcel"],
+                        "mirror": "",
+                        "proxy": "",
+                        "offdir": str(offline),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            worker_out = io.StringIO()
+            with patch.object(sys, "stdout", worker_out):
+                rc = ns["_worker_main"](str(job_file), "--download-worker")
+            self.assertEqual(rc, 0, worker_out.getvalue())
+            events_a = [json.loads(line) for line in worker_out.getvalue().splitlines() if line.strip()]
+            ready = next((e["p"] for e in events_a if e.get("k") == "downloads_ready"), None)
+            self.assertIsNotNone(ready, events_a)
+            assert isinstance(ready, dict)
+            self.assertEqual([ms["id"] for ms, _ in ready["model_archives"]], ["ddseg", "ddparcel"])
+            self.assertEqual([ps["id"] for ps, _ in ready["pack_archives"]], ["wma_org"])
+            self.assertEqual(ready["iit_file"], "")
+            self.assertEqual(ready["sel_model_packs"], ["ddseg", "ddparcel"])
+
+            # Phase C extracts only selected packs and aligns run_defaults targets / bundle_backend.
+            ready["mod_root"] = str(project.module_root)
+            events_c: list[tuple[str, object]] = []
+            with prune._Isolated(project, release_package=False):
+                ns["_run_phase_c_core"](ready, lambda k, p: events_c.append((k, p)))
+            self.assertEqual([p for k, p in events_c if k == "error"], [])
+            self.assertEqual(events_c[-1][0], "all_done")
+            self.assertTrue((project.assets / "sub/ddseg/weights.bin").is_file())
+            self.assertTrue((project.assets / "sub/ddparcel/weights.bin").is_file())
+            self.assertTrue((project.assets / "bundles/wma/org/atlas.txt").is_file())
+            self.assertFalse((project.assets / "sub/ddsurfer/weights.bin").exists())
+            self.assertFalse((project.assets / "sub/pnl_cnn/weights.bin").exists())
+            self.assertFalse((project.assets / "sub/tractcloud/weights.bin").exists())
+            self.assertFalse((project.assets / "brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz").exists())
+            cfg_written = json.loads(project.config_path.read_text(encoding="utf-8"))
+            defaults = cfg_written.get("run_defaults") or {}
+            self.assertEqual(defaults.get("bundle_backend"), "wma,wmql")
+            self.assertEqual(defaults.get("wma_atlas"), "org")
+            self.assertIn("segmentation", defaults.get("targets") or [])
+            self.assertIn("parcellation", defaults.get("targets") or [])
+            self.assertIn("connectome", defaults.get("targets") or [])
+            self.assertIn("wma", defaults.get("targets") or [])
+            self.assertNotIn("surface", defaults.get("targets") or [])
+            self.assertNotIn("saf", defaults.get("targets") or [])
+            self.assertNotIn("tractcloud", defaults.get("targets") or [])
 
 
 if __name__ == "__main__":

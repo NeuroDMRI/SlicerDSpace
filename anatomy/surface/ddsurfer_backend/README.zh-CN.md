@@ -79,7 +79,7 @@ DDSurfer 已发表于 **Advanced Science**：
 克隆仓库并进入项目目录：
 
 ```bash
-git clone https://github.com/ChengjinLii/DDSurfer.git
+git clone https://github.com/NeuroDMRI/DDSurfer.git
 cd DDSurfer
 ```
 
@@ -159,6 +159,7 @@ python3 run_ddsurfer_pipeline.py --subject <subID> \
 | `--max-gpu-gib 24` | 推理阶段的显存分配预算，单位 GiB，默认 24。 |
 | `--auto-mask` | 使用 FreeSurfer SynthStrip 生成缺失的脑掩膜，默认关闭。 |
 | `--preprocess-jobs 2` | 并行运行相互独立的 DTI 处理阶段，默认并发数为 1。 |
+| `--no-surface-refinement` | 关闭默认的原生空间表面优化。 |
 | `--post-process` | 使用本机编译组件或已有 FreeSurfer 进行皮层后处理，默认关闭。 |
 | `--postprocess-backend` | 选择 `auto`（默认）、`native` 或 `freesurfer`。 |
 | `--keep-cache` | 保留中间文件及各阶段的详细日志。 |
@@ -410,8 +411,9 @@ python tests/check_environment.py --device cuda:0 --post-process --auto-mask
 
 ## Slicer 扩展
 
-**SlicerDDSurfer 即将开源**，仓库地址：
-[ChengjinLii/SlicerDDSurfer](https://github.com/ChengjinLii/SlicerDDSurfer)。
+DDSurfer 对应的 3D Slicer 扩展为 **SlicerDSpace**：
+[项目官网](https://neurodmri.github.io/SlicerDSpace/) |
+[代码仓库](https://github.com/NeuroDMRI/SlicerDSpace)。
 
 输出的 OBJ 表面在文件头声明 `SPACE=RAS`，以便 3D Slicer 自动识别坐标系。
 对于没有该声明的旧文件，请在 Slicer 的 Add Data 加载选项中手动选择 **RAS**。
@@ -433,7 +435,7 @@ DDSurfer 使用 [MIT 许可证](LICENSE)。第三方组件和外部工具仍遵�
 ## 问题与反馈
 
 如有使用问题、缺陷报告或功能建议，请提交
-[GitHub issue](https://github.com/ChengjinLii/DDSurfer/issues)。
+[GitHub issue](https://github.com/NeuroDMRI/DDSurfer/issues)。
 
 ---
 

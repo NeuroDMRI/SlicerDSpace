@@ -3,7 +3,7 @@ message: "If you use DDSurfer in academic research, please cite the following pa
 title: "DDSurfer"
 type: software
 license: MIT
-repository-code: "https://github.com/ChengjinLii/DDSurfer"
+repository-code: "https://github.com/NeuroDMRI/DDSurfer"
 authors:
   - family-names: "Li"
     given-names: "Chengjin"

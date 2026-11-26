@@ -195,7 +195,7 @@ def _execution_device_note(requested, resolved_device, devices):
     return f'[DDSurfer] Requested {requested}; resolved {resolved_device} (volume network on {vf_device}: {reason})'
 
 
-def _run_registered(config, resources, output_dir, subject_dir):
+def _run_registered(config, resources, output_dir, subject_dir, *, native_dti_dir=None, native_mask_path=None):
     from .preprocessing import SubjectPreprocessingConfig, preprocess_subject
     from .prediction import PredictionStageConfig, predict_subject
     metrics = {name: subject_dir / f'{config.subject_id}-dti-{name}-Reg.nii.gz' for name in
@@ -240,10 +240,23 @@ def _run_registered(config, resources, output_dir, subject_dir):
     else:
         for hemi in ('left', 'right'):
             records.extend(_run_hemi(hemi))
-    run_backend([BACKEND_ROOT / 'inference/native.py', '--subject', config.subject_id,
-        '--data-root', prepared.preprocessed_dir.parent, '--pred-root', output_dir / 'pred_results_SlicerDSpace',
-        '--predict-mode', config.predict_mode, '--output-dir',
-        output_dir / 'pred_results_SlicerDSpace/native' / config.subject_id], python_bin=config.python_bin)
+    native_cmd = [
+        BACKEND_ROOT / 'inference/native.py',
+        '--subject', config.subject_id,
+        '--data-root', prepared.preprocessed_dir.parent,
+        '--pred-root', output_dir / 'pred_results_SlicerDSpace',
+        '--predict-mode', config.predict_mode,
+        '--output-dir', output_dir / 'pred_results_SlicerDSpace/native' / config.subject_id,
+    ]
+    if native_dti_dir is not None and native_mask_path is not None:
+        refine_threads = max(int(config.cpu_threads or 4), min(16, os.cpu_count() or 4))
+        native_cmd += [
+            '--refine',
+            '--dti-dir', Path(native_dti_dir),
+            '--mask', Path(native_mask_path),
+            '--threads', str(refine_threads),
+        ]
+    run_backend(native_cmd, python_bin=config.python_bin)
     if config.cleanup_intermediates:
         for path in (prepared.raw_dir, prepared.preprocessed_dir,
                      output_dir / 'pred_results_SlicerDSpace/mni' / config.subject_id):
@@ -270,7 +283,7 @@ def prepare_shared_registered_bundle(config, resources, log=None):
     return raw, registered
 
 
-SURFACE_PIPELINE_CONTRACT_VERSION = 1
+SURFACE_PIPELINE_CONTRACT_VERSION = 2
 
 
 def _normalized_surface_input_hashes(mapping) -> list[tuple[str, str]]:
@@ -361,7 +374,15 @@ def _run_shared_raw(config, resources, output_dir, manifest, previous, log):
         if previous.get('execution_devices'):
             manifest['execution_devices'] = previous['execution_devices']
     else:
-        devices = _run_registered(config, resources, output_dir, registered.bundle_dir)
+        native_bundle_dir = Path(manifest['shared_preprocessing']['native_bundle'])
+        native_mask = native_bundle_dir / 'Mask.nhdr'
+        if not native_mask.is_file():
+            native_mask = raw.mask_path
+        devices = _run_registered(
+            config, resources, output_dir, registered.bundle_dir,
+            native_dti_dir=native_bundle_dir,
+            native_mask_path=native_mask,
+        )
         if isinstance(devices, dict):
             manifest['execution_devices'] = devices
     if manifest['input_sha256'] != {str(path.resolve()): sha256(path) for path in paths}:
@@ -535,6 +556,24 @@ def run_surface(config: SurfaceConfig, *, log: Optional[Callable[[str], None]] =
             products, checks = native_products(
                 native_dir, config.subject_id, config.predict_mode, export_stl=not reused_shared_raw
             )
+            refinement_record = None
+            for ref_cand in (
+                native_dir.parent / 'logs' / 'lh.white.json',
+                output_dir / 'upstream' / config.subject_id / 'logs' / 'lh.white.json',
+            ):
+                if ref_cand.is_file():
+                    try:
+                        rec = json.loads(ref_cand.read_text(encoding='utf-8')).get('surface_refinement')
+                        if isinstance(rec, dict):
+                            refinement_record = rec
+                            break
+                    except (OSError, ValueError, TypeError):
+                        pass
+            if refinement_record is None and reused_shared_raw and isinstance(previous.get('surface_refinement'), dict):
+                refinement_record = previous['surface_refinement']
+            if refinement_record is not None:
+                manifest['surface_refinement'] = refinement_record
+                qc['surface_refinement'] = refinement_record
             qc.update(status='completed', executed=True, model_count=len(products), surfaces=checks,
                       automatic_qc_passed=all(c['finite'] and c['watertight'] and c['euler_number'] == 2 for c in checks.values()))
             manifest['outputs']['models'] = list(map(str, products))

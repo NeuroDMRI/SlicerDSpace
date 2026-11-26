@@ -184,6 +184,7 @@ def plan_components(plan, root=REPO_ROOT):
     if plan.get("asset_profiles"):
         items.append(_component("model_assets", "Model assets: " + ", ".join(plan["asset_profiles"]),
                                 plan.get("core_model_profile_bytes") or None, "model_assets", root))
+        items[-1]["asset_profiles"] = list(plan["asset_profiles"])
     if plan.get("optional_asset_profiles"):
         items.append(_component("optional_resources", "Resources: " + ", ".join(plan["optional_asset_profiles"]),
                                 plan.get("optional_asset_size_bytes") or None, "optional_resources", root))

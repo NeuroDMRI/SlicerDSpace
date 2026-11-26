@@ -11,6 +11,11 @@ anatomy/parcellation/conversion/LICENSE.txt text eol=lf
 anatomy/surface/ddsurfer_backend/LICENSE.txt text eol=lf
 anatomy/surface/ddsurfer_backend/** text eol=lf
 anatomy/surface/ddsurfer_backend/assets/*.png -text
+anatomy/surface/ddsurfer_backend/inference/assets/*.npz -text
+anatomy/surface/ddsurfer_backend/inference/bin/** -text
+*.so binary
+*.dylib binary
+*.dll binary
 licenses/FreeSurfer.txt text eol=lf
 licenses/PyTorch3D.txt text eol=lf
 licenses/MK-Curve-LICENSE.txt text eol=lf

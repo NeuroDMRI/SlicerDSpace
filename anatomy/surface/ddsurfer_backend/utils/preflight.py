@@ -150,9 +150,9 @@ def inspect_run(args, files):
     if len(image.shape) != 3 or not np.isfinite(image.affine).all():
         raise ValueError('The registration reference must be a valid 3D image')
     assets['reference'] = file_digest(reference)
-    settings = {name: getattr(args, name) for name in (
+    settings = {name: getattr(args, name, True if name == 'surface_refinement' else None) for name in (
         'subject', 'data_type', 'device', 'precision', 'predict_mode', 'cpu_threads', 'max_gpu_gib',
-        'preprocess_jobs', 'auto_mask', 'mask_threads', 'freesurfer')}
+        'preprocess_jobs', 'auto_mask', 'mask_threads', 'surface_refinement', 'freesurfer')}
     tools = slicer_files(required=False) + tensor_files(required=False)
     if args.freesurfer:
         from postprocessing.environment import check_environment, configured_home
@@ -182,7 +182,7 @@ def inspect_run(args, files):
             assets[name] = file_digest(os.environ[name])
     code = {str(path.relative_to(ROOT)): file_digest(path)
             for folder in ('inference', 'model', 'preprocessing', 'postprocessing', 'utils')
-            for path in (ROOT / folder).rglob('*') if path.suffix in ('.py', '.sh')}
+            for path in (ROOT / folder).rglob('*') if path.suffix in ('.py', '.sh', '.cpp')}
     for name in ('run_ddsurfer_pipeline.py', 'DDSurfer_predict.py'):
         code[name] = file_digest(ROOT / name)
     packages = {name: metadata.version(name) for name in ('torch', 'numpy', 'nibabel', 'scipy', 'SimpleITK', 'trimesh', 'pynrrd')}

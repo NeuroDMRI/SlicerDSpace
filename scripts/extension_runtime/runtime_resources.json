@@ -62,7 +62,7 @@
   "trees": [
     {"root": "shared", "patterns": ["*.py", "pnl_cnn/LICENSE.txt", "pnl_cnn/UPSTREAM.json", "pnl_cnn/data/*.json"]},
     {"root": "preprocessing", "patterns": ["*.py"]},
-    {"root": "anatomy", "patterns": ["*.py", "*.sh", "*.json", "*.md", "*.txt", "*.yml", "*.conf", "*.png"]},
+    {"root": "anatomy", "patterns": ["*.py", "*.sh", "*.json", "*.md", "*.txt", "*.yml", "*.conf", "*.png", "*.cpp", "*.npz", "*.so", "*.dylib", "*.dll"]},
     {"root": "microstructure", "patterns": ["*.py", "*.json"]},
     {"root": "tractography", "patterns": ["*.py", "*.qry", "*.md", "requirements.txt"]},
     {"root": "connectome", "patterns": ["*.py"]},

@@ -141,6 +141,11 @@ def _compact_component_rows(owner, components, pending):
             zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
             title = "、".join(optional_profile_title(p, True) for p in item["profiles"]) if zh else \
                 ", ".join(optional_profile_title(p, False) for p in item["profiles"])
+        elif item.get("asset_profiles"):
+            from shared.ui_on_demand_resources import core_profile_title
+            zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
+            title = "、".join(core_profile_title(p, True) for p in item["asset_profiles"]) if zh else \
+                ", ".join(core_profile_title(p, False) for p in item["asset_profiles"])
         row = f"• <b>{html.escape(title)}</b>{size_suffix}"
         licence = item.get("licence")
         if licence:
@@ -178,7 +183,7 @@ def extension_states(manager, modules):
     return installed, loaded
 
 
-def _confirm(owner, plan):
+def _build_confirm_dialog(owner, plan):
     import html
     import qt
     import slicer
@@ -187,7 +192,7 @@ def _confirm(owner, plan):
     from shared.setup_components import pending_licences, plan_components, required_licences
     from shared.setup_resume import accepted_licences
 
-    dialog = qt.QDialog(slicer.util.mainWindow())
+    dialog = qt.QDialog(slicer.util.mainWindow() if hasattr(slicer.util, "mainWindow") else None)
     dialog.setObjectName("selectedSetupConfirmationDialog")
     dialog.setProperty("popupCard", True)
     dialog.setWindowTitle(_text(owner, "Prepare selected analysis", "准备所选分析环境"))
@@ -324,14 +329,29 @@ def _confirm(owner, plan):
     ok_btn = buttons.button(qt.QDialogButtonBox.Ok)
     ok_btn.setText(
         _text(owner, "Accept licences and install", "接受许可并安装") if pending else _text(owner, "Prepare", "开始准备"))
+    cancel_btn = buttons.button(qt.QDialogButtonBox.Cancel)
+    if cancel_btn is not None:
+        cancel_btn.setText(_text(owner, "Cancel", "取消"))
     try:
         ok_btn.setProperty("primaryAction", True)
         ok_btn.setDefault(True)
+        st = ok_btn.style()
+        if st is not None:
+            st.unpolish(ok_btn)
+            st.polish(ok_btn)
+        ok_btn.setFocus()
     except Exception:
         pass
     buttons.connect("accepted()", dialog.accept)
     buttons.connect("rejected()", dialog.reject)
     layout.addWidget(buttons)
+    return dialog, read_net_values, pending
+
+
+def _confirm(owner, plan):
+    import qt
+
+    dialog, read_net_values, pending = _build_confirm_dialog(owner, plan)
     accepted = dialog.exec_() == qt.QDialog.Accepted
     net_values = read_net_values() if (accepted and callable(read_net_values)) else None
     dialog.deleteLater()
@@ -661,6 +681,12 @@ def prepare_selected_environment(owner, result=None, *, repair=False, skip_confi
         if current:
             owner._update_environment_result_label(current)
             owner._update_environment_path_status_labels(current)
+        try:
+            from shared.ui_compact import refresh_compact_algorithms
+
+            refresh_compact_algorithms(owner)
+        except Exception:
+            pass
         _safe_set_run_state(owner, "idle" if state in ("ready", "restart_required") else "failed")
         _sync_owner_busy_controls(owner)
         note = " " + " ".join(warnings) if warnings and state == "ready" else ""  # A2: a warning does not block "ready"

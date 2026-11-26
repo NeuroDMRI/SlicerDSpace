@@ -72,7 +72,7 @@ surface-based analysis and integration with 3D Slicer.
 Clone the repository and enter the project directory:
 
 ```bash
-git clone https://github.com/ChengjinLii/DDSurfer.git
+git clone https://github.com/NeuroDMRI/DDSurfer.git
 cd DDSurfer
 ```
 
@@ -147,6 +147,7 @@ Default paths:
 | `--max-gpu-gib 24` | GPU allocation budget for inference in GiB; default: 24. |
 | `--auto-mask` | Generate a missing brain mask with FreeSurfer SynthStrip; default: off. |
 | `--preprocess-jobs 2` | Run independent DTI stages concurrently; default: 1. |
+| `--no-surface-refinement` | Disable default native-space surface refinement. |
 | `--post-process` | Use source-built or installed FreeSurfer surface tools; default: off. |
 | `--postprocess-backend` | Select `auto` (default), `native` or `freesurfer`. |
 | `--keep-cache` | Retain intermediate files and detailed stage logs. |
@@ -396,8 +397,9 @@ memory for a full inference run are not tested.
 
 ## Slicer Extension
 
-**SlicerDDSurfer will be open-sourced soon** at
-[ChengjinLii/SlicerDDSurfer](https://github.com/ChengjinLii/SlicerDDSurfer).
+DDSurfer is available as a 3D Slicer extension in **SlicerDSpace**:
+[Official Website](https://neurodmri.github.io/SlicerDSpace/) |
+[GitHub Repository](https://github.com/NeuroDMRI/SlicerDSpace).
 
 Surface OBJ files declare `SPACE=RAS` in their header for automatic coordinate
 selection in 3D Slicer. For older outputs without this declaration, select
@@ -417,7 +419,7 @@ and their third-party notices.
 ## Support
 
 For questions, bug reports or feature requests, please open a
-[GitHub issue](https://github.com/ChengjinLii/DDSurfer/issues).
+[GitHub issue](https://github.com/NeuroDMRI/DDSurfer/issues).
 
 ---
 

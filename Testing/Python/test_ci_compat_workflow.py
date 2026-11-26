@@ -5,13 +5,16 @@ No Slicer, network or GitHub is needed. PyYAML is used when present; otherwise t
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import json
+import os
 import re
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "slicer-compat-matrix.yml"
@@ -332,6 +335,143 @@ class DspaceInstallTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 self.mod.main(["--slicer-exe", "/x/Slicer", "--python-slicer", "/x/PythonSlicer", "--offline-dir", td, "--reinstall"])
             self.assertIn("--keep-asset", str(ctx.exception))
+
+    def _run_main_with_fake_gh(self, td, keep_asset=False, tamper=None, omit=None):
+        """Drive ci_install_dspace.main with a fake gh: v1.0.0 holds the base asset and a SHA256SUMS.txt that lists only
+        it; the shared 'assets' release holds the model packs and has no SHA256SUMS.txt. Returns (calls, packs, result)."""
+        sha = lambda data: hashlib.sha256(data).hexdigest()
+        base_name = self.mod.BASE_ASSETS[self.mod.platform_key()][1] % self.mod.RELEASE_TAG
+        bundle_key = self.mod.BASE_ASSETS[self.mod.platform_key()][2]
+        base_data = b"base-asset"
+        contents = {"Pack-A-v1.tar.gz": b"pack a", "Pack-B-v1.tar.gz.part-aa": b"pack b part one",
+                    "Pack-B-v1.tar.gz.part-ab": b"pack b part two"}
+        entry = lambda name: {"filename": name, "url": "https://example.invalid/" + name, "sha256": sha(contents[name]),
+                              "size_bytes": len(contents[name])}
+        artifacts = {
+            "release_tag": self.mod.RELEASE_TAG,
+            "bundles": {bundle_key: {"filename": base_name, "sha256": sha(base_data)}},
+            "model_packs": {
+                "a": dict(entry("Pack-A-v1.tar.gz"), id="a"),
+                "b": {"id": "b", "filename": "Pack-B-v1.tar.gz", "sha256": "f" * 64, "size_bytes": 31,
+                      "parts": [entry("Pack-B-v1.tar.gz.part-aa"), entry("Pack-B-v1.tar.gz.part-ab")]},
+            },
+        }
+        released = dict(contents)
+        for name, data in (tamper or {}).items():
+            released[name] = data
+        for name in omit or ():
+            del released[name]
+        holdings = {
+            self.mod.RELEASE_TAG: {base_name: base_data,
+                                   "SHA256SUMS.txt": ("%s  %s\n" % (sha(base_data), base_name)).encode("utf-8")},
+            "assets": released,
+        }
+        calls = []
+
+        def fake_run(command, check=False, **kwargs):
+            tag = command[command.index("download") + 1]
+            patterns = [command[i + 1] for i, word in enumerate(command) if word == "-p"]
+            dest = Path(command[command.index("-D") + 1])
+            calls.append((tag, patterns))
+            for name in patterns:  # real gh skips a pattern that the release does not hold
+                if name in holdings.get(tag, {}):
+                    (dest / name).write_bytes(holdings[tag][name])
+            return mock.Mock(returncode=0)
+
+        module_dir = Path(td) / "mod"
+        module_dir.mkdir(parents=True, exist_ok=True)
+        (module_dir / "SlicerDSpace.py").write_text("#", encoding="utf-8")
+        offline = Path(td) / "offline"
+        argv = ["--slicer-exe", str(Path(td) / "Slicer"), "--python-slicer", str(Path(td) / "PythonSlicer"),
+                "--offline-dir", str(offline)] + (["--keep-asset"] if keep_asset else [])
+        sys.path.insert(0, str(REPO))
+        try:
+            import shared.installer_script_builder as builder
+        finally:
+            sys.path.remove(str(REPO))
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_OUTPUT"}
+        with mock.patch.object(builder, "load_installer_artifacts", lambda *a, **k: artifacts), \
+                mock.patch.object(self.mod.subprocess, "run", fake_run), \
+                mock.patch.object(self.mod, "run_website_installer",
+                                  lambda *a, **k: "SlicerDSpace extension installed at: %s\n" % module_dir), \
+                mock.patch.object(self.mod, "overlay_checkout", lambda module: 0), \
+                mock.patch.object(self.mod, "cancel_scheduled_uninstall", lambda exe: []), \
+                mock.patch.object(self.mod, "write_outputs", lambda values: None), \
+                mock.patch.dict(os.environ, env, clear=True):
+            result = self.mod.main(argv)
+        return calls, offline, base_name, list(contents), result
+
+    def test_full_install_downloads_model_packs_from_the_assets_release(self):
+        # CI full-install (v1.0.0 assets): the packs moved to the shared 'assets' release, which has no SHA256SUMS.txt.
+        for keep in (False, True):
+            with self.subTest(keep_asset=keep), tempfile.TemporaryDirectory() as td:
+                calls, offline, base_name, pack_files, result = self._run_main_with_fake_gh(td, keep_asset=keep)
+                self.assertEqual(result, 0)
+                self.assertEqual(calls[0][0], "v1.0.0")
+                self.assertEqual(sorted(calls[0][1]), sorted([base_name, "SHA256SUMS.txt"]))
+                self.assertEqual(calls[1][0], "assets")
+                self.assertEqual(sorted(calls[1][1]), sorted(pack_files))  # parts, not the split pack's own filename
+                self.assertEqual(len(calls), 2)
+                left = sorted(p.name for p in offline.iterdir() if p.name in pack_files)
+                self.assertEqual(left, sorted(pack_files) if keep else [])
+                self.assertEqual((offline / base_name).exists(), keep)
+
+    def test_real_artifact_loader_path_requests_packs_from_the_assets_tag(self):
+        # Review P0 (CI full-install): the real load_installer_artifacts() drops assets_release_tag, so reading the tag
+        # from its dict raised "no assets_release_tag" before any gh call. Here the real loader and the real JSON run.
+        published = json.loads((REPO / "docs" / "website" / "installer_artifacts.json").read_text(encoding="utf-8"))
+        expected = set()
+        for spec in published["model_packs"].values():
+            if spec.get("tier") == "core" and spec.get("published") and spec.get("filename"):
+                expected.update(str(item["filename"]) for item in (spec.get("parts") or [spec]))
+        self.assertTrue(expected)
+        calls = []
+
+        def fake_run(command, check=False, **kwargs):
+            tag = command[command.index("download") + 1]
+            patterns = [command[i + 1] for i, word in enumerate(command) if word == "-p"]
+            dest = Path(command[command.index("-D") + 1])
+            calls.append((tag, patterns))
+            for name in patterns:
+                data = b"dummy " + name.encode("utf-8")
+                (dest / name).write_bytes(data)
+                if tag == self.mod.RELEASE_TAG and name == "SHA256SUMS.txt":
+                    base = [n for n in patterns if n != "SHA256SUMS.txt"][0]
+                    (dest / name).write_bytes(("%s  %s\n" % (hashlib.sha256(b"dummy " + base.encode("utf-8")).hexdigest(), base)).encode("utf-8"))
+            return mock.Mock(returncode=0)
+
+        with tempfile.TemporaryDirectory() as td:
+            env = {k: v for k, v in os.environ.items() if k != "GITHUB_OUTPUT"}
+            argv = ["--slicer-exe", str(Path(td) / "Slicer"), "--python-slicer", str(Path(td) / "PythonSlicer"),
+                    "--offline-dir", str(Path(td) / "offline")]
+            with mock.patch.object(self.mod.subprocess, "run", fake_run), \
+                    mock.patch.object(self.mod, "run_website_installer", lambda *a, **k: ""), \
+                    mock.patch.object(self.mod, "overlay_checkout", lambda module: 0), \
+                    mock.patch.object(self.mod, "cancel_scheduled_uninstall", lambda exe: []), \
+                    mock.patch.object(self.mod, "write_outputs", lambda values: None), \
+                    mock.patch.dict(os.environ, env, clear=True):
+                with self.assertRaises(SystemExit) as ctx:
+                    self.mod.main(argv)  # the dummy pack files fail verification, after the gh call
+        self.assertIn("mismatch", str(ctx.exception))
+        asset_calls = [patterns for tag, patterns in calls if tag == "assets"]
+        self.assertEqual(len(asset_calls), 1, calls)
+        self.assertEqual(set(asset_calls[0]), expected)
+
+    def test_model_pack_with_wrong_hash_or_size_fails_naming_the_file(self):
+        for name, data, text in (("Pack-A-v1.tar.gz", b"pack X", "SHA-256 mismatch"),
+                                 ("Pack-B-v1.tar.gz.part-ab", b"short", "Size mismatch")):
+            with self.subTest(file=name), tempfile.TemporaryDirectory() as td:
+                with self.assertRaises(SystemExit) as ctx:
+                    self._run_main_with_fake_gh(td, tamper={name: data})
+                self.assertIn(name, str(ctx.exception))
+                self.assertIn(text, str(ctx.exception))
+
+    def test_model_pack_missing_from_the_assets_release_fails_naming_the_file(self):
+        for name in ("Pack-A-v1.tar.gz", "Pack-B-v1.tar.gz.part-aa"):
+            with self.subTest(file=name), tempfile.TemporaryDirectory() as td:
+                with self.assertRaises(SystemExit) as ctx:
+                    self._run_main_with_fake_gh(td, omit=[name])
+                self.assertIn(name, str(ctx.exception))
 
     def test_website_installer_generates_for_all_three_systems(self):
         sys.path.insert(0, str(REPO))

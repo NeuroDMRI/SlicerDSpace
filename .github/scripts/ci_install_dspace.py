@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Install SlicerDSpace into a stock Slicer the way users get it, then overlay this checkout (CI helper).
 
-1. Download the released base asset for this OS (gh release download, SHA-256 checked against the release's
-   SHA256SUMS.txt and against docs/website/installer_artifacts.json).
+1. Download the released base asset for this OS from release v1.0.0 (gh release download, SHA-256 checked against
+   the release's SHA256SUMS.txt and against docs/website/installer_artifacts.json). Download the core model packs
+   from the shared release named by assets_release_tag in installer_artifacts.json (a second gh call; that release
+   has no SHA256SUMS.txt, so each file, or each part of a split pack, is checked against the sha256 and size_bytes
+   of model_packs in installer_artifacts.json).
 2. Run the SAME installer the website generates (shared.installer_script_builder.generate_installer_script)
    inside the target PythonSlicer, as the generated Install-SlicerDSpace.* wrapper does. It uses the
    downloaded asset from --offline-dir, so nothing is downloaded twice. No WMA atlas pack is selected.
@@ -23,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -81,29 +85,70 @@ def find_installed_module_dir(installer_output):
     return Path(match[-1].strip()) if match else None
 
 
-def download_asset(offline_dir, filename, extra_filenames=()):
+def download_asset(offline_dir, filename):
     offline_dir.mkdir(parents=True, exist_ok=True)
     sums = offline_dir / "SHA256SUMS.txt"
-    targets = [filename, *list(extra_filenames or ())]
-    command = ["gh", "release", "download", RELEASE_TAG, "-R", REPO]
-    for name in targets:
-        command.extend(["-p", name])
-    command.extend(["-p", "SHA256SUMS.txt", "-D", str(offline_dir), "--clobber"])
+    command = ["gh", "release", "download", RELEASE_TAG, "-R", REPO, "-p", filename, "-p", "SHA256SUMS.txt",
+               "-D", str(offline_dir), "--clobber"]
     log("run: " + " ".join(command))
     subprocess.run(command, check=True)  # needs GH_TOKEN in the environment
     table = parse_sha256sums(sums.read_text(encoding="utf-8"))
-    primary_sha = ""
-    for name in targets:
-        expected = table.get(name)
-        if not expected:
-            raise SystemExit("SHA256SUMS.txt of release %s does not list %s" % (RELEASE_TAG, name))
-        actual = sha256_of(offline_dir / name)
-        if actual != expected:
-            raise SystemExit("SHA-256 mismatch for %s: %s != %s" % (name, actual, expected))
-        log("verified %s (%d bytes, sha256 %s)" % (name, (offline_dir / name).stat().st_size, actual))
-        if name == filename:
-            primary_sha = actual
-    return primary_sha
+    expected = table.get(filename)
+    if not expected:
+        raise SystemExit("SHA256SUMS.txt of release %s does not list %s" % (RELEASE_TAG, filename))
+    actual = sha256_of(offline_dir / filename)
+    if actual != expected:
+        raise SystemExit("SHA-256 mismatch for %s: %s != %s" % (filename, actual, expected))
+    log("verified %s (%d bytes, sha256 %s)" % (filename, (offline_dir / filename).stat().st_size, actual))
+    return actual
+
+
+def model_pack_files(artifacts):
+    """The files of the published core model packs: one entry per file, or per part of a split pack."""
+    files = []
+    for spec in (artifacts.get("model_packs") or {}).values():
+        if not isinstance(spec, dict) or not spec.get("filename") or not (spec.get("url") or spec.get("parts")):
+            continue
+        for item in (spec.get("parts") or [spec]):
+            files.append({"filename": str(item["filename"]), "sha256": str(item.get("sha256") or "").lower(),
+                          "size_bytes": item.get("size_bytes")})
+    return files
+
+
+def assets_release_tag():
+    """The shared release that holds the model packs. Read from the raw JSON file: load_installer_artifacts() drops this key."""
+    path = REPO_ROOT / "docs" / "website" / "installer_artifacts.json"
+    tag = str(json.loads(path.read_text(encoding="utf-8")).get("assets_release_tag") or "")
+    if not tag:
+        raise SystemExit("docs/website/installer_artifacts.json has no assets_release_tag; cannot find the model packs")
+    return tag
+
+
+def download_model_packs(offline_dir, files):
+    """Download the model pack files from the shared assets release and check each one against installer_artifacts.json."""
+    if not files:
+        return
+    tag = assets_release_tag()
+    offline_dir.mkdir(parents=True, exist_ok=True)
+    command = ["gh", "release", "download", tag, "-R", REPO]
+    for item in files:
+        command.extend(["-p", item["filename"]])
+    command.extend(["-D", str(offline_dir), "--clobber"])
+    log("run: " + " ".join(command))
+    subprocess.run(command, check=True)  # needs GH_TOKEN in the environment
+    for item in files:
+        name, path = item["filename"], offline_dir / item["filename"]
+        if not item["sha256"]:
+            raise SystemExit("installer_artifacts.json has no sha256 for model pack file %s" % name)
+        if not path.is_file():
+            raise SystemExit("Release %s did not provide model pack file %s" % (tag, name))
+        size = path.stat().st_size
+        if item["size_bytes"] is not None and size != int(item["size_bytes"]):
+            raise SystemExit("Size mismatch for %s: %d != %s" % (name, size, item["size_bytes"]))
+        actual = sha256_of(path)
+        if actual != item["sha256"]:
+            raise SystemExit("SHA-256 mismatch for %s: %s != %s" % (name, actual, item["sha256"]))
+        log("verified %s (%d bytes, sha256 %s)" % (name, size, actual))
 
 
 def run_website_installer(python_slicer, slicer_exe, target_os, offline_dir, bundle_key, asset_sha):
@@ -269,17 +314,14 @@ def main(argv=None):
     asset = args.offline_dir / filename
     from shared.installer_script_builder import load_installer_artifacts
     artifacts = load_installer_artifacts()
-    model_pack_names = [
-        str(spec["filename"])
-        for spec in (artifacts.get("model_packs") or {}).values()
-        if isinstance(spec, dict) and spec.get("filename") and (spec.get("url") or spec.get("parts"))
-    ]
+    pack_files = model_pack_files(artifacts)
     if args.reinstall:
         if not asset.is_file():
             raise SystemExit("--reinstall needs %s from the first install run; pass --keep-asset to that run" % asset)
         asset_sha = sha256_of(asset)
     else:
-        asset_sha = download_asset(args.offline_dir, filename, extra_filenames=model_pack_names)
+        asset_sha = download_asset(args.offline_dir, filename)
+        download_model_packs(args.offline_dir, pack_files)
     output = run_website_installer(args.python_slicer, args.slicer_exe, target_os, args.offline_dir, bundle_key, asset_sha)
     module_dir = find_installed_module_dir(output)
     if args.reinstall:
@@ -290,8 +332,8 @@ def main(argv=None):
     cancelled = [] if args.reinstall else cancel_scheduled_uninstall(args.slicer_exe)
     if not args.keep_asset:
         asset.unlink(missing_ok=True)
-        for mp_name in model_pack_names:
-            (args.offline_dir / mp_name).unlink(missing_ok=True)
+        for item in pack_files:
+            (args.offline_dir / item["filename"]).unlink(missing_ok=True)
     write_outputs({"module_dir": module_dir, "ext_root": module_dir.parents[2], "overlay_files": count,
                    "scheduled_uninstall_cancelled": len(cancelled)})
     return 0

@@ -144,7 +144,8 @@ jobs:
           python .github/scripts/repackage_release_assets.py build-example-hcp-nrrd \
             --assets-tag "assets" \
             --repo "$GITHUB_REPOSITORY" \
-            --work-dir "${{ runner.temp }}/example-hcp-nrrd"
+            --work-dir "${{ runner.temp }}/example-hcp-nrrd" \
+            --prune-nifti
 
   ensure-release:
     if: (github.event_name == 'push' && startsWith(github.ref_name, 'v')) || inputs.phase == 'full-release' || inputs.phase == 'model-packs' || inputs.phase == 'os-bases'

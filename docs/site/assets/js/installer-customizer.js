@@ -152,21 +152,21 @@
         filename: 'SlicerDSpace-v1.0.0-Windows-x64.zip',
         url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Windows-x64.zip',
         size_bytes: 369918798,
-        sha256: '342c668e5f9536387dfe8eb1ef1cd90a2d5978b89131296a12f139384230f40f',
+        sha256: '694f3f5fd0183cd92d1066c93c661500c716b829a269836d9978495739138ef8',
         parts: []
       },
       linux_x64_base: {
         filename: 'SlicerDSpace-v1.0.0-Linux-x64.tar.gz',
         url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-Linux-x64.tar.gz',
-        size_bytes: 518474479,
-        sha256: '9ba3f74846e1c95dd1c147f58345241f2bd38246ae4b2ec33590f0a9e463aa52',
+        size_bytes: 518474539,
+        sha256: '3f64140563c02dded5357e05494e57dbdbcbb989a0ed63cae2fa74c2c247c992',
         parts: []
       },
       macos_arm64_base: {
         filename: 'SlicerDSpace-v1.0.0-macOS-arm64.tar.gz',
         url: RELEASE_BASE + '/SlicerDSpace-v1.0.0-macOS-arm64.tar.gz',
-        size_bytes: 366908079,
-        sha256: '6fc19cf360d4f8d8e7c1c98aba4039af10aec659f77e04b9c6f564f90ddc07ef',
+        size_bytes: 366907886,
+        sha256: 'fecc9fc60264bed228c5da3a32d7a9e99e6d7a41d7a16b1157efacb95fda38f6',
         parts: []
       }
     }
@@ -182,7 +182,7 @@
       modelPlaceholder: '~/Library/Application Support/SlicerDSpace/model-assets',
       setupZipName: 'SlicerDSpaceSetup-macOS.zip',
       scriptName: 'Install-SlicerDSpace.command',
-      baseEstimateBytes: 366908079
+      baseEstimateBytes: 366907886
     },
     windows: {
       label: 'Windows',
@@ -202,7 +202,7 @@
       modelPlaceholder: '~/.local/share/SlicerDSpace/model-assets',
       setupZipName: 'SlicerDSpaceSetup-Linux.zip',
       scriptName: 'Install-SlicerDSpace.sh',
-      baseEstimateBytes: 518474479
+      baseEstimateBytes: 518474539
     }
   };
 

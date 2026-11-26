@@ -13,6 +13,7 @@ installer script and the graphical Setup module (SETUP_MODULE_PY). The installed
 
 from __future__ import annotations
 
+import errno
 import importlib.util
 import io
 import json
@@ -537,6 +538,21 @@ class PruneSysPathTests(unittest.TestCase):
                     self.assertIn("did not put mod_root on sys.path", result.failures[0][1], f"{label}/{test_name}")
 
 
+def _symlink_unsupported_reason() -> str | None:
+    """None when this process can create a directory symlink; else why not (Windows without the privilege).
+
+    Only the os.symlink call is inside the try: any other error is a real error, not a skip.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        real_dir = Path(root) / "real"
+        real_dir.mkdir()
+        try:
+            os.symlink(real_dir, Path(root) / "link", target_is_directory=True)
+        except (OSError, NotImplementedError, AttributeError) as exc:
+            return f"{type(exc).__name__}: {exc}"
+    return None
+
+
 def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp: bool, exit_tick: bool = False,
                                          inside_run=None, leak_join_seconds: float = 3.0):
     """Run the behaviour tests of PruneFallbackTests (not PruneGuardTests or this class: no recursion) with unittest.
@@ -664,19 +680,19 @@ class PruneOrderIndependenceTests(unittest.TestCase):
 
     def test_prune_order_symlinked_temp_root_with_a_leaked_sampler(self) -> None:
         # Both CI conditions at once. The path compare works on real paths (macOS /private/var, Windows RUNNER~1).
-        try:
-            result, before, after = _run_prune_cases_under_ci_conditions(leaked_sampler=True, symlinked_tmp=True)
-        except OSError as exc:  # Windows without the symlink privilege
-            self.skipTest(f"cannot create a symlink here: {exc}")
+        reason = _symlink_unsupported_reason()  # Windows without the symlink privilege
+        if reason:
+            self.skipTest(f"cannot create a symlink here: {reason}")
+        result, before, after = _run_prune_cases_under_ci_conditions(leaked_sampler=True, symlinked_tmp=True)
         self._assert_clean(result)
         self.assertEqual(before, after)
 
     def test_prune_order_current_package_path_check_survives_a_symlinked_temp_root(self) -> None:
         # No sampler: only the path case. The current package resolves model_assets_dir; the test compares real paths.
-        try:
-            result, before, after = _run_prune_cases_under_ci_conditions(leaked_sampler=False, symlinked_tmp=True)
-        except OSError as exc:
-            self.skipTest(f"cannot create a symlink here: {exc}")
+        reason = _symlink_unsupported_reason()
+        if reason:
+            self.skipTest(f"cannot create a symlink here: {reason}")
+        result, before, after = _run_prune_cases_under_ci_conditions(leaked_sampler=False, symlinked_tmp=True)
         self._assert_clean(result)
         self.assertEqual(before, after)
 
@@ -797,6 +813,80 @@ class PruneOrderIndependenceTests(unittest.TestCase):
         self.assertEqual(before["leaked_threads"], [])
         self.assertEqual(after["leaked_threads"], ["leaked-by-the-run"])
         self.assertNotEqual(before, after)
+
+
+class PruneSymlinkPrecheckTests(unittest.TestCase):
+    """Finding "Opus P2 (prune harness) symlink": the two symlink tests wrapped the whole run in ``except OSError`` and
+    skipped, so a Windows cleanup PermissionError looked like "cannot create a symlink". Only os.symlink is pre-checked
+    now. These tests fake both the pre-check and the run, so they run (not skip) on every platform."""
+
+    _SYMLINK_TESTS = (
+        "test_prune_order_symlinked_temp_root_with_a_leaked_sampler",
+        "test_prune_order_current_package_path_check_survives_a_symlinked_temp_root",
+    )
+
+    @staticmethod
+    def _run_inner(name: str, reason, fake_run):
+        module = sys.modules[PruneOrderIndependenceTests.__module__]
+        result = unittest.TestResult()
+        with patch.object(module, "_symlink_unsupported_reason", lambda: reason, create=True), \
+                patch.object(module, "_run_prune_cases_under_ci_conditions", fake_run):
+            PruneOrderIndependenceTests(name).run(result)
+        return result
+
+    def test_opus_p2_prune_harness_symlink_a_run_oserror_is_an_error_not_a_skip(self) -> None:
+        def cleanup_fails(**_kwargs):
+            raise PermissionError(13, "cleanup failed", "x")
+
+        for name in self._SYMLINK_TESTS:
+            with self.subTest(name):
+                result = self._run_inner(name, None, cleanup_fails)
+                self.assertEqual(result.skipped, [], f"{name}: skipped: {result.skipped}")
+                self.assertEqual(len(result.errors), 1, f"{name}: errors={result.errors} failures={result.failures}")
+                self.assertIn("PermissionError", result.errors[0][1])
+
+    def test_opus_p2_prune_harness_symlink_an_unsupported_symlink_skips_without_running(self) -> None:
+        calls = []
+
+        def must_not_run(**kwargs):
+            calls.append(kwargs)
+            raise AssertionError("the run must not start when symlinks are unsupported")
+
+        for name in self._SYMLINK_TESTS:
+            with self.subTest(name):
+                result = self._run_inner(name, "no privilege", must_not_run)
+                self.assertEqual(calls, [])
+                self.assertEqual(result.errors + result.failures, [])
+                self.assertEqual(len(result.skipped), 1, f"{name}: {result.skipped}")
+                self.assertIn("no privilege", result.skipped[0][1])
+
+    def test_opus_p2_prune_harness_symlink_precheck_reports_a_missing_privilege(self) -> None:
+        err = OSError(1314, "A required privilege is not held by the client")
+        with patch.object(os, "symlink", side_effect=err):
+            reason = _symlink_unsupported_reason()
+        self.assertIsNotNone(reason)
+        self.assertIn("privilege", reason)
+
+    def test_opus_p2_prune_harness_symlink_precheck_reports_an_unsupported_filesystem(self) -> None:
+        # Codex P1: an exFAT-like temp folder (EOPNOTSUPP) is a skip reason on any platform, not only on Windows.
+        err = OSError(errno.EOPNOTSUPP, "Operation not supported")
+        with patch.object(os, "symlink", side_effect=err):
+            reason = _symlink_unsupported_reason()
+        self.assertIsNotNone(reason)
+        self.assertIn("Operation not supported", reason)
+
+    def test_opus_p2_prune_harness_symlink_precheck_is_none_where_symlinks_work(self) -> None:
+        # Codex P1: success path must not need host symlink support, so os.symlink is faked to succeed.
+        calls: list[tuple[tuple, dict]] = []
+
+        def fake_symlink(*args, **kwargs) -> None:
+            calls.append((args, kwargs))
+
+        with patch.object(os, "symlink", fake_symlink):
+            reason = _symlink_unsupported_reason()
+        self.assertIsNone(reason)
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0][1].get("target_is_directory"), True)
 
 
 class PruneWorkflowSyncTests(unittest.TestCase):

@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from shared.model_assets import (
-    MODEL_ASSETS_ENV,
     bundled_model_asset_roots,
     configured_model_assets_root,
 )
@@ -79,9 +78,9 @@ def _format_size(num_bytes: int) -> str:
 
 
 def _candidate_asset_roots(explicit_root: Path | str | None = None) -> tuple[Path, ...]:
-    roots = [configured_model_assets_root(explicit_root)]
-    if explicit_root is None and not os.environ.get(MODEL_ASSETS_ENV):
-        roots.extend(bundled_model_asset_roots(REPO_ROOT))
+    # The bundled root is read with a configured root too: setup saves model_assets_dir after the first on-demand
+    # install, and the base package still ships DDSeg and DDParcel in bundled-model-assets.
+    roots = [configured_model_assets_root(explicit_root), *bundled_model_asset_roots(REPO_ROOT)]
     deduped: list[Path] = []
     for root in roots:
         try:

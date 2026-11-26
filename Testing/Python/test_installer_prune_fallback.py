@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 from pathlib import Path
@@ -536,7 +537,8 @@ class PruneSysPathTests(unittest.TestCase):
                     self.assertIn("did not put mod_root on sys.path", result.failures[0][1], f"{label}/{test_name}")
 
 
-def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp: bool, exit_tick: bool = False):
+def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp: bool, exit_tick: bool = False,
+                                         inside_run=None, leak_join_seconds: float = 3.0):
     """Run the behaviour tests of PruneFallbackTests (not PruneGuardTests or this class: no recursion) with unittest.
 
     leaked_sampler: another thread runs the lazy import of the StageMonitor sampler that test_cohort_granularity leaves
@@ -547,6 +549,11 @@ def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp:
     exit_tick: finding B1. The sampler also ticks inside _Isolated.__exit__, between the restore of the saved shared.*
     children and the restore of the parent (_between_exit_phases; this point exists in both orders). shared.hardware_adapt is
     imported before the first state(), so the saved sys.modules holds it.
+    inside_run: a callable that runs on the calling thread at the same point as exit_tick (every _Isolated.__exit__).
+    Finding Opus P2 (prune harness) thread count: the state holds ``leaked_threads``, the names of the threads that this run
+    started from the calling thread and that are still alive after a join of at most leak_join_seconds in total. It is
+    [] before the run. threading.active_count() is not compared: a foreign thread (a sampler of an earlier test module)
+    that ends or starts during the run changed the count and failed the check by chance.
     Returns (TestResult, process state before, process state after)."""
     from shared import cohort_profile  # the repo module; its function object keeps working after the harness drops it
 
@@ -572,6 +579,21 @@ def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp:
         return real_stub()
 
     tracked: set = set()
+    caller = threading.current_thread()
+    started: list = []  # Thread objects that start() was called on from the calling thread during the run
+    real_start = threading.Thread.start
+
+    def recording_start(self, *args, **kwargs):
+        result = real_start(self, *args, **kwargs)
+        if threading.current_thread() is caller:  # a thread started by a foreign thread is not ours
+            started.append(self)
+        return result
+
+    def leaked_threads():
+        deadline = time.monotonic() + leak_join_seconds
+        for thread in list(started):
+            thread.join(max(0.0, deadline - time.monotonic()))
+        return sorted(t.name for t in started if t.is_alive())
 
     def state():
         # Finding B1: the identity of every shared* entry, and whether each child is still the attribute of its parent.
@@ -587,7 +609,7 @@ def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp:
         if not tracked:
             tracked.update(keys)
         return {"shared": shared, "path": list(sys.path), "environ": dict(os.environ),
-                "tempdir": tempfile.tempdir, "threads": threading.active_count(), "ids": ids, "attrs": attrs}
+                "tempdir": tempfile.tempdir, "leaked_threads": leaked_threads(), "ids": ids, "attrs": attrs}
 
     names = [n for n in unittest.defaultTestLoader.getTestCaseNames(PruneFallbackTests)
              if n != "test_prune_stub_matches_the_release_package_shape"]
@@ -606,8 +628,14 @@ def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp:
         if leaked_sampler:
             patches.append(patch.object(subprocess, "run", run_with_tick))
             patches.append(patch.dict(globals(), {"_stub_environment_module": stub_with_tick}))
-        if exit_tick:
-            patches.append(patch.object(_Isolated, "_between_exit_phases", lambda self: tick()))
+        if exit_tick or inside_run is not None:
+            def exit_hook(self) -> None:
+                if exit_tick:
+                    tick()
+                if inside_run is not None:
+                    inside_run()
+            patches.append(patch.object(_Isolated, "_between_exit_phases", exit_hook))
+        patches.append(patch.object(threading.Thread, "start", recording_start))
         for p in patches:
             p.start()
         try:
@@ -653,11 +681,12 @@ class PruneOrderIndependenceTests(unittest.TestCase):
         self.assertEqual(before, after)
 
     def test_prune_order_harness_leaves_the_process_state_as_it_found_it(self) -> None:
-        # No leaked patches: sys.modules['shared'], sys.path, os.environ, tempfile.tempdir and the thread count.
+        # No leaked patches: sys.modules['shared'], sys.path, os.environ, tempfile.tempdir and no thread of this run left alive.
         result, before, after = _run_prune_cases_under_ci_conditions(leaked_sampler=False, symlinked_tmp=False)
         self._assert_clean(result)
         self.assertIs(before["shared"], after["shared"])
         self.assertEqual(before, after)
+        self.assertEqual(after["leaked_threads"], [])
 
     def test_prune_order_b1_sampler_between_the_restores_leaves_no_second_hardware_adapt(self) -> None:
         # Finding B1 (Opus review): a sampler tick between the child and parent restores of _Isolated.__exit__.
@@ -674,6 +703,100 @@ class PruneOrderIndependenceTests(unittest.TestCase):
         for key, was_attr in before["attrs"].items():
             if was_attr:
                 self.assertTrue(after["attrs"].get(key), f"{key} is not the attribute of the shared package any more")
+
+    def _daemon(self, target, name: str) -> threading.Thread:
+        thread = threading.Thread(target=target, name=name, daemon=True)
+        thread.start()
+        return thread
+
+    def _stoppable(self, name: str) -> tuple:
+        """A daemon thread that waits on an Event. addCleanup sets the Event and joins the thread."""
+        stop = threading.Event()
+        thread = self._daemon(stop.wait, name)
+
+        def cleanup() -> None:
+            stop.set()
+            thread.join(5)
+        self.addCleanup(cleanup)
+        return stop, thread
+
+    def test_prune_order_thread_check_ignores_a_foreign_thread_that_ends_during_the_run(self) -> None:
+        # Opus P2 (prune harness) thread count: an earlier module's sampler can end while the inner run goes on.
+        # threading.active_count() dropped by one and before != after.
+        release, foreign = self._stoppable("foreign-ends-during-run")
+
+        def end_foreign_thread() -> None:
+            release.set()
+            foreign.join(5)
+
+        result, before, after = _run_prune_cases_under_ci_conditions(
+            leaked_sampler=False, symlinked_tmp=False, inside_run=end_foreign_thread)
+        self.assertFalse(foreign.is_alive(), "the hook did not end the foreign thread")
+        self._assert_clean(result)
+        self.assertEqual(before, after)
+        self.assertEqual(after["leaked_threads"], [])
+
+    def test_prune_order_thread_check_ignores_a_thread_that_a_foreign_thread_starts_during_the_run(self) -> None:
+        # Opus P2 (prune harness) thread count: a background thread starts another thread during the run (not the calling
+        # thread) and it stays alive until the cleanup. The old count rose by one.
+        go = threading.Event()
+        child_started = threading.Event()
+        stop = threading.Event()
+        children: list = []
+
+        def foreign_parent() -> None:
+            go.wait()
+            child = threading.Thread(target=stop.wait, name="child-of-foreign-thread", daemon=True)
+            child.start()
+            children.append(child)
+            child_started.set()
+            stop.wait()  # the parent stays alive too: only the child is new, so the old count rose by one
+
+        parent = self._daemon(foreign_parent, "foreign-parent")
+
+        def cleanup() -> None:
+            go.set()
+            stop.set()
+            parent.join(5)
+            for child in children:
+                child.join(5)
+        self.addCleanup(cleanup)
+
+        def start_child_in_foreign_thread() -> None:
+            go.set()
+            self.assertTrue(child_started.wait(5), "the foreign thread did not start its child")
+
+        result, before, after = _run_prune_cases_under_ci_conditions(
+            leaked_sampler=False, symlinked_tmp=False, inside_run=start_child_in_foreign_thread)
+        self.assertTrue(children and children[0].is_alive(), "the child must stay alive during the check")
+        self._assert_clean(result)
+        self.assertEqual(before, after)
+        self.assertEqual(after["leaked_threads"], [])
+
+    def test_prune_order_thread_check_still_reports_a_thread_that_the_run_started_and_left_alive(self) -> None:
+        # Opus P2 (prune harness) thread count: the new check must catch what the count caught. A thread that the calling
+        # thread starts inside the run and leaves alive is a leak.
+        stop = threading.Event()
+        threads: list = []
+
+        def start_and_leave_a_thread() -> None:
+            if not threads:
+                thread = threading.Thread(target=stop.wait, name="leaked-by-the-run", daemon=True)
+                thread.start()
+                threads.append(thread)
+
+        def cleanup() -> None:
+            stop.set()
+            for thread in threads:
+                thread.join(5)
+        self.addCleanup(cleanup)
+
+        result, before, after = _run_prune_cases_under_ci_conditions(
+            leaked_sampler=False, symlinked_tmp=False, inside_run=start_and_leave_a_thread, leak_join_seconds=0.2)
+        self._assert_clean(result)
+        self.assertEqual(before["leaked_threads"], [])
+        self.assertEqual(after["leaked_threads"], ["leaked-by-the-run"])
+        self.assertNotEqual(before, after)
 
 
 class PruneWorkflowSyncTests(unittest.TestCase):

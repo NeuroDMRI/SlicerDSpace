@@ -86,61 +86,94 @@ def build_library(out_dir: Path, *, source: Path = CPP_SOURCE) -> Path:
     tmp_path = out_dir / f".tmp_{out_path.name}"
 
     cxx, kind = find_compiler(sys_name)
-    commands: list[list[str]] = []
+    obj_path = out_dir / f".tmp_{out_path.stem}.o"
+    # Each attempt is a list of sequential commands (1-step compile+link or 2-step compile then link).
+    attempts: list[list[list[str]]] = []
     if sys_name == "windows":
         if kind == "gcc":
-            # Static libgcc/libstdc++/libgomp/winpthread -> zero external DLL dependencies.
-            commands.append([
-                cxx, "-O3", "-fno-math-errno", "-funroll-loops", "-std=c++17", "-fopenmp",
-                "-shared", "-static", "-static-libgcc", "-static-libstdc++",
-                str(source), "-o", str(tmp_path),
-                "-Wl,-Bstatic", "-lgomp", "-lpthread", "-Wl,-Bdynamic",
+            # Compile with -fopenmp, then link WITHOUT -fopenmp so GCC does not append dynamic -lgomp
+            # after -Wl,-Bdynamic; static libgcc/libstdc++/libgomp/winpthread -> zero external DLL deps.
+            attempts.append([
+                [cxx, "-O3", "-fno-math-errno", "-funroll-loops", "-std=c++17", "-fopenmp", "-c", str(source), "-o", str(obj_path)],
+                [
+                    cxx, "-shared", "-static", "-static-libgcc", "-static-libstdc++",
+                    str(obj_path), "-o", str(tmp_path),
+                    "-Wl,-Bstatic", "-lgomp", "-lstdc++", "-lpthread", "-Wl,-Bdynamic",
+                ],
             ])
-            commands.append([
-                cxx, "-O3", "-fno-math-errno", "-funroll-loops", "-std=c++17",
-                "-shared", "-static", "-static-libgcc", "-static-libstdc++",
-                str(source), "-o", str(tmp_path),
+            # Fallback: static single-threaded MinGW DLL (guaranteed zero external DLL deps).
+            attempts.append([
+                [
+                    cxx, "-O3", "-fno-math-errno", "-funroll-loops", "-std=c++17",
+                    "-shared", "-static", "-static-libgcc", "-static-libstdc++",
+                    str(source), "-o", str(tmp_path),
+                    "-Wl,-Bstatic", "-lstdc++", "-lpthread", "-Wl,-Bdynamic",
+                ],
             ])
         else:
-            commands.append([
+            attempts.append([[
                 cxx, "/nologo", "/O2", "/std:c++17", "/EHsc", "/MT", "/LD",
                 str(source), f"/Fe:{tmp_path}",
-            ])
+            ]])
     elif sys_name == "darwin":
         # Universal2 fat dylib supports both 3D Slicer 5.10 (x86_64 Rosetta) and native arm64 Python/Slicer.
-        commands.append([
+        attempts.append([[
             cxx, "-O3", "-fno-math-errno", "-funroll-loops", "-std=c++17",
             "-mmacosx-version-min=13.0", "-arch", "arm64", "-arch", "x86_64",
             "-shared", "-fPIC",
             "-install_name", f"@loader_path/{out_path.name}",
             str(source), "-o", str(tmp_path),
-        ])
+        ]])
     else:
-        commands.append([
+        attempts.append([[
             cxx, "-O3", "-fno-math-errno", "-funroll-loops", "-std=c++17", "-fopenmp",
             "-shared", "-fPIC", "-static-libstdc++", "-static-libgcc",
             str(source), "-o", str(tmp_path),
-        ])
-        commands.append([
+        ]])
+        attempts.append([[
             cxx, "-O3", "-fno-math-errno", "-funroll-loops", "-std=c++17", "-fopenmp",
             "-shared", "-fPIC",
             str(source), "-o", str(tmp_path),
-        ])
+        ]])
 
     last_err = ""
     built = False
     try:
-        for cmd in commands:
-            print("[build_surface_refine] Running:", " ".join(cmd), flush=True)
-            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-            if proc.returncode == 0 and tmp_path.is_file() and tmp_path.stat().st_size > 0:
-                os.replace(tmp_path, out_path)
-                built = True
-                break
-            last_err = proc.stdout.strip()
-            print(f"[build_surface_refine] Attempt failed (rc={proc.returncode}): {last_err[-400:]}", flush=True)
+        for steps in attempts:
+            tmp_path.unlink(missing_ok=True)
+            obj_path.unlink(missing_ok=True)
+            ok = True
+            for cmd in steps:
+                print("[build_surface_refine] Running:", " ".join(cmd), flush=True)
+                proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                if proc.returncode != 0:
+                    last_err = proc.stdout.strip()
+                    print(f"[build_surface_refine] Step failed (rc={proc.returncode}): {last_err[-400:]}", flush=True)
+                    ok = False
+                    break
+            if not ok or not tmp_path.is_file() or tmp_path.stat().st_size == 0:
+                continue
+            if sys_name == "windows" and shutil.which("objdump"):
+                od = subprocess.run(["objdump", "-p", str(tmp_path)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                dlls = [ln.strip() for ln in od.stdout.splitlines() if "DLL Name:" in ln]
+                print("[build_surface_refine] Windows DLL imports:", ", ".join(dlls), flush=True)
+            probe = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve()), "--verify-only", str(tmp_path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            if probe.returncode != 0:
+                last_err = f"Verification failed:\n{probe.stdout.strip()}"
+                print(f"[build_surface_refine] {last_err}", flush=True)
+                continue
+            print(probe.stdout.strip(), flush=True)
+            os.replace(tmp_path, out_path)
+            built = True
+            break
     finally:
         tmp_path.unlink(missing_ok=True)
+        obj_path.unlink(missing_ok=True)
         for leftover in out_dir.glob(".tmp_*.exp"):
             leftover.unlink(missing_ok=True)
         for leftover in out_dir.glob(".tmp_*.lib"):
@@ -154,6 +187,8 @@ def build_library(out_dir: Path, *, source: Path = CPP_SOURCE) -> Path:
     if sys_name == "darwin" and shutil.which("strip"):
         subprocess.run(["strip", "-x", str(out_path)], check=False)
     elif sys_name == "linux" and shutil.which("strip"):
+        subprocess.run(["strip", "--strip-unneeded", str(out_path)], check=False)
+    elif sys_name == "windows" and shutil.which("strip"):
         subprocess.run(["strip", "--strip-unneeded", str(out_path)], check=False)
 
     return out_path
@@ -196,7 +231,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--source", type=Path, default=CPP_SOURCE)
+    parser.add_argument("--verify-only", type=Path, default=None)
     args = parser.parse_args(argv)
+    if args.verify_only is not None:
+        verify_library(args.verify_only)
+        return 0
     lib_path = build_library(args.out_dir, source=args.source)
     verify_library(lib_path)
     return 0

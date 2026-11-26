@@ -647,7 +647,9 @@ def environment_item_text(item: Any, zh: bool = False) -> str:
     """Build the multi-line text for one missing dependency item.
 
     b2-os, decision 4: "Suggested fix" only when the hint is not empty and differs from the reason. ``zh`` uses the
-    Chinese reason and hint where the row has them.
+    Chinese reason and hint where the row has them. A ``path`` row does not print its reason, so a hint that equals
+    the reason (a model folder that "is incomplete", a bundled model file of another release) is printed once as
+    plain text: it is the only guidance of that row.
     """
 
     required = "required" if item.required else "optional"
@@ -682,9 +684,12 @@ def environment_item_text(item: Any, zh: bool = False) -> str:
     elif item.kind == "device":
         lines.append(f"Requested device: {details.get('requested_device') or ''}")
     reason, hint = _item_reason_and_hint(item, zh)
+    hint_is_the_reason = bool(hint.strip()) and hint.strip() == reason.strip()
     if item.kind == "setting":
         lines.append(reason or "Provide the required setting before running.")
-    if hint.strip() and hint.strip() != reason.strip():
+    elif item.kind == "path" and hint_is_the_reason:
+        lines.append(reason.strip())
+    if hint.strip() and not hint_is_the_reason:
         lines.append(("建议操作：" if zh else "Suggested fix: ") + hint)
     checked_locations = details.get("checked_locations") or []
     if checked_locations:

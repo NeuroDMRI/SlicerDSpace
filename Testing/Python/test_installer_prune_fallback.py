@@ -36,7 +36,7 @@ if str(TESTS_ROOT) not in sys.path:
     sys.path.insert(0, str(TESTS_ROOT))
 
 from test_b4_w4_platform import _js_payload, _load, _python_payload
-from test_installer_gui_reinstall_gap import load_setup_module
+from test_installer_gui_reinstall_gap import load_setup_module, setup_module_source
 
 # The commit that the published base packages (repack-os-base) are built from: the parent of 5070ca29 "sync repacked
 # v0.1.1 checksums and setup zips to website". The tag v0.1.1 is not that code: the packages hold fresh HEAD code.
@@ -322,6 +322,12 @@ class PruneFallbackTests(unittest.TestCase):
                     run = factory()
                     with _Isolated(project, release_package=release_package):
                         logs = run(project)
+                        # Finding Opus P2 (prune harness): _Isolated puts the stub package of module_root into sys.modules
+                        # itself, so a copy that lost its own sys.path.insert(0, mod_root) would still pass. Check that the
+                        # installer put mod_root on sys.path (sys.path is patched here and restored on exit).
+                        self.assertIn(
+                            str(project.module_root), sys.path,
+                            f"the {label} installer did not put mod_root on sys.path (its sys.path.insert is missing)")
                     check(project, deps, logs)
 
     def _assert_deps(self, project: _Project, expected: dict) -> None:
@@ -454,6 +460,80 @@ class PruneGuardTests(unittest.TestCase):
         self.assertEqual(len(result.skipped), 2, "both JS copies must be reported as skipped, not dropped")
         for _, reason in result.skipped:
             self.assertIn("node is not installed", reason)
+
+
+class PruneSysPathTests(unittest.TestCase):
+    """Finding Opus P2 (prune harness): _run_case must fail a copy whose own sys.path.insert(0, mod_root) is gone.
+
+    Each copy gets a variant with that insert replaced by ``pass``. A PruneFallbackTests subclass that yields only the
+    variant must fail on sys.path, not on another error. Before the assertion in _run_case, the variants passed."""
+
+    PY_INSERT = "sys.path.insert(0, str(module_root))"
+    JS_INSERT = "sys.path.insert(0, str(mod_root))"
+    CASES = ("test_prune_release_package_still_sets_the_model_assets_dir",
+             "test_prune_current_package_still_sets_the_model_assets_dir")
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.python_payload = _python_payload("linux")
+        node = shutil.which("node") is not None
+        cls.js_payload = _js_payload("linux") if node else None
+        cls.setup_source = setup_module_source() if node else None
+
+    @staticmethod
+    def _without(text: str, insert: str, what: str) -> str:
+        # Not vacuous: the insert text must exist, or the variant would be the unchanged copy.
+        assert text.count(insert) >= 1, f"{what} no longer holds {insert!r}: update PruneSysPathTests"
+        return text.replace(insert, "pass")
+
+    def _variants(self):
+        """Yield (label, factory) for each copy without its sys.path insert; factory is None when node is missing."""
+        def script(payload):
+            def factory():
+                ns = _load(payload)
+                return lambda project: _run_script_main(ns, project)
+            return factory
+
+        def setup_module(source):
+            def factory():
+                ns = load_setup_module(source=source)
+                return lambda project: _run_setup_module(project, ns=ns)
+            return factory
+
+        yield "python_builder", script(self._without(self.python_payload, self.PY_INSERT, "the Python builder payload"))
+        if self.js_payload is None:
+            yield "js_script", None
+            yield "js_setup_module", None
+            return
+        yield "js_script", script(self._without(self.js_payload, self.JS_INSERT, "the JS script payload"))
+        yield "js_setup_module", setup_module(self._without(self.setup_source, self.JS_INSERT, "the JS Setup module"))
+
+    def _run_variant(self, label: str, factory, test_name: str) -> unittest.TestResult:
+        class OneCopy(PruneFallbackTests):
+            @classmethod
+            def setUpClass(cls) -> None:  # the payloads are not used: _factories yields the variant
+                pass
+
+            def _factories(self):
+                yield label, factory
+
+        result = unittest.TestResult()
+        OneCopy(test_name).run(result)
+        return result
+
+    def test_prune_p2_installer_without_the_sys_path_insert_fails_the_case(self) -> None:
+        for label, factory in self._variants():
+            with self.subTest(copy=label):
+                if factory is None:
+                    if _on_ci():
+                        self.fail("node is required on CI for the JS installer copies (node is not in PATH)")
+                    self.skipTest("node is not installed in PATH: the JS installer copy is not tested")
+                for test_name in self.CASES:
+                    result = self._run_variant(label, factory, test_name)
+                    self.assertEqual(result.testsRun, 1, test_name)
+                    self.assertEqual(result.errors, [], f"{label}/{test_name}: an error, not a failed sys.path check")
+                    self.assertEqual(len(result.failures), 1, f"{label}/{test_name}: the variant passed: {result.skipped}")
+                    self.assertIn("did not put mod_root on sys.path", result.failures[0][1], f"{label}/{test_name}")
 
 
 def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp: bool, exit_tick: bool = False):

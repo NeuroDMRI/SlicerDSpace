@@ -169,12 +169,12 @@ def sync_parameter_node_to_ui(widget) -> None:
     widget._sync_line_edit(getattr(ui, "orchestrationRunNameLineEdit", None), node.orchestrationRunName or "")
     widget._sync_combo_text(
         getattr(ui, "orchestrationTractographyBackendComboBox", None),
-        node.orchestrationTractographyBackend or "csd_act",
+        node.orchestrationTractographyBackend or "ukf",
         via_index=False,
     )
     widget._sync_combo_text(
         getattr(ui, "orchestrationBundleBackendComboBox", None),
-        getattr(node, "orchestrationBundleBackend", "wmql") or "wmql",
+        getattr(node, "orchestrationBundleBackend", "tractcloud") or "tractcloud",
         via_index=False,
     )
     widget._sync_path_widget(

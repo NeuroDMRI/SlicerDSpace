@@ -213,7 +213,7 @@
         <item row="0" column="1">
          <widget class="QCheckBox" name="targetPreprocessingCheckBox">
           <property name="checked">
-           <bool>true</bool>
+           <bool>false</bool>
           </property>
           <property name="SlicerParameterName" stdset="0">
            <string>targetPreprocessing</string>
@@ -542,7 +542,7 @@
         <item row="2" column="1">
          <widget class="QComboBox" name="orchestrationTractographyBackendComboBox">
           <property name="toolTip">
-           <string>csd_act: MRtrix CSD/ACT/SIFT2. ukf: installed official UKFTractography extension (Advanced author-default parameters). dti_det: DIPY deterministic tracking. saf: CSD plus surface filtering. ACT streamline count does not apply to UKF.</string>
+           <string>csd_act: CSD / ACT / SIFT2. ukf: installed official UKFTractography extension (Advanced author-default parameters). dti_det: DIPY deterministic tracking. saf: CSD plus surface filtering. ACT streamline count does not apply to UKF.</string>
           </property>
           <property name="SlicerParameterName" stdset="0">
            <string>orchestrationTractographyBackend</string>

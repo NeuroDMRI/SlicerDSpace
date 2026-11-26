@@ -98,8 +98,8 @@ def compact_algorithm_labels(node: Any, blocked: Any = ()) -> dict[str, str]:
         val = getattr(node, attr_name, "")
         return val.strip() if isinstance(val, str) else ""
 
-    preprocessing = (_str_attr("orchestrationPreprocessingStages") or "denoise,eddy").lower()
-    preproc_selected = algorithms(preprocessing, PREPROCESSING, "denoise,eddy")
+    preprocessing = (_str_attr("orchestrationPreprocessingStages") or "brain_mask").lower()
+    preproc_selected = algorithms(preprocessing, PREPROCESSING, "brain_mask")
     preproc_visible = [name for name in preproc_selected if name not in blocked] or list(preproc_selected)
     preproc_labels = " + ".join(LABELS[name] for name in preproc_visible)
 
@@ -115,13 +115,13 @@ def compact_algorithm_labels(node: Any, blocked: Any = ()) -> dict[str, str]:
         "targetPreprocessingCheckBox": preproc_labels,
         "targetMicrostructureCheckBox": " + ".join(models),
         "targetTractographyCheckBox": {
-            "csd_act": "MRtrix3 CSD / ACT", "ukf": "UKF",
+            "csd_act": "CSD / ACT", "ukf": "UKF",
             "dti_det": "DTI", "saf": "CSD + SAF",
         }.get(tractography, " + ".join(LABELS[name] for name in algorithms(tractography))),
         "targetBundlesCheckBox": {
             "wmql": "WMQL", "wma": "WMA", "tractcloud": "TractCloud",
             "all": "WMQL + WMA + TractCloud",
-        }.get(bundles, " + ".join(LABELS[name] for name in algorithms(bundles, BUNDLES, "wmql"))),
+        }.get(bundles, " + ".join(LABELS[name] for name in algorithms(bundles, BUNDLES, "tractcloud"))),
         "targetConnectomeCheckBox": connectome_labels,
     }
 
@@ -244,7 +244,7 @@ def refresh_compact_algorithms(owner: Any, language: str | None = None) -> None:
 
             raw_preproc = getattr(node, "orchestrationPreprocessingStages", "") if node is not None else ""
             stored_preproc = _parse_preproc(
-                raw_preproc if isinstance(raw_preproc, str) else "", PREPROCESSING, "denoise,eddy"
+                raw_preproc if isinstance(raw_preproc, str) else "", PREPROCESSING, "brain_mask"
             )
             if stored_preproc == ("topup",):
                 muted = True

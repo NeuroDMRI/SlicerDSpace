@@ -370,14 +370,14 @@ class G3SelectionTest(unittest.TestCase):
         n = node("denoise,eddy,topup")
         with mock.patch("shared.selected_setup.fsl_preprocessing_offered", return_value=False):
             self.assertEqual(picker.selected_algorithms(n, "preprocessing"), ("denoise",))
-            self.assertEqual(picker.selected_algorithms(node(""), "preprocessing"), ("denoise",))  # default has no FSL stage
+            self.assertEqual(picker.selected_algorithms(node(""), "preprocessing"), ("brain_mask",))  # default has no FSL stage
             written = picker._apply_family_selection_to_node(n, "preprocessing", ["brain_mask", "denoise", "eddy", "topup"])
             self.assertEqual(written, ("brain_mask", "denoise"))
             self.assertEqual(n.orchestrationPreprocessingStages, "brain_mask,denoise")
             with self.assertRaises(ValueError):
                 picker._apply_family_selection_to_node(n, "preprocessing", ["eddy", "topup"])
         with mock.patch("shared.selected_setup.fsl_preprocessing_offered", return_value=True):
-            self.assertEqual(picker.selected_algorithms(node(""), "preprocessing"), ("denoise", "eddy"))
+            self.assertEqual(picker.selected_algorithms(node(""), "preprocessing"), ("brain_mask",))
 
     def _run_popup(self, offered, stages="denoise,eddy,topup", lang="en", ui=None, node_obj=None):
         from Testing.Python.test_ui_run_history import fake_qt

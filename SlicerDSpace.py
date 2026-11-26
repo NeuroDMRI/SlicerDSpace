@@ -145,8 +145,8 @@ class SlicerDSpaceParameterNode:
     microstructureRunFreeWater: bool = False
     microstructureRunNoddi: bool = False
     microstructureForceRecompute: bool = False
-    targetPreprocessing: bool = True
-    orchestrationPreprocessingStages: Annotated[str, Choice(selection_choices(PREPROCESSING))] = "denoise,eddy"
+    targetPreprocessing: bool = False
+    orchestrationPreprocessingStages: Annotated[str, Choice(selection_choices(PREPROCESSING))] = "brain_mask"
     brainMaskBackend: Annotated[str, Choice(["pnl_cnn", "provided"])] = "pnl_cnn"
     brainMaskDevice: Annotated[str, Choice(["auto", "cpu", "cuda", "mps"])] = "auto"
     pnlMaskRoute: Annotated[str, Choice(["auto", "managed", "native"])] = "auto"
@@ -157,12 +157,12 @@ class SlicerDSpaceParameterNode:
     preprocessingReversePhaseB0: str = ""
     preprocessingRunGibbs: bool = True
     orchestrationRunName: str = "Test1"
-    orchestrationTractographyBackend: Annotated[str, Choice(selection_choices(TRACKING))] = "csd_act"
+    orchestrationTractographyBackend: Annotated[str, Choice(selection_choices(TRACKING))] = "ukf"
     ukfParameters: str = "{}"
     csdActParameters: str = "{}"
     dtiParameters: str = "{}"
     safParameters: str = "{}"
-    orchestrationBundleBackend: Annotated[str, Choice([*selection_choices(BUNDLES), "all"]) ] = "wmql"
+    orchestrationBundleBackend: Annotated[str, Choice([*selection_choices(BUNDLES), "all"]) ] = "tractcloud"
     orchestrationWmqlPreset: Annotated[str, Choice(["official", "official_cerebellar", "cerebellar"])] = "official"
     orchestrationWmqlSelection: str = ""
     tractcloudParameters: str = "{}"

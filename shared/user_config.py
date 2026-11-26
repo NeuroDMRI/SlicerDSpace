@@ -86,8 +86,8 @@ RUN_DEFAULTS = {
     "ddseg_device": "auto",
     "surface_device": "auto",
     "tractcloud_device": "auto",
-    "tractography_backend": "csd_act",
-    "bundle_backend": "wmql",
+    "tractography_backend": "ukf",
+    "bundle_backend": "tractcloud",
     "wma_atlas": "org",
     # Batch 2 item 5: tractography source per bundle algorithm ({} = every source "auto"). The GUI restores and saves
     # it; the CLI never reads it back from the saved config (the GUI always sends explicit --bundle-source tokens).

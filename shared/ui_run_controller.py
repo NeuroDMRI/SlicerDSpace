@@ -471,29 +471,29 @@ def selected_products_summary(targets: tuple[str, ...], backends: BackendSelecti
 def streamline_control_state(tractography_backend: str) -> StreamlineControlState:
     """Return label, enabled state and tooltip for streamline-count controls."""
 
-    backend = (tractography_backend or "csd_act").strip() or "csd_act"
+    backend = (tractography_backend or "ukf").strip() or "ukf"
     from shared.algorithm_selection import algorithms
     uses_act_streamlines = bool(set(algorithms(backend)) & {"csd_act", "saf"})
     if len(algorithms(backend)) > 1:
         description = (
-            "Requested streamlines for selected MRtrix CSD/ACT or SAF variants only. "
+            "Requested streamlines for selected CSD/ACT or SAF variants only. "
             "UKF uses its own seeds-per-voxel setting; DTI deterministic tracking ignores this count."
         )
     elif backend == "csd_act":
         description = (
-            "Number of streamlines requested from MRtrix CSD/ACT. "
+            "Number of streamlines requested from CSD/ACT. "
             "One million is recommended for analysis-scale bundle and connectome coverage."
         )
     elif backend == "saf":
         description = (
-            "Number of streamlines generated during the MRtrix CSD/ACT stage before SAF filtering. "
+            "Number of streamlines generated during the CSD/ACT stage before SAF filtering. "
             "One million is recommended when SAF, bundle analysis or connectome outputs are selected."
         )
     elif backend == 'ukf':
         description = 'Official UKF uses seeds per voxel in Advanced settings, not an ACT target streamline count.'
     else:
         description = (
-            "DTI deterministic tracking does not use MRtrix ACT streamline selection. "
+            "DTI deterministic tracking does not use ACT streamline selection. "
             "This setting is ignored for the current tractography backend."
         )
     return StreamlineControlState(
@@ -506,10 +506,10 @@ def streamline_control_state(tractography_backend: str) -> StreamlineControlStat
 def active_bundle_backend_sections(bundle_backend: str) -> set[str]:
     """Return optional backend path sections that should be highlighted."""
 
-    backend = (bundle_backend or "wmql").strip().lower() or "wmql"
+    backend = (bundle_backend or "tractcloud").strip().lower() or "tractcloud"
     active_sections: set[str] = set()
     from shared.algorithm_selection import algorithms, BUNDLES
-    selected = algorithms(backend, BUNDLES, "wmql")
+    selected = algorithms(backend, BUNDLES, "tractcloud")
     if "wma" in selected:
         active_sections.add("wma")
     if "tractcloud" in selected:

@@ -1472,6 +1472,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             deps.pop("wma_atlas_dir", None)
 
         defaults = cfg.setdefault("run_defaults", {})
+        defaults.setdefault("tractography_backend", "ukf")
         targets = [
             "microstructure",
             "segmentation",
@@ -1485,7 +1486,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         ]
         if selected_packs:
             targets.append("wma")
-            defaults["bundle_backend"] = "wma,tractcloud,wmql"
+            defaults["bundle_backend"] = "wma,tractcloud"
             defaults["wma_atlas"] = (
                 "org" if "wma_org" in selected_packs else ("naba" if "wma_naba" in selected_packs else "east-west")
             )
@@ -1497,7 +1498,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             if "wma" in prev_targets:
                 targets.append("wma")
             if not _backend_keeps_wma(defaults.get("bundle_backend")):
-                defaults["bundle_backend"] = "tractcloud,wmql"
+                defaults["bundle_backend"] = "tractcloud"
         defaults["targets"] = list(dict.fromkeys(targets))
         write_user_config(cfg)
 

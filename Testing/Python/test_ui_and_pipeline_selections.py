@@ -239,12 +239,12 @@ class UiAndPipelineSelectionsTest(unittest.TestCase):
         self.assertIn("受试者根目录", ui.inputFormatHelpButton.toolTip)
 
     def test_preprocessing_brain_mask_default_unchecked_and_fallback_rules(self) -> None:
-        # Default preprocessing picker selection leaves brain_mask unchecked
+        # Default preprocessing picker selection defaults to brain_mask (with Preprocessing checkbox unchecked initially)
         self.assertEqual(PREPROCESSING, ("brain_mask", "denoise", "eddy", "topup"))
         self.assertEqual(FAMILIES["preprocessing"][2], "orchestrationPreprocessingStages")
-        self.assertEqual(DEFAULT_CHOICES["preprocessing"], "denoise,eddy")
-        self.assertEqual(selected_algorithms(None, "preprocessing"), ("denoise", "eddy"))
-        self.assertEqual(compact_algorithm_labels(None)["targetPreprocessingCheckBox"], "DWI denoising + Eddy")
+        self.assertEqual(DEFAULT_CHOICES["preprocessing"], "brain_mask")
+        self.assertEqual(selected_algorithms(None, "preprocessing"), ("brain_mask",))
+        self.assertEqual(compact_algorithm_labels(None)["targetPreprocessingCheckBox"], "Brain mask")
 
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

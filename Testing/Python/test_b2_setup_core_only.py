@@ -173,16 +173,17 @@ class B2SetupReinstallKeepsAtlasTests(unittest.TestCase):
 
     def test_b2_setup_first_install_has_no_wma(self) -> None:
         def check(defaults):
-            self.assertEqual(defaults.get("bundle_backend"), "tractcloud,wmql")
+            self.assertEqual(defaults.get("tractography_backend"), "ukf")
+            self.assertEqual(defaults.get("bundle_backend"), "tractcloud")
             self.assertNotIn("wma", defaults.get("targets") or [])
 
         self._each_copy(None, check)
 
     def test_b2_setup_reinstall_without_wma_stays_without_wma(self) -> None:
-        before = {"bundle_backend": "tractcloud,wmql", "targets": ["microstructure", "bundles"]}
+        before = {"bundle_backend": "tractcloud", "targets": ["microstructure", "bundles"]}
 
         def check(defaults):
-            self.assertEqual(defaults.get("bundle_backend"), "tractcloud,wmql")
+            self.assertEqual(defaults.get("bundle_backend"), "tractcloud")
             self.assertNotIn("wma", defaults.get("targets") or [])
 
         self._each_copy(before, check)
@@ -199,11 +200,11 @@ class B2SetupReinstallKeepsAtlasTests(unittest.TestCase):
                 self._each_copy({"bundle_backend": value, "targets": ["microstructure", "bundles"]}, check)
 
     def test_b2_setup_w2_reinstall_without_wma_in_any_form_gets_the_default(self) -> None:
-        # An empty value means the default 'wmql' in algorithms(): no WMA, so the no-pack default is written.
+        # An empty value means no WMA, so the no-pack default ('tractcloud') is written.
         for value in ("", "WMQL+TractCloud", "tractcloud;wmql", "wmql"):
             with self.subTest(bundle_backend=value):
                 def check(defaults):
-                    self.assertEqual(defaults.get("bundle_backend"), "tractcloud,wmql")
+                    self.assertEqual(defaults.get("bundle_backend"), "tractcloud")
 
                 self._each_copy({"bundle_backend": value, "targets": ["microstructure", "bundles"]}, check)
 

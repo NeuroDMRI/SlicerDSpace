@@ -65,16 +65,16 @@ class CompactUiTest(unittest.TestCase):
 
     def test_default_algorithms_match_run_defaults(self):
         node = SimpleNamespace(
-            orchestrationPreprocessingStages=",".join(RUN_DEFAULTS.get("preprocessing_stages", ("denoise", "eddy"))),
+            orchestrationPreprocessingStages=",".join(RUN_DEFAULTS.get("preprocessing_stages", ("brain_mask",))),
             orchestrationMicrostructureStages=",".join(RUN_DEFAULTS["microstructure_stages"]),
             orchestrationTractographyBackend=RUN_DEFAULTS["tractography_backend"],
             orchestrationBundleBackend=RUN_DEFAULTS["bundle_backend"],
             orchestrationConnectomeMetrics=",".join(RUN_DEFAULTS.get("connectome_metrics", ("sift2",))),
         )
-        expected = {"targetPreprocessingCheckBox": "DWI denoising + Eddy",
+        expected = {"targetPreprocessingCheckBox": "Brain mask",
                     "targetMicrostructureCheckBox": "DTI",
-                    "targetTractographyCheckBox": "MRtrix3 CSD / ACT",
-                    "targetBundlesCheckBox": "WMQL",
+                    "targetTractographyCheckBox": "UKF",
+                    "targetBundlesCheckBox": "TractCloud",
                     "targetConnectomeCheckBox": "SIFT2"}
         self.assertEqual(compact_algorithm_labels(node), expected)
         self.assertEqual(compact_algorithm_labels(None), expected)
@@ -109,7 +109,7 @@ class CompactUiTest(unittest.TestCase):
         node = SimpleNamespace(orchestrationMicrostructureStages="dti,noddi",
                                orchestrationTractographyBackend="ukf", orchestrationBundleBackend="wma")
         owner = SimpleNamespace(ui=ui, _parameterNode=node, _onboardingLanguage="en")
-        for backend, label in (("csd_act", "MRtrix3 CSD / ACT"), ("ukf", "UKF"),
+        for backend, label in (("csd_act", "CSD / ACT"), ("ukf", "UKF"),
                                ("dti_det", "DTI"), ("saf", "CSD + SAF")):
             for bundle, bundle_label in (("wmql", "WMQL"), ("wma", "WMA"), ("tractcloud", "TractCloud"),
                                          ("all", "WMQL + WMA + TractCloud")):

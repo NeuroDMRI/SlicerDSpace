@@ -901,12 +901,12 @@ class SharedWidgetMixin:
                 node.pnlMaskRoute = str(defaults.get("pnl_mask_route") or "auto")
                 node.device = str(defaults.get("surface_device") or "auto")
                 node.ddsegDevice = str(defaults.get("ddseg_device") or "auto")
-                from shared.algorithm_selection import choice_value, BUNDLES
+                from shared.algorithm_selection import choice_value, BUNDLES, TRACKING
                 node.orchestrationTractographyBackend = choice_value(
-                    defaults.get("tractography_backend") or node.orchestrationTractographyBackend or "csd_act"
+                    defaults.get("tractography_backend") or node.orchestrationTractographyBackend or "ukf", TRACKING, "ukf"
                 )
                 node.orchestrationBundleBackend = choice_value(
-                    defaults.get("bundle_backend") or node.orchestrationBundleBackend or "wmql", BUNDLES, "wmql"
+                    defaults.get("bundle_backend") or node.orchestrationBundleBackend or "tractcloud", BUNDLES, "tractcloud"
                 )
                 stages = defaults.get("microstructure_stages") or ["dti"]
                 node.wmaAtlas = str(defaults.get("wma_atlas") or "org")
@@ -1034,8 +1034,8 @@ class SharedWidgetMixin:
                         "ddseg_device": node.ddsegDevice or "auto",
                         "surface_device": node.device or "auto",
                         "tractcloud_device": (node.ddsegDevice or "auto").strip() or "auto",
-                        "tractography_backend": node.orchestrationTractographyBackend or "csd_act",
-                        "bundle_backend": node.orchestrationBundleBackend or "wmql",
+                        "tractography_backend": node.orchestrationTractographyBackend or "ukf",
+                        "bundle_backend": node.orchestrationBundleBackend or "tractcloud",
                         "wma_atlas": getattr(node, "wmaAtlas", "org") or "org",
                         # Every key is written (``auto`` too): update_user_config merges maps key by key.
                         "bundle_sources": stored_bundle_sources(node_bundle_sources(node)),
@@ -3984,7 +3984,7 @@ class SharedWidgetMixin:
             legacy_combo = getattr(self.ui, "orchestrationMicrostructureStagesComboBox", None)
             if legacy_combo is not None and legacy_combo.visible:
                 legacy_combo.visible = False
-        backend = (backend or self._tractography_backend_text() or "csd_act").strip() or "csd_act"
+        backend = (backend or self._tractography_backend_text() or "ukf").strip() or "ukf"
         run_name_edit = getattr(self.ui, "orchestrationRunNameLineEdit", None)
         current_run_name = self._line_edit_text(run_name_edit) if run_name_edit else ""
         desired_default = self._default_run_name_for_backend(backend)
@@ -4026,7 +4026,7 @@ class SharedWidgetMixin:
             control = getattr(self.ui, name, None)
             if control is not None:
                 from shared.algorithm_selection import algorithms, BUNDLES
-                target_vis = bool(node and node.targetBundles and "wmql" in algorithms(bundle_backend or self._bundle_backend_text(), BUNDLES, "wmql"))
+                target_vis = bool(node and node.targetBundles and "wmql" in algorithms(bundle_backend or self._bundle_backend_text(), BUNDLES, "tractcloud"))
                 if control.visible != target_vis:
                     control.visible = target_vis
 
@@ -4296,7 +4296,7 @@ class SharedWidgetMixin:
 
     def _tractography_backend_text(self) -> str:
         node = self._parameterNode
-        return ((node.orchestrationTractographyBackend if node else "") or "csd_act").strip() or "csd_act"
+        return ((node.orchestrationTractographyBackend if node else "") or "ukf").strip() or "ukf"
 
     def _bundle_sources(self) -> dict:
         """Batch 2 item 5: the explicit tractography source per bundle algorithm (``{}`` = every source ``auto``)."""
@@ -4305,7 +4305,7 @@ class SharedWidgetMixin:
 
     def _bundle_backend_text(self) -> str:
         node = self._parameterNode
-        return ((getattr(node, "orchestrationBundleBackend", "") if node else "") or "wmql").strip() or "wmql"
+        return ((getattr(node, "orchestrationBundleBackend", "") if node else "") or "tractcloud").strip() or "tractcloud"
 
     def _microstructure_stages_text(self) -> str:
         node = self._parameterNode

@@ -38,7 +38,7 @@ def run():
             checks.append(text)
 
         expect(ui.targetMicrostructureCheckBox, "Selected: DTI")
-        expect(ui.targetTractographyCheckBox, "Selected: MRtrix3 CSD / ACT")
+        expect(ui.targetTractographyCheckBox, "Selected: CSD / ACT")
         expect(ui.targetBundlesCheckBox, "Selected: WMQL")
         assert widget._advancedSettingsPanel.collapsed
         assert "Advanced settings" in widget._advancedSettingsPanel.text

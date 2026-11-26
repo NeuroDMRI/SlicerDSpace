@@ -558,7 +558,8 @@ class V1InstallerModularPackFlowTests(unittest.TestCase):
             self.assertFalse((project.assets / "brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz").exists())
             cfg_written = json.loads(project.config_path.read_text(encoding="utf-8"))
             defaults = cfg_written.get("run_defaults") or {}
-            self.assertEqual(defaults.get("bundle_backend"), "wma,wmql")
+            self.assertEqual(defaults.get("tractography_backend"), "ukf")
+            self.assertEqual(defaults.get("bundle_backend"), "wma")
             self.assertEqual(defaults.get("wma_atlas"), "org")
             self.assertIn("segmentation", defaults.get("targets") or [])
             self.assertIn("parcellation", defaults.get("targets") or [])

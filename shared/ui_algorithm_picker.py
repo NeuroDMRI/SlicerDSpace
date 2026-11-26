@@ -16,10 +16,10 @@ from shared.algorithm_selection import (
 )
 
 DEFAULT_CHOICES = {
-    "preprocessing": "denoise,eddy",
+    "preprocessing": "brain_mask",
     "microstructure": "dti",
-    "tractography": "csd_act",
-    "bundles": "wmql",
+    "tractography": "ukf",
+    "bundles": "tractcloud",
     "connectome": "sift2",
 }
 

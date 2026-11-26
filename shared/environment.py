@@ -1144,8 +1144,11 @@ def _model_asset_spec_path(config: EnvironmentDoctorConfig, relative: str) -> tu
             f"Integrity check failed: {error} Delete the file and re-download it with "
             "scripts/download_model_assets.py (or the Slicer UI's model-asset download button)."
         )
-        if "is incomplete" in str(error):
+        from shared.model_assets import OTHER_RELEASE_MARKER
+
+        if "is incomplete" in str(error) or OTHER_RELEASE_MARKER in str(error):
             # LE-2: an incomplete weights folder names the missing files and the 'Install models' action.
+            # A bundled copy of another model release names the download; "delete the file" does not fit it.
             notes = str(error)
         return placeholder, (), notes
     if resolved is not None and relative.endswith("weights") and resolved.is_dir():
@@ -1998,8 +2001,13 @@ def _install_hint(spec: DependencySpec, platform_name: str) -> str:
     if spec.install_group == "tractcloud":
         return "Install/configure external TractCloud package/check-out and model data; pass --tractcloud-root/--tractcloud-data-dir."
     if spec.install_group == "model-resources":
-        if "is incomplete" in spec.notes:
-            return spec.notes  # LE-2: names the missing files and the 'Install models' action
+        from shared.model_assets import OTHER_RELEASE_MARKER
+
+        if "is incomplete" in spec.notes or OTHER_RELEASE_MARKER in spec.notes:
+            # LE-2: names the missing files and the 'Install models' action. A bundled copy of another model
+            # release names the download: the generic hint below names "--profile core", which holds no surface
+            # file. The Markdown notes report shows only this hint; the panel card shows the notes.
+            return spec.notes
         return "Choose a model asset root in the Slicer UI, or run scripts/download_model_assets.py --profile core --asset-root <path>."
     if spec.install_group == "slicer":
         return "Pass --slicer-executable or set SLICERDSPACE_SLICER_EXECUTABLE to the local Slicer executable."

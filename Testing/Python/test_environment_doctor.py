@@ -794,6 +794,81 @@ class ModelAssetIntegrityDoesNotAbortTheDoctorScanTest(unittest.TestCase):
             self.assertIn("Integrity check failed", notes)
             self.assertIn("re-download", notes)
 
+    def test_model_asset_spec_path_names_a_bundled_copy_of_another_release_without_the_delete_advice(self) -> None:
+        # Install test finding 4: an older base package under newer code. The bundled DDSurfer weights match their
+        # own SHA256SUMS, not the manifest. The note must ask for the current files, not call the copy damaged.
+        import hashlib
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp).resolve()
+            user_root = tmp_path / "user-assets"
+            user_root.mkdir()
+            repo_root = tmp_path / "repo"
+            weights = repo_root / "bundled-model-assets" / "surface" / "weights"
+            weights.mkdir(parents=True)
+            (weights / "ddsurfer_lh_wm.pt").write_bytes(b"release 1 weights")
+            (weights / "SHA256SUMS").write_text(
+                hashlib.sha256(b"release 1 weights").hexdigest() + "  ddsurfer_lh_wm.pt\n", encoding="utf-8")
+            manifest_dir = repo_root / "models"
+            manifest_dir.mkdir(parents=True)
+            (manifest_dir / "assets_manifest.json").write_text(json.dumps({"asset_records": {
+                "surface/weights/ddsurfer_lh_wm.pt": {"sha256": hashlib.sha256(b"release 2 weights").hexdigest()},
+            }}), encoding="utf-8")
+            config = EnvironmentDoctorConfig(targets=("surface",), repo_root=repo_root)
+            env = {key: value for key, value in os.environ.items()
+                   if key not in (self.model_assets_module.MODEL_ASSETS_ENV,
+                                  self.model_assets_module.BUNDLED_MODEL_ASSETS_ENV)}
+
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                self.model_assets_module, "default_user_model_assets_root", return_value=user_root
+            ):
+                path, candidates, notes = _model_asset_spec_path(config, "surface/weights/ddsurfer_lh_wm.pt")
+
+            self.assertFalse(path.exists())
+            self.assertEqual(candidates, ())
+            self.assertIn("is from another release", notes)
+            self.assertIn("Download the current model files", notes)
+            self.assertNotIn("Integrity check failed", notes)
+            self.assertNotIn("Delete the file", notes)
+
+    def test_panel_hint_for_a_bundled_copy_of_another_release_asks_for_the_download(self) -> None:
+        # Opus P1 (other-release message): the generic hint names "--profile core", which holds no surface file.
+        # The Markdown notes report shows only the hint, and the panel card shows the notes and then a hint that
+        # differs from them, so the hint must be the message itself.
+        import hashlib
+
+        from shared.environment import _install_hint, build_dependency_specs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp).resolve()
+            user_root = tmp_path / "user-assets"
+            user_root.mkdir()
+            repo_root = tmp_path / "repo"
+            weights = repo_root / "bundled-model-assets" / "surface" / "weights"
+            weights.mkdir(parents=True)
+            (weights / "ddsurfer_lh_wm.pt").write_bytes(b"release 1 weights")
+            (weights / "SHA256SUMS").write_text(
+                hashlib.sha256(b"release 1 weights").hexdigest() + "  ddsurfer_lh_wm.pt\n", encoding="utf-8")
+            manifest_dir = repo_root / "models"
+            manifest_dir.mkdir(parents=True)
+            (manifest_dir / "assets_manifest.json").write_text(json.dumps({"asset_records": {
+                "surface/weights/ddsurfer_lh_wm.pt": {"sha256": hashlib.sha256(b"release 2 weights").hexdigest()},
+            }}), encoding="utf-8")
+            env = {key: value for key, value in os.environ.items()
+                   if key not in (self.model_assets_module.MODEL_ASSETS_ENV,
+                                  self.model_assets_module.BUNDLED_MODEL_ASSETS_ENV)}
+
+            with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(
+                self.model_assets_module, "default_user_model_assets_root", return_value=user_root
+            ):
+                specs = build_dependency_specs(EnvironmentDoctorConfig(targets=("surface",), repo_root=repo_root))
+
+            spec = next(item for item in specs if item.key.endswith("ddsurfer_lh_wm_pt"))
+            hint = _install_hint(spec, "Darwin")
+            self.assertIn("is from another release", hint)
+            self.assertIn("Download the current model files", hint)
+            self.assertNotIn("--profile core", hint)
+
     def test_build_dependency_specs_completes_and_reports_the_blocker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

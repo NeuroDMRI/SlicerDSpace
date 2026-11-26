@@ -26,40 +26,40 @@
         id: 'ddsurfer',
         filename: 'SlicerDSpace-Model-DDSurfer-v1.tar.gz',
         url: ASSETS_RELEASE_BASE + '/SlicerDSpace-Model-DDSurfer-v1.tar.gz',
-        size_bytes: 220436307,
-        sha256: 'b7efeea47aa736301f569622c461fd8d032d4e8734c6174b7aadcd86f58f8277',
+        size_bytes: 220445317,
+        sha256: '43ecec629258ff762f12f6628c72add306d6f2cc8efc6dff39f9cc3f1ca9085a',
         parts: []
       },
       ddseg: {
         id: 'ddseg',
         filename: 'SlicerDSpace-Model-DDSeg-v1.tar.gz',
         url: ASSETS_RELEASE_BASE + '/SlicerDSpace-Model-DDSeg-v1.tar.gz',
-        size_bytes: 280945320,
-        sha256: 'f0146b958ac8a9ba35bd4fb7f4e2b334b7f7f3d324639428fa7d0f3b8adc19d4',
+        size_bytes: 280945316,
+        sha256: '59ab652c1e3821013d066a5eb86acb5b4d51fd001d1657250eb0d755f4816cc4',
         parts: []
       },
       ddparcel: {
         id: 'ddparcel',
         filename: 'SlicerDSpace-Model-DDParcel-v1.tar.gz',
         url: ASSETS_RELEASE_BASE + '/SlicerDSpace-Model-DDParcel-v1.tar.gz',
-        size_bytes: 391935821,
-        sha256: '4f6e265f282c210647ed3c287fcfb7c2473b061c1802aac3c88db4c3d9ff50a6',
+        size_bytes: 391935817,
+        sha256: '462acc3c181680de28a3a03481b9aa6de25a8c9aea11fb24959c14478d022a08',
         parts: []
       },
       pnl_cnn: {
         id: 'pnl_cnn',
         filename: 'SlicerDSpace-Model-PNL-CNN-v1.tar.gz',
         url: ASSETS_RELEASE_BASE + '/SlicerDSpace-Model-PNL-CNN-v1.tar.gz',
-        size_bytes: 200140589,
-        sha256: 'cf8b677106604ae10fc14f83639aa95d3709b585c81e2f39ca7fac581b3cbd65',
+        size_bytes: 200140585,
+        sha256: '88c27d677e71a0f4ef3433c01723415e885dfb1d8d95528dd8c568c1d8d40fb1',
         parts: []
       },
       tractcloud: {
         id: 'tractcloud',
         filename: 'SlicerDSpace-Model-TractCloud-v1.tar.gz',
         url: ASSETS_RELEASE_BASE + '/SlicerDSpace-Model-TractCloud-v1.tar.gz',
-        size_bytes: 8225793,
-        sha256: '3f3a3a5e17c7e022736e7eb5ec20bc5c43247bc3135a858096eb9717583a3640',
+        size_bytes: 8225789,
+        sha256: '23edec7a2fc2ceb4225da6c66c8d89d5d71b45d8b4f6fc7602aa21069ec9932c',
         parts: []
       }
     },

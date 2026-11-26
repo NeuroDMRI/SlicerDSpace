@@ -49,33 +49,33 @@
       "os": "windows",
       "filename": "SlicerDSpaceSetup-Windows.zip",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpaceSetup-Windows.zip",
-      "size_bytes": 125877,
-      "sha256": "ad5c443f2b49a1b6cd0559df5209164c0b1577c2db88885a166620d11da9769c",
+      "size_bytes": 140952,
+      "sha256": "0c6cd7f523741da2e0263c257c4d883f1acd2e0bc7945fbade59e0bd3a2c8620",
       "published": true
     },
     "linux": {
       "os": "linux",
       "filename": "SlicerDSpaceSetup-Linux.zip",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpaceSetup-Linux.zip",
-      "size_bytes": 125878,
-      "sha256": "ebd13213f728173b81bdbe9312c30b5272cde0590824a1aa80ad680a3f8ecf4b",
+      "size_bytes": 140953,
+      "sha256": "650271fe767e865bc1d5a59bc675ada6ad8ecf2a41a2ee1a064bb8c01e10a2e1",
       "published": true
     },
     "macos": {
       "os": "macos",
       "filename": "SlicerDSpaceSetup-macOS.zip",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpaceSetup-macOS.zip",
-      "size_bytes": 154952,
-      "sha256": "ba23ecb3aa9263617903a15caac6c3444aa0f0956d53e4af10c5dab4d592aa5b",
+      "size_bytes": 173048,
+      "sha256": "5eb41905bd9a74c30d1a42ca0570266430679ba94e55faa7ad08e9f05d7438f1",
       "published": true
     }
   },
   "code_overlay": {
     "filename": "SlicerDSpace-v1.0.0-CodeOverlay.tar.gz",
     "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/v1.0.0/SlicerDSpace-v1.0.0-CodeOverlay.tar.gz",
-    "size_bytes": 3828067,
-    "sha256": "285dda09b56a490f3ba81bddef185ee995e7aaccb4e7a16dbf3cf654747f7edd",
-    "code_sha256": "868fed41b527cae2f01058f9afaf7f01646ec50a54600ebca149b24d43ae4d46",
+    "size_bytes": 4537544,
+    "sha256": "152fcbbaec0b96fa0bbd93a5243f70dede896a995d959016b3f9fdcd8dc28da1",
+    "code_sha256": "16a037b523fa0a70818a2abd47f3b5443ffbf05d0cc4415c4e6314790463a7b5",
     "runtime_abi_version": 1,
     "version": "1.0.0"
   },
@@ -86,8 +86,8 @@
       "default_install": true,
       "filename": "SlicerDSpace-Model-DDSurfer-v1.tar.gz",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/SlicerDSpace-Model-DDSurfer-v1.tar.gz",
-      "size_bytes": 220436307,
-      "sha256": "b7efeea47aa736301f569622c461fd8d032d4e8734c6174b7aadcd86f58f8277",
+      "size_bytes": 220445317,
+      "sha256": "43ecec629258ff762f12f6628c72add306d6f2cc8efc6dff39f9cc3f1ca9085a",
       "published": true,
       "parts": []
     },
@@ -97,8 +97,8 @@
       "default_install": true,
       "filename": "SlicerDSpace-Model-DDSeg-v1.tar.gz",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/SlicerDSpace-Model-DDSeg-v1.tar.gz",
-      "size_bytes": 280945320,
-      "sha256": "f0146b958ac8a9ba35bd4fb7f4e2b334b7f7f3d324639428fa7d0f3b8adc19d4",
+      "size_bytes": 280945316,
+      "sha256": "59ab652c1e3821013d066a5eb86acb5b4d51fd001d1657250eb0d755f4816cc4",
       "published": true,
       "parts": []
     },
@@ -108,8 +108,8 @@
       "default_install": true,
       "filename": "SlicerDSpace-Model-DDParcel-v1.tar.gz",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/SlicerDSpace-Model-DDParcel-v1.tar.gz",
-      "size_bytes": 391935821,
-      "sha256": "4f6e265f282c210647ed3c287fcfb7c2473b061c1802aac3c88db4c3d9ff50a6",
+      "size_bytes": 391935817,
+      "sha256": "462acc3c181680de28a3a03481b9aa6de25a8c9aea11fb24959c14478d022a08",
       "published": true,
       "parts": []
     },
@@ -119,8 +119,8 @@
       "default_install": true,
       "filename": "SlicerDSpace-Model-PNL-CNN-v1.tar.gz",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/SlicerDSpace-Model-PNL-CNN-v1.tar.gz",
-      "size_bytes": 200140589,
-      "sha256": "cf8b677106604ae10fc14f83639aa95d3709b585c81e2f39ca7fac581b3cbd65",
+      "size_bytes": 200140585,
+      "sha256": "88c27d677e71a0f4ef3433c01723415e885dfb1d8d95528dd8c568c1d8d40fb1",
       "published": true,
       "parts": []
     },
@@ -130,8 +130,8 @@
       "default_install": true,
       "filename": "SlicerDSpace-Model-TractCloud-v1.tar.gz",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/SlicerDSpace-Model-TractCloud-v1.tar.gz",
-      "size_bytes": 8225793,
-      "sha256": "3f3a3a5e17c7e022736e7eb5ec20bc5c43247bc3135a858096eb9717583a3640",
+      "size_bytes": 8225789,
+      "sha256": "23edec7a2fc2ceb4225da6c66c8d89d5d71b45d8b4f6fc7602aa21069ec9932c",
       "published": true,
       "parts": []
     }

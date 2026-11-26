@@ -10,8 +10,8 @@
       "default_install": true,
       "filename": "SlicerDSpace-Model-DDSurfer-v1.tar.gz",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/SlicerDSpace-Model-DDSurfer-v1.tar.gz",
-      "size_bytes": 220436307,
-      "sha256": "b7efeea47aa736301f569622c461fd8d032d4e8734c6174b7aadcd86f58f8277",
+      "size_bytes": 220445317,
+      "sha256": "43ecec629258ff762f12f6628c72add306d6f2cc8efc6dff39f9cc3f1ca9085a",
       "published": true,
       "profiles": [
         "surface",
@@ -21,11 +21,11 @@
       "title_zh": "DDSurfer \u76ae\u5c42\u8868\u9762\u91cd\u5efa\u6a21\u578b\u6743\u91cd\u3001\u6a21\u677f\u4e0e\u8868\u9762\u56fe\u8c31",
       "files": {
         "surface/weights/manifest.json": "f5cc5bb23375937feab1075dea2f06e8965f627285eb6a9fac295247ae21a01c",
-        "surface/weights/SHA256SUMS": "986fe52ba0341e76a6dc9cbc33bb6a52112beb02d70950104de2909c5ff419cc",
-        "surface/weights/ddsurfer_lh_wm.pt": "b1ab6ae874e52c80fed4866c8aa03b586c4e7d463b2db688f703627db01a2454",
-        "surface/weights/ddsurfer_rh_wm.pt": "da8277a627e55dc576886bebcc3637bee89c1e8a77ce0c77ab0a3163ba955fcd",
-        "surface/weights/ddsurfer_lh_pial.pt": "58f93a8ea32ee0c0d59d9ca3875d8ef906fff15dc29c87d1fc313a7a25e28393",
-        "surface/weights/ddsurfer_rh_pial.pt": "480961adf7730985b2c2288cac9b66067dcd72b722214ff0ed1183b6dcd0eec0",
+        "surface/weights/SHA256SUMS": "c6677087eafc08e14e13356ca82a4e732016abf7f1e57f717addc4ca47314a71",
+        "surface/weights/ddsurfer_lh_wm.pt": "f35d6dbc16da8e5792543f794c8deb5fe7469fc279084022073d6a84d1ebed15",
+        "surface/weights/ddsurfer_rh_wm.pt": "e16405c06c5766f2a25a844c4c67ff154e8610b634d9d22d4bbb24bfeda66bee",
+        "surface/weights/ddsurfer_lh_pial.pt": "f538849c79287c39883fa374bc0d589637ef2ddd2a4efa52037ec52f3688ae34",
+        "surface/weights/ddsurfer_rh_pial.pt": "70cb4784cf78bf3f68fd23d9248185ac021883d16c509467544bc91f595d4dd9",
         "surface/template/ddsurfer_lh_template.obj": "4da63ee7b02bd3b45a1164c6c030fdd0e18903c821b47cdd7fc9d492b0a9ed1c",
         "surface/template/ddsurfer_rh_template.obj": "74186754cdac0510a595bab82818329703c9906384f1e6a8d1c8cad4eddaf1fe",
         "surface/template/100HCP-population-mean-T2-1mm.nii.gz": "9c0f03a07b0967052d2be81bc359d188940f89794cd95c1369c48bc3a14e644a",
@@ -39,8 +39,8 @@
       "default_install": true,
       "filename": "SlicerDSpace-Model-DDSeg-v1.tar.gz",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/SlicerDSpace-Model-DDSeg-v1.tar.gz",
-      "size_bytes": 280945320,
-      "sha256": "f0146b958ac8a9ba35bd4fb7f4e2b334b7f7f3d324639428fa7d0f3b8adc19d4",
+      "size_bytes": 280945316,
+      "sha256": "59ab652c1e3821013d066a5eb86acb5b4d51fd001d1657250eb0d755f4816cc4",
       "published": true,
       "profiles": [
         "segmentation"
@@ -60,8 +60,8 @@
       "default_install": true,
       "filename": "SlicerDSpace-Model-DDParcel-v1.tar.gz",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/SlicerDSpace-Model-DDParcel-v1.tar.gz",
-      "size_bytes": 391935821,
-      "sha256": "4f6e265f282c210647ed3c287fcfb7c2473b061c1802aac3c88db4c3d9ff50a6",
+      "size_bytes": 391935817,
+      "sha256": "462acc3c181680de28a3a03481b9aa6de25a8c9aea11fb24959c14478d022a08",
       "published": true,
       "profiles": [
         "parcellation"
@@ -94,8 +94,8 @@
       "default_install": true,
       "filename": "SlicerDSpace-Model-PNL-CNN-v1.tar.gz",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/SlicerDSpace-Model-PNL-CNN-v1.tar.gz",
-      "size_bytes": 200140589,
-      "sha256": "cf8b677106604ae10fc14f83639aa95d3709b585c81e2f39ca7fac581b3cbd65",
+      "size_bytes": 200140585,
+      "sha256": "88c27d677e71a0f4ef3433c01723415e885dfb1d8d95528dd8c568c1d8d40fb1",
       "published": true,
       "profiles": [
         "pnl-cnn-weights",
@@ -118,8 +118,8 @@
       "default_install": true,
       "filename": "SlicerDSpace-Model-TractCloud-v1.tar.gz",
       "url": "https://github.com/NeuroDMRI/SlicerDSpace/releases/download/assets/SlicerDSpace-Model-TractCloud-v1.tar.gz",
-      "size_bytes": 8225793,
-      "sha256": "3f3a3a5e17c7e022736e7eb5ec20bc5c43247bc3135a858096eb9717583a3640",
+      "size_bytes": 8225789,
+      "sha256": "23edec7a2fc2ceb4225da6c66c8d89d5d71b45d8b4f6fc7602aa21069ec9932c",
       "published": true,
       "profiles": [
         "tractcloud"

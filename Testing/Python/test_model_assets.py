@@ -837,6 +837,95 @@ class ModelAssetRootSecurityTest(unittest.TestCase):
                 self.model_assets_module.model_asset_path(
                     "segmentation/weights", repo_root=repo_root, explicit_root=configured)
 
+    def _other_release_layout(self, tmp: str, *, listed_bytes: bytes = b"release 1 weights") -> tuple[Path, Path]:
+        """Install test finding 4: a base package with the weights of release 1 under code whose manifest records release 2.
+
+        The bundled folder holds one checkpoint and its own SHA256SUMS. ``listed_bytes`` is the content that this
+        SHA256SUMS records; the checkpoint on disk is always ``release 1 weights``.
+        """
+        import hashlib
+
+        tmp_path = Path(tmp).resolve()
+        configured = tmp_path / "configured-assets"
+        configured.mkdir()
+        repo_root = tmp_path / "repo"
+        weights = repo_root / "bundled-model-assets" / "surface" / "weights"
+        weights.mkdir(parents=True)
+        (weights / "ddsurfer_lh_wm.pt").write_bytes(b"release 1 weights")
+        (weights / "SHA256SUMS").write_text(
+            hashlib.sha256(listed_bytes).hexdigest() + "  ddsurfer_lh_wm.pt\n", encoding="utf-8")
+        release_2 = hashlib.sha256(b"release 2 weights").hexdigest()
+        self._write_manifest(repo_root, {
+            "surface/weights/ddsurfer_lh_wm.pt": {"sha256": release_2},
+            "surface/weights/SHA256SUMS": {
+                "sha256": hashlib.sha256((release_2 + "  ddsurfer_lh_wm.pt\n").encode()).hexdigest()},
+        })
+        return configured, repo_root
+
+    def test_bundled_copy_of_another_release_is_named_as_such_not_as_a_damaged_file(self) -> None:
+        # Finding 4: the v0.1.1 base package ships DDSurfer weights that match their own SHA256SUMS; the v1.0.0
+        # manifest records the new weights. The copy is still refused, but the message must not call it damaged.
+        module = self.model_assets_module
+        for relative in ("surface/weights/ddsurfer_lh_wm.pt", "surface/weights/SHA256SUMS"):
+            for label in ("configured root", "automatic roots"):
+                with self.subTest(relative=relative, roots=label), \
+                        tempfile.TemporaryDirectory() as tmp, self._without_asset_env():
+                    configured, repo_root = self._other_release_layout(tmp)
+                    explicit = configured if label == "configured root" else None
+                    with mock.patch.object(module, "default_user_model_assets_root", return_value=configured), \
+                            self.assertRaises(module.ModelAssetIntegrityError) as raised:
+                        module.model_asset_path(relative, repo_root=repo_root, explicit_root=explicit)
+                    message = str(raised.exception)
+                    self.assertIn("is from another release", message)
+                    self.assertIn("Download the current model files", message)
+                    self.assertNotIn("does not match its recorded sha256", message)
+
+    def test_bundled_copy_that_differs_from_its_own_checksum_list_stays_a_sha256_mismatch(self) -> None:
+        # A file that its own SHA256SUMS does not record is not "another release": the mismatch wording stays.
+        module = self.model_assets_module
+        with tempfile.TemporaryDirectory() as tmp, self._without_asset_env():
+            configured, repo_root = self._other_release_layout(tmp, listed_bytes=b"what the release really shipped")
+            for relative in ("surface/weights/ddsurfer_lh_wm.pt", "surface/weights/SHA256SUMS"):
+                with self.subTest(relative=relative), self.assertRaises(module.ModelAssetIntegrityError) as raised:
+                    module.model_asset_path(relative, repo_root=repo_root, explicit_root=configured)
+                self.assertIn("does not match its recorded sha256", str(raised.exception))
+                self.assertNotIn("is from another release", str(raised.exception))
+
+    def test_checksum_list_that_cannot_be_checked_keeps_the_sha256_mismatch_error(self) -> None:
+        # Codex P1 (other-release message): the SHA256SUMS comparison only chooses the message. A list that cannot
+        # be checked (a file name longer than the file system allows, an unreadable file) must not raise its own
+        # error: the environment check catches ModelAssetIntegrityError only.
+        import hashlib
+
+        module = self.model_assets_module
+        with self.subTest("name longer than the file system allows"), \
+                tempfile.TemporaryDirectory() as tmp, self._without_asset_env():
+            configured, repo_root = self._other_release_layout(tmp)
+            sums = repo_root / "bundled-model-assets" / "surface" / "weights" / "SHA256SUMS"
+            sums.write_text(sums.read_text(encoding="utf-8") + "0" * 64 + "  " + "n" * 400 + ".pt\n", encoding="utf-8")
+            with self.assertRaises(module.ModelAssetIntegrityError) as raised:
+                module.model_asset_path("surface/weights/SHA256SUMS", repo_root=repo_root, explicit_root=configured)
+            self.assertIn("does not match its recorded sha256", str(raised.exception))
+
+        with self.subTest("listed file cannot be read"), \
+                tempfile.TemporaryDirectory() as tmp, self._without_asset_env():
+            configured, repo_root = self._other_release_layout(tmp)
+            weights = repo_root / "bundled-model-assets" / "surface" / "weights"
+            (weights / "ddsurfer_rh_wm.pt").write_bytes(b"release 1 right")
+            with (weights / "SHA256SUMS").open("a", encoding="utf-8") as handle:
+                handle.write(hashlib.sha256(b"release 1 right").hexdigest() + "  ddsurfer_rh_wm.pt\n")
+            real_hash = module.cached_sha256_of_file
+
+            def unreadable_right_checkpoint(path, cache):
+                if Path(path).name == "ddsurfer_rh_wm.pt":
+                    raise PermissionError(13, "Permission denied", str(path))
+                return real_hash(path, cache)
+
+            with mock.patch.object(module, "cached_sha256_of_file", side_effect=unreadable_right_checkpoint), \
+                    self.assertRaises(module.ModelAssetIntegrityError) as raised:
+                module.model_asset_path("surface/weights/SHA256SUMS", repo_root=repo_root, explicit_root=configured)
+            self.assertIn("does not match its recorded sha256", str(raised.exception))
+
     def test_configured_root_that_holds_the_asset_wins_over_the_bundled_copy(self) -> None:
         # The configured root stays the user's own choice: its copy is returned as it is, unverified.
         with tempfile.TemporaryDirectory() as tmp, self._without_asset_env():

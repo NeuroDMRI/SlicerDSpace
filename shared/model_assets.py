@@ -17,6 +17,7 @@ from typing import Any
 from shared.model_asset_integrity import (
     DEFAULT_CACHE_FILENAME,
     ModelAssetIntegrityError,
+    cached_sha256_of_file,
     load_sha256_cache,
     save_sha256_cache,
     verify_against_manifest,
@@ -278,15 +279,80 @@ def resolve_model_assets_root(
     return configured_model_assets_root()
 
 
+class ModelAssetOtherReleaseError(ModelAssetIntegrityError):
+    """A bundled model file is a complete file of another release of the model than the manifest records.
+
+    Install test of 26 November 2026, finding 4: the v0.1.1 base package ships the DDSurfer weights of that release,
+    and a code update brings the v1.0.0 manifest. The copy is refused like every sha256 mismatch.
+    """
+
+
+# Callers that show the message (the environment check) find this case by the marker, like "is incomplete".
+OTHER_RELEASE_MARKER = "is from another release"
+
+
+def other_release_message(candidate: Path) -> str:
+    return (
+        f"{candidate} {OTHER_RELEASE_MARKER} of this model: it agrees with the SHA256SUMS list in its folder, but "
+        "models/assets_manifest.json records another sha256 for this version of SlicerDSpace. The installed base "
+        "package and the code are from different releases. Download the current model files (Install models in "
+        "the Slicer UI, or scripts/download_model_assets.py). The bundled copy stays in place and is not used."
+    )
+
+
+def _matches_own_release_checksums(candidate: Path) -> bool:
+    """True when the ``SHA256SUMS`` file next to ``candidate`` records it correctly.
+
+    For ``SHA256SUMS`` itself: every file that it lists is present and matches. A release ships this list with its
+    checkpoints (DDSurfer does), so a match means a complete file of that release, not a damaged or replaced one.
+    The answer only chooses the message of an error that is raised anyway, so a list or a file that cannot be
+    checked reads as "no match" and never raises.
+    """
+
+    try:
+        sums_path = candidate.parent / "SHA256SUMS"
+        if not candidate.is_file() or not sums_path.is_file():
+            return False
+        recorded: dict[str, str] = {}
+        for line in sums_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            parts = line.split(maxsplit=1)
+            name = parts[1].strip().lstrip("*") if len(parts) == 2 else ""
+            if not name or Path(name).name != name or name in recorded:
+                return False
+            recorded[name] = parts[0].lower()
+        names = tuple(recorded) if candidate.name == "SHA256SUMS" else (candidate.name,)
+        if not names:
+            return False
+        cache = _sha256_cache()
+        for name in names:
+            path = candidate.parent / name
+            if name not in recorded or path.is_symlink() or not path.is_file():
+                return False
+            if cached_sha256_of_file(path, cache) != recorded[name]:
+                return False
+        _persist_sha256_cache()
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def _unverified_asset_error(
-    root: Path, relative: str, candidate: Path, manifest_records: dict[str, Any]
+    root: Path, relative: str, candidate: Path, manifest_records: dict[str, Any], *, bundled: bool = False
 ) -> ModelAssetIntegrityError:
-    """LE-2: name the missing files of an incomplete folder; otherwise the sha256 mismatch."""
+    """LE-2: name the missing files of an incomplete folder; otherwise the sha256 mismatch.
+
+    ``bundled``: the root is the extension's own ``bundled-model-assets``. Only there a complete file of another
+    release gets its own message: the user cannot repair the base package, and the download goes to the user root.
+    """
 
     if candidate.is_dir():
         problems = incomplete_manifest_files(root, relative, manifest_records)
         if problems:
             return ModelAssetIncompleteError(incomplete_asset_message(candidate, problems))
+    if bundled and _matches_own_release_checksums(candidate):
+        return ModelAssetOtherReleaseError(other_release_message(candidate))
     return ModelAssetIntegrityError(
         f"{candidate} exists but does not match its recorded sha256 in models/assets_manifest.json"
     )
@@ -321,7 +387,7 @@ def model_asset_path(relative: str, *, repo_root: Path, explicit_root: Path | No
             if bundled.exists():
                 if _has_verified_required_asset(bundled_root, (relative,), manifest_records=manifest_records):
                     return bundled
-                raise _unverified_asset_error(bundled_root, relative, bundled, manifest_records)
+                raise _unverified_asset_error(bundled_root, relative, bundled, manifest_records, bundled=True)
         return candidate
 
     manifest_records = _load_asset_manifest_records(repo_root)
@@ -336,7 +402,9 @@ def model_asset_path(relative: str, *, repo_root: Path, explicit_root: Path | No
         if legacy.exists():
             if _has_verified_required_asset(legacy_root, (relative,), manifest_records=manifest_records):
                 return legacy
-            raise _unverified_asset_error(legacy_root, relative, legacy, manifest_records)
+            raise _unverified_asset_error(
+                legacy_root, relative, legacy, manifest_records,
+                bundled=legacy_root in bundled_model_asset_roots(repo_root))
     return candidate
 
 

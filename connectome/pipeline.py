@@ -285,6 +285,20 @@ def _resolve_connectome_device(requested: str = "auto") -> str:
     return "cpu"
 
 
+def _apply_affine_points(voxels, affine):
+    """Apply a 4x4 affine matrix to an (N, 3) array without invoking multithreaded BLAS GEMM."""
+    import numpy as np
+
+    pts = np.asarray(voxels, dtype=np.float64)
+    rot = np.asarray(affine[:3, :3], dtype=np.float64)
+    trans = np.asarray(affine[:3, 3], dtype=np.float64)
+    out = np.empty((len(pts), 3), dtype=np.float64)
+    out[:, 0] = pts[:, 0] * rot[0, 0] + pts[:, 1] * rot[0, 1] + pts[:, 2] * rot[0, 2] + trans[0]
+    out[:, 1] = pts[:, 0] * rot[1, 0] + pts[:, 1] * rot[1, 1] + pts[:, 2] * rot[1, 2] + trans[1]
+    out[:, 2] = pts[:, 0] * rot[2, 0] + pts[:, 1] * rot[2, 1] + pts[:, 2] * rot[2, 2] + trans[2]
+    return out
+
+
 def _build_endpoint_label_assigner(
     data,
     inverse_affine,
@@ -322,10 +336,7 @@ def _build_endpoint_label_assigner(
         return assign_empty, "radial_search_empty"
 
     affine = np.linalg.inv(inverse_affine)
-    world_coordinates = (
-        allowed_voxels @ affine[:3, :3].T
-        + affine[:3, 3]
-    )
+    world_coordinates = _apply_affine_points(allowed_voxels, affine)
 
     try:
         from scipy.spatial import cKDTree
@@ -348,7 +359,7 @@ def _build_endpoint_label_assigner(
             if not len(local_voxels):
                 return 0
             local_voxels += lower
-            local_world = local_voxels @ affine[:3, :3].T + affine[:3, 3]
+            local_world = _apply_affine_points(local_voxels, affine)
             distances = np.linalg.norm(local_world - point_array, axis=1)
             nearest_index = int(np.argmin(distances))
             if float(distances[nearest_index]) > radius_mm:
@@ -378,7 +389,13 @@ def _build_endpoint_label_assigner(
     def _assign_kdtree_cpu_batch(coords: "np.ndarray") -> "np.ndarray":
         from shared.numeric_threads import effective_cpu_threads
 
-        n_workers = max(1, min(16, int(effective_cpu_threads(None, default=8))))
+        # Small batches (< 300k endpoints) run in ~0.2s single-threaded without spawning C++ worker threads
+        # that risk Windows 1-2 MB thread-stack exhaustion alongside OpenMP/TBB/OpenBLAS pools.
+        if len(coords) <= 300_000:
+            n_workers = 1
+        else:
+            cap = 4 if os.name == "nt" else 16
+            n_workers = max(1, min(cap, int(effective_cpu_threads(None, default=min(8, cap)))))
         try:
             distances, indices = tree.query(coords, k=1, distance_upper_bound=radius_mm, workers=n_workers)
         except TypeError:
@@ -773,6 +790,205 @@ def _read_sift2_weights(path: Path) -> list[float]:
     return _read_sift2_weights_array(path).tolist()
 
 
+def _load_binary_legacy_vtk_endpoints_fast(path: Path):
+    """Stream ONLY POINTS + LINES from a binary legacy VTK POLYDATA file, skipping multi-GB POINT_DATA tensors."""
+    import mmap
+    import numpy as np
+
+    file_size = path.stat().st_size
+    if file_size <= 0:
+        return None
+    with path.open("rb") as fh:
+        prefix = fh.read(min(file_size, 65536))
+        head_upper = prefix[:1024].decode("ascii", errors="ignore").upper()
+        if "\nBINARY\n" not in head_upper and "\r\nBINARY\r\n" not in head_upper:
+            return None
+        if "DATASET POLYDATA" not in head_upper:
+            return None
+        pts_pos = prefix.find(b"\nPOINTS ")
+        if pts_pos >= 0:
+            pts_pos += 1
+        else:
+            pts_pos = prefix.find(b"POINTS ")
+        if pts_pos < 0:
+            return None
+        nl = prefix.find(b"\n", pts_pos)
+        if nl < 0:
+            return None
+        pts_line = prefix[pts_pos:nl].decode("ascii", errors="ignore").strip().split()
+        if len(pts_line) < 3 or pts_line[0].upper() != "POINTS":
+            return None
+        n_points = int(pts_line[1])
+        point_type = pts_line[2].lower()
+        if point_type not in {"float", "double"}:
+            return None
+        pts_dtype = np.dtype(">f4" if point_type == "float" else ">f8")
+        pts_offset = nl + 1
+        pts_bytes = n_points * 3 * pts_dtype.itemsize
+        after_pts = pts_offset + pts_bytes
+        if after_pts >= file_size:
+            return None
+
+        fh.seek(after_pts)
+        # Scan up to 16 KiB after POINTS to find LINES / POLYLINES (skipping empty lines or small metadata).
+        post_buf = fh.read(min(16384, file_size - after_pts))
+        lines_rel = -1
+        for marker in (b"LINES ", b"POLYLINES "):
+            if post_buf.startswith(marker):
+                lines_rel = 0
+                break
+            idx = post_buf.find(b"\n" + marker)
+            if idx >= 0:
+                lines_rel = idx + 1
+                break
+        if lines_rel < 0:
+            return None
+        lines_nl = post_buf.find(b"\n", lines_rel)
+        if lines_nl < 0:
+            return None
+        lines_header = post_buf[lines_rel:lines_nl].decode("ascii", errors="ignore").strip().split()
+        if len(lines_header) < 3:
+            return None
+        n_first = int(lines_header[1])
+        n_second = int(lines_header[2])
+        cur_pos = after_pts + lines_nl + 1
+
+        # Peek at the next line to distinguish VTK 5.1 (OFFSETS/CONNECTIVITY) from VTK <= 4.2 binary cells.
+        fh.seek(cur_pos)
+        peek = fh.read(min(256, file_size - cur_pos))
+        first_nl = peek.find(b"\n")
+        peek_line = (peek[:first_nl] if first_nl >= 0 else peek).decode("ascii", errors="ignore").strip().split()
+
+        if peek_line and peek_line[0].upper() == "OFFSETS":
+            # VTK 5.1: LINES <num_offsets> <num_connectivity>
+            if len(peek_line) < 2 or first_nl < 0:
+                return None
+            off_dtype = np.dtype(">i8" if peek_line[1].lower().endswith("int64") else ">i4")
+            off_pos = cur_pos + first_nl + 1
+            fh.seek(off_pos)
+            offsets = np.fromfile(fh, dtype=off_dtype, count=n_first).astype(np.int64, copy=False)
+            if offsets.size != n_first:
+                return None
+            # Advance past trailing whitespace to CONNECTIVITY <type>
+            conn_hdr_pos = fh.tell()
+            conn_peek = fh.read(min(256, file_size - conn_hdr_pos))
+            conn_rel = 0
+            while conn_rel < len(conn_peek) and conn_peek[conn_rel] in b" \t\r\n":
+                conn_rel += 1
+            conn_nl = conn_peek.find(b"\n", conn_rel)
+            if conn_nl < 0:
+                return None
+            conn_tokens = conn_peek[conn_rel:conn_nl].decode("ascii", errors="ignore").strip().split()
+            if len(conn_tokens) < 2 or conn_tokens[0].upper() != "CONNECTIVITY":
+                return None
+            conn_dtype = np.dtype(">i8" if conn_tokens[1].lower().endswith("int64") else ">i4")
+            conn_pos = conn_hdr_pos + conn_nl + 1
+            fh.seek(conn_pos)
+            conn = np.fromfile(fh, dtype=conn_dtype, count=n_second).astype(np.int64, copy=False)
+            if conn.size != n_second:
+                return None
+            total = max(0, int(offsets.size) - 1)
+            if total == 0:
+                return 0, np.empty(0, dtype=np.int64), np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=np.float64)
+            lengths = offsets[1:] - offsets[:-1]
+            valid_idx = np.flatnonzero(lengths >= 2)
+            if valid_idx.size == 0:
+                return total, valid_idx, np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=np.float64)
+            start_pt_ids = conn[offsets[valid_idx]]
+            end_pt_ids = conn[offsets[valid_idx + 1] - 1]
+        else:
+            # Classic binary legacy VTK <= 4.2: LINES <num_cells> <total_ints>
+            fh.seek(cur_pos)
+            cells = np.fromfile(fh, dtype=">i4", count=n_second)
+            if cells.size != n_second:
+                return None
+            total = n_first
+            valid_list: list[int] = []
+            start_ids_list: list[int] = []
+            end_ids_list: list[int] = []
+            cursor = 0
+            for idx in range(total):
+                if cursor >= n_second:
+                    return None
+                n_cell = int(cells[cursor])
+                cursor += 1
+                if cursor + n_cell > n_second:
+                    return None
+                if n_cell >= 2:
+                    valid_list.append(idx)
+                    start_ids_list.append(int(cells[cursor]))
+                    end_ids_list.append(int(cells[cursor + n_cell - 1]))
+                cursor += n_cell
+            valid_idx = np.asarray(valid_list, dtype=np.int64)
+            if valid_idx.size == 0:
+                return total, valid_idx, np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=np.float64)
+            start_pt_ids = np.asarray(start_ids_list, dtype=np.int64)
+            end_pt_ids = np.asarray(end_ids_list, dtype=np.int64)
+
+        if (
+            int(start_pt_ids.min()) < 0 or int(start_pt_ids.max()) >= n_points
+            or int(end_pt_ids.min()) < 0 or int(end_pt_ids.max()) >= n_points
+        ):
+            return None
+
+        # Memory-map only up to the end of POINTS so we never copy all 22M points or touch multi-GB POINT_DATA.
+        with mmap.mmap(fh.fileno(), length=after_pts, access=mmap.ACCESS_READ) as mm:
+            pts_view = np.frombuffer(mm, dtype=pts_dtype, count=n_points * 3, offset=pts_offset).reshape((n_points, 3))
+            starts = np.ascontiguousarray(pts_view[start_pt_ids], dtype=np.float64)
+            ends = np.ascontiguousarray(pts_view[end_pt_ids], dtype=np.float64)
+            del pts_view
+        return total, valid_idx, starts, ends
+
+
+def _load_vtk_endpoints_via_vtk(path: Path):
+    """Load endpoints from .vtk/.vtp via VTK without reading point/cell attribute arrays or building Python lists."""
+    import numpy as np
+    import vtk  # type: ignore
+    from vtk.util.numpy_support import vtk_to_numpy
+
+    if path.suffix.lower() == ".vtp":
+        reader = vtk.vtkXMLPolyDataReader()
+    else:
+        reader = vtk.vtkPolyDataReader()
+        for setter in (
+            "ReadAllScalarsOff",
+            "ReadAllVectorsOff",
+            "ReadAllNormalsOff",
+            "ReadAllTensorsOff",
+            "ReadAllColorScalarsOff",
+            "ReadAllTCoordsOff",
+            "ReadAllFieldsOff",
+        ):
+            fn = getattr(reader, setter, None)
+            if callable(fn):
+                fn()
+    reader.SetFileName(path.as_posix())
+    reader.Update()
+    polydata = reader.GetOutput()
+    points = polydata.GetPoints() if polydata is not None else None
+    lines = polydata.GetLines() if polydata is not None else None
+    if points is None or lines is None:
+        return None
+    pts_data = points.GetData()
+    offsets_vtk = lines.GetOffsetsArray() if hasattr(lines, "GetOffsetsArray") else None
+    conn_vtk = lines.GetConnectivityArray() if hasattr(lines, "GetConnectivityArray") else None
+    if pts_data is None or offsets_vtk is None or conn_vtk is None:
+        return None
+    pts_arr = vtk_to_numpy(pts_data)
+    offsets = np.asarray(vtk_to_numpy(offsets_vtk), dtype=np.int64).reshape(-1)
+    conn = np.asarray(vtk_to_numpy(conn_vtk), dtype=np.int64).reshape(-1)
+    total = max(0, int(offsets.size) - 1)
+    if total == 0:
+        return 0, np.empty(0, dtype=np.int64), np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=np.float64)
+    lengths = offsets[1:] - offsets[:-1]
+    valid_idx = np.flatnonzero(lengths >= 2)
+    if valid_idx.size == 0:
+        return total, valid_idx, np.empty((0, 3), dtype=np.float64), np.empty((0, 3), dtype=np.float64)
+    starts = np.ascontiguousarray(pts_arr[conn[offsets[valid_idx]], :3], dtype=np.float64)
+    ends = np.ascontiguousarray(pts_arr[conn[offsets[valid_idx + 1] - 1], :3], dtype=np.float64)
+    return total, valid_idx, starts, ends
+
+
 def _load_streamline_endpoints_fast(path: Path):
     """Extract (total_streamlines, valid_indices, starts, ends) without materializing per-streamline objects."""
     import numpy as np
@@ -799,6 +1015,22 @@ def _load_streamline_endpoints_fast(path: Path):
             starts = np.ascontiguousarray(pts[v_off, :3])
             ends = np.ascontiguousarray(pts[v_off + v_len - 1, :3])
             return total, valid_idx, starts, ends
+
+    if suffix == ".vtk":
+        try:
+            fast = _load_binary_legacy_vtk_endpoints_fast(path)
+            if fast is not None:
+                return fast
+        except Exception:
+            pass
+
+    if suffix in {".vtk", ".vtp"}:
+        try:
+            fast_vtk = _load_vtk_endpoints_via_vtk(path)
+            if fast_vtk is not None:
+                return fast_vtk
+        except Exception:
+            pass
 
     streamlines = list(_iter_streamlines(path))
     total = len(streamlines)

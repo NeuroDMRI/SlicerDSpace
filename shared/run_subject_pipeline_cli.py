@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import json
 import os
 import signal
@@ -11,6 +12,11 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    faulthandler.enable(all_threads=True)
+except Exception:
+    pass
 
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 

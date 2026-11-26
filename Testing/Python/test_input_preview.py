@@ -1163,10 +1163,133 @@ class ClickFlowTest(unittest.TestCase):
         self.assertEqual(me._inputPreviewDwiNodeId, "vtkMRMLDiffusionWeightedVolumeNode1")
         self.assertEqual(events[0], "removed")  # the old preview goes before the new one is read
         self.assertEqual(events[-1], "stepper")
-        self.assertEqual(statuses[0], ("ok", "Loading the full DWI…"))
+        self.assertEqual(statuses[0], ("ok", ""))  # loading text moved onto the View input button, not below Inputs ready
         self.assertIn("full DWI of sub", statuses[-1][1])
         self.assertIn("4 volumes", statuses[-1][1])
         self.assertNotIn("mean b0", statuses[-1][1])
+
+    def test_view_input_button_shows_loading_sweep_in_place_and_restores_label(self):
+        from shared import ui_compact
+
+        class AnimButton:
+            def __init__(self):
+                self.text = "View input"
+                self.tooltip = ""
+                self.accessible = ""
+                self.stylesheet = ""
+                self.min_width = 0
+
+            def width(self):
+                return 86
+
+            def setMinimumWidth(self, value):
+                self.min_width = value
+
+            def setText(self, value):
+                self.text = value
+
+            def setToolTip(self, value):
+                self.tooltip = value
+
+            def setAccessibleName(self, value):
+                self.accessible = value
+
+            def setStyleSheet(self, value):
+                self.stylesheet = value
+
+        btn = AnimButton()
+        owner = SimpleNamespace(_inputPreviewWidgets={"button": btn}, _onboardingLanguage="en",
+                                _inputPreviewPending=True, _lastAppliedDarkMode=True)
+        ui_compact.set_input_preview_button_loading(owner, True)
+        self.assertEqual(btn.text, "Loading…")
+        self.assertEqual(btn.min_width, 86)
+        self.assertTrue(btn._dspaceLoading)
+        self.assertIn("background: transparent", btn.stylesheet)
+        self.assertIn("border: 1px solid transparent", btn.stylesheet)
+        # Bilingual refresh while pending must keep loading text rather than resetting to View input.
+        ui_compact.refresh_input_preview_controls(owner, "zh")
+        self.assertEqual(btn.text, "加载中…")
+        # Stopping restores idle style and text.
+        owner._inputPreviewPending = False
+        ui_compact.set_input_preview_button_loading(owner, False, language="en")
+        self.assertEqual(btn.text, "View input")
+        self.assertFalse(btn._dspaceLoading)
+        self.assertEqual(btn.stylesheet, "")
+        self.assertEqual(btn.min_width, 0)
+        # Text-shimmer stops move monotonically left to right across phases in both themes.
+        for dark in (False, True):
+            s0 = ui_compact._shimmer_gradient_stops(0.15, dark=dark)
+            s1 = ui_compact._shimmer_gradient_stops(0.50, dark=dark)
+            s2 = ui_compact._shimmer_gradient_stops(0.85, dark=dark)
+            for stops in (s0, s1, s2):
+                positions = [p for p, _ in stops]
+                self.assertEqual(positions[0], 0.0)
+                self.assertEqual(positions[-1], 1.0)
+                self.assertEqual(positions, sorted(positions))
+            self.assertNotEqual(s0, s1)
+            self.assertNotEqual(s1, s2)
+
+    def test_streaming_nrrd_and_shared_memory_cli_round_trip(self):
+        import json
+        import nrrd
+        from shared import input_preview as ip
+        from shared import input_preview_cli
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rng = np.random.default_rng(7)
+            vol = rng.integers(0, 500, size=(5, 6, 4, 3), dtype=np.int16)
+            for axis_mode, arr, sizes_kinds, space_dirs in (
+                ("last", vol, ["space", "space", "space", "list"],
+                 np.array([[1.25, 0, 0], [0, 1.25, 0], [0, 0, 1.25], [np.nan, np.nan, np.nan]])),
+                ("first", np.moveaxis(vol, -1, 0), ["list", "space", "space", "space"],
+                 np.array([[np.nan, np.nan, np.nan], [1.25, 0, 0], [0, 1.25, 0], [0, 0, 1.25]])),
+            ):
+                p = root / f"dwi_{axis_mode}.nrrd"
+                hdr = {
+                    "type": "short",
+                    "dimension": 4,
+                    "space": "left-posterior-superior",
+                    "sizes": np.asarray(arr.shape),
+                    "space directions": space_dirs,
+                    "kinds": sizes_kinds,
+                    "endian": "little",
+                    "encoding": "gzip",
+                    "space origin": np.array([-90.0, -90.25, -72.0]),
+                    "measurement frame": np.eye(3),
+                    "modality": "DWMRI",
+                    "DWMRI_b-value": "1000",
+                    "DWMRI_gradient_0000": "0 0 0",
+                    "DWMRI_gradient_0001": "1 0 0",
+                    "DWMRI_gradient_0002": "0 1 0",
+                }
+                nrrd.write(str(p), arr, hdr)
+                src = PreviewSource("nrrd", p, None, None, f"sub_{axis_mode}")
+                shm, meta = ip.read_full_dwi_to_shared_memory(src, block=2)
+                try:
+                    self.assertEqual(meta["shape_ijk"], (5, 6, 4))
+                    self.assertEqual(meta["count"], 3)
+                    view = np.ndarray((4, 6, 5, 3), dtype=np.int16, buffer=shm.buf)
+                    # VTK (k, j, i, c) must equal vol.transpose(2, 1, 0, 3)
+                    np.testing.assert_array_equal(view, vol.transpose(2, 1, 0, 3))
+                finally:
+                    shm.close()
+                    shm.unlink()
+            # Also verify input_preview_cli.run_request produces a valid meanb0 result when limit is small.
+            res_path = root / "result.json"
+            rc = input_preview_cli.run_request(
+                {
+                    "source": {"kind": "nrrd", "dwi": str(root / "dwi_last.nrrd"), "subject_id": "sub_last"},
+                    "cache_dir": str(root / "cache"),
+                    "limit": 1,
+                },
+                res_path,
+            )
+            self.assertEqual(rc, 0)
+            payload = json.loads(res_path.read_text(encoding="utf-8"))
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["kind"], "meanb0")
+            self.assertTrue(Path(payload["mean_b0"]).is_file())
 
     def test_b2_inputs_click_does_nothing_in_batch_mode_even_when_called(self):
         from shared import input_preview as ip

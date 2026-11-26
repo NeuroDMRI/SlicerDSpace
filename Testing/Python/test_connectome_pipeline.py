@@ -49,6 +49,57 @@ class ConnectomePipelineTest(unittest.TestCase):
             self.assertEqual(manifest["dependencies"]["ddparcel_parcellation"]["path"], parcellation.resolve().as_posix())
             self.assertEqual(qc["metric"], "streamline_count")
 
+    def test_fast_binary_legacy_vtk_endpoints_skips_trailing_point_data(self) -> None:
+        import numpy as np
+        from connectome.pipeline import _load_binary_legacy_vtk_endpoints_fast, _apply_affine_points
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pts = np.array(
+                [
+                    [1.0, 2.0, 3.0],
+                    [4.0, 5.0, 6.0],
+                    [7.0, 8.0, 9.0],
+                    [10.0, 11.0, 12.0],
+                    [13.0, 14.0, 15.0],
+                ],
+                dtype=">f4",
+            )
+            offsets = np.array([0, 3, 4, 5], dtype=">i8")
+            conn = np.array([0, 1, 2, 3, 4], dtype=">i8")
+            vtk51 = root / "ukf_v51.vtk"
+            blob = (
+                b"# vtk DataFile Version 5.1\nvtk output\nBINARY\nDATASET POLYDATA\n"
+                b"POINTS 5 float\n" + pts.tobytes()
+                + b"\nLINES 4 5\nOFFSETS vtktypeint64\n" + offsets.tobytes()
+                + b"\nCONNECTIVITY vtktypeint64\n" + conn.tobytes()
+                + b"\nPOINT_DATA 5\nTENSORS tensor1 float\n" + b"\x00" * 1024
+            )
+            vtk51.write_bytes(blob)
+            total, valid, starts, ends = _load_binary_legacy_vtk_endpoints_fast(vtk51)
+            self.assertEqual(total, 3)
+            np.testing.assert_array_equal(valid, np.array([0], dtype=np.int64))
+            np.testing.assert_allclose(starts, [[1.0, 2.0, 3.0]])
+            np.testing.assert_allclose(ends, [[7.0, 8.0, 9.0]])
+
+            cells = np.array([3, 0, 1, 2, 2, 3, 4], dtype=">i4")
+            vtk42 = root / "legacy_v42.vtk"
+            vtk42.write_bytes(
+                b"# vtk DataFile Version 4.2\nvtk output\nBINARY\nDATASET POLYDATA\n"
+                b"POINTS 5 float\n" + pts.tobytes()
+                + b"\nLINES 2 7\n" + cells.tobytes()
+                + b"\nPOINT_DATA 5\n"
+            )
+            total42, valid42, starts42, ends42 = _load_binary_legacy_vtk_endpoints_fast(vtk42)
+            self.assertEqual(total42, 2)
+            np.testing.assert_array_equal(valid42, np.array([0, 1], dtype=np.int64))
+            np.testing.assert_allclose(starts42, [[1.0, 2.0, 3.0], [10.0, 11.0, 12.0]])
+            np.testing.assert_allclose(ends42, [[7.0, 8.0, 9.0], [13.0, 14.0, 15.0]])
+
+            aff = np.array([[1.25, 0.1, 0.0, -90.0], [0.0, -1.25, 0.2, 126.0], [0.0, 0.0, 1.5, -72.0], [0, 0, 0, 1]])
+            vox = np.array([[10, 20, 30], [1, 2, 3]], dtype=np.int64)
+            np.testing.assert_allclose(_apply_affine_points(vox, aff), vox @ aff[:3, :3].T + aff[:3, 3])
+
     def test_manifest_lifecycle_matches_qc_after_success_and_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

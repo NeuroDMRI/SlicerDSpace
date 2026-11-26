@@ -357,6 +357,8 @@ class H4WorkerKilledTest(unittest.TestCase):
         self.assertNotIn("signal", message)
         self.assertIn("possibly out of memory", message)
         self.assertIn("Lower the number of parallel models or close other apps, then run again.", message)
+        nt_msg = worker_killed_message({"signal": None}, exit_code=-1073741571)
+        self.assertIn("stack overflow (0xC00000FD)", nt_msg)
 
     def test_h4_enum_like_exit_status_is_understood(self) -> None:
         class Crash:

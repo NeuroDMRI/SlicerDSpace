@@ -1427,8 +1427,27 @@ def worker_kill_info(exit_code: int, exit_status: Any = None, *, abnormal_exit_s
     return None
 
 
-def worker_killed_message(info: dict[str, Any]) -> str:
+_WINDOWS_NTSTATUS_LABELS = {
+    0xC00000FD: "stack overflow (0xC00000FD)",
+    0xC0000005: "access violation (0xC0000005)",
+    0xC0000374: "heap corruption (0xC0000374)",
+    0xC0000409: "stack buffer overrun (0xC0000409)",
+}
+
+
+def worker_killed_message(info: dict[str, Any], *, exit_code: Optional[int] = None) -> str:
     number = info.get("signal")
+    if number is None and exit_code is not None:
+        try:
+            unsigned = int(exit_code) & 0xFFFFFFFF
+        except (TypeError, ValueError):
+            unsigned = 0
+        nt_label = _WINDOWS_NTSTATUS_LABELS.get(unsigned)
+        if nt_label:
+            return (
+                f"The worker crashed with a native Windows {nt_label}. "
+                "Inspect the last output lines below (or close other memory-heavy apps) and run again."
+            )
     where = f" (signal {number})" if number else ""
     return (f"The worker was killed{where}, possibly out of memory. "
             "Lower the number of parallel models or close other apps, then run again.")

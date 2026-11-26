@@ -1928,7 +1928,10 @@ class SharedWidgetMixin:
             enabled, tooltip = False, str(exc)
         busy = bool(getattr(self, "_inputPreviewPending", False) or getattr(self, "_inputImportPending", False))
         widgets["button"].setEnabled(enabled and not busy)
-        widgets["button"].setToolTip(tooltip)
+        if getattr(self, "_inputPreviewPending", False):
+            widgets["button"].setToolTip("正在载入完整 DWI…" if zh else "Loading the full DWI…")
+        else:
+            widgets["button"].setToolTip(tooltip)
         # O9: a status line describes the source it was made for; clear it when the resolved source changes.
         shown_for = getattr(self, "_inputPreviewStatusKey", None)
         if shown_for is not None and not getattr(self, "_inputPreviewPending", False) \
@@ -1962,12 +1965,43 @@ class SharedWidgetMixin:
             base = Path(tempfile.gettempdir())
         return base / "SlicerDSpace" / "input_preview"
 
+    def _cleanup_input_preview_process(self, *, terminate: bool = False) -> None:
+        proc = getattr(self, "_inputPreviewProcess", None)
+        self._inputPreviewProcess = None
+        if proc is not None:
+            try:
+                if terminate and qprocess_is_running(proc):
+                    if hasattr(proc, "write"):
+                        try:
+                            proc.write(b"abort\n")
+                        except Exception:
+                            pass
+                    if hasattr(proc, "closeWriteChannel"):
+                        try:
+                            proc.closeWriteChannel()
+                        except Exception:
+                            pass
+                    if hasattr(proc, "waitForFinished") and not proc.waitForFinished(1500):
+                        if hasattr(proc, "kill"):
+                            proc.kill()
+                        proc.waitForFinished(1500)
+            except Exception:
+                pass
+        tmp_dir = getattr(self, "_inputPreviewTempDir", None)
+        self._inputPreviewTempDir = None
+        if tmp_dir is not None:
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
     def _on_input_preview_clicked(self) -> None:
         from concurrent.futures import Future
         from threading import Thread
 
         from shared import input_preview
         from shared.input_preview import PreviewError
+        from shared.ui_compact import set_input_preview_button_loading
 
         if getattr(self, "_inputPreviewPending", False) or getattr(self, "_inputImportPending", False):
             return
@@ -1993,22 +2027,17 @@ class SharedWidgetMixin:
         self._inputPreviewDwiNodeId = None
         self._refresh_input_preview_stepper()
         self._inputPreviewPending = True
-        self._set_input_preview_status("正在载入完整 DWI…" if zh else "Loading the full DWI…", key=key)
+        self._set_input_preview_status("")
+        set_input_preview_button_loading(self, True, language="zh" if zh else "en")
         self._refresh_input_preview_controls()
         cache_dir = self._input_preview_cache_dir()
-        future: Future = Future()
 
-        def work() -> None:
-            # Worker thread: all file I/O and the voxel copy; writes nothing except the size fallback's cache file.
-            try:
-                future.set_result(input_preview.prepare_input_preview(source, cache_dir))
-            except BaseException as exc:
-                future.set_exception(exc)
-
-        def finish() -> None:
+        def apply_prepared(prepared: Any, err: Optional[BaseException] = None) -> None:
             self._inputPreviewPending = False
+            set_input_preview_button_loading(self, False, language="zh" if zh else "en")
             try:
-                prepared = future.result()
+                if err is not None:
+                    raise err
                 if prepared.kind == "dwi":
                     nodes = input_preview.show_dwi_in_scene(
                         slicer, prepared.dwi, source.mask, subject_id=source.subject_id, log=self.appendLog
@@ -2046,8 +2075,172 @@ class SharedWidgetMixin:
             self._refresh_input_preview_controls()
             self._refresh_input_preview_stepper()
 
+        launcher = str(self._slicer_launcher_program() or "").strip() if hasattr(self, "_slicer_launcher_program") else ""
+        use_qprocess = bool(launcher) and hasattr(qt, "QProcess")
+        if use_qprocess:
+            from shared.input_preview_cli import READY_SENTINEL
+
+            self._cleanup_input_preview_process(terminate=True)
+            tmp_dir = Path(tempfile.mkdtemp(prefix="slicerdspace_preview_"))
+            request_path = tmp_dir / "request.json"
+            result_path = tmp_dir / "result.json"
+            request_payload = {
+                "source": {
+                    "kind": source.kind,
+                    "dwi": str(source.dwi),
+                    "bval": str(source.bval) if source.bval else None,
+                    "mask": str(source.mask) if source.mask else None,
+                    "subject_id": source.subject_id,
+                    "origin": source.origin,
+                    "raw": str(source.raw) if source.raw else None,
+                    "bvec": str(source.bvec) if source.bvec else None,
+                },
+                "cache_dir": str(cache_dir),
+            }
+            request_path.write_text(json.dumps(request_payload, indent=2), encoding="utf-8")
+            cli_script = Path(__file__).resolve().parent / "input_preview_cli.py"
+            args = [
+                "--launch",
+                "PythonSlicer",
+                "-u",
+                str(cli_script),
+                "--request",
+                str(request_path),
+                "--result",
+                str(result_path),
+            ]
+            process = qt.QProcess(getattr(self, "parent", None))
+            if hasattr(process, "setWorkingDirectory"):
+                process.setWorkingDirectory(Path(__file__).resolve().parent.parent.as_posix())
+            if hasattr(qt.QProcess, "MergedChannels") and hasattr(process, "setProcessChannelMode"):
+                process.setProcessChannelMode(qt.QProcess.MergedChannels)
+            if hasattr(qt, "QProcessEnvironment") and hasattr(process, "setProcessEnvironment"):
+                env = qt.QProcessEnvironment.systemEnvironment()
+                for env_k, env_v in background_process_env_overrides().items():
+                    env.insert(env_k, env_v)
+                process.setProcessEnvironment(env)
+            self._inputPreviewProcess = process
+            self._inputPreviewTempDir = tmp_dir
+            state = {"done": False, "buf": ""}
+
+            def _ack_worker() -> None:
+                try:
+                    if hasattr(process, "write"):
+                        process.write(b"ok\n")
+                    if hasattr(process, "closeWriteChannel"):
+                        process.closeWriteChannel()
+                except Exception:
+                    pass
+
+            def _consume_result(exit_code: Optional[int] = None) -> None:
+                if state["done"]:
+                    return
+                state["done"] = True
+                if getattr(self, "_cleanedUp", False):
+                    _ack_worker()
+                    self._cleanup_input_preview_process(terminate=True)
+                    return
+                prepared = None
+                err: Optional[BaseException] = None
+                try:
+                    if not result_path.is_file():
+                        tail = state["buf"].strip().splitlines()[-3:]
+                        detail = " | ".join(tail) if tail else f"worker exited with code {exit_code}"
+                        raise PreviewError("bad_data", f"Input preview worker did not produce a result ({detail}).")
+                    payload = json.loads(result_path.read_text(encoding="utf-8"))
+                    if not payload.get("ok"):
+                        raise PreviewError(
+                            str(payload.get("error_code") or "bad_data"),
+                            str(payload.get("detail") or "Could not prepare input preview."),
+                        )
+                    kind = str(payload.get("kind") or "")
+                    if kind == "dwi":
+                        try:
+                            full_dwi = input_preview.full_dwi_from_shared_memory(payload)
+                        finally:
+                            _ack_worker()
+                        prepared = input_preview.PreparedPreview(
+                            "dwi",
+                            dwi=full_dwi,
+                            estimated_bytes=int(payload.get("estimated_bytes", 0)),
+                            limit_bytes=int(payload.get("limit_bytes", 0)),
+                            reason="",
+                        )
+                    else:
+                        _ack_worker()
+                        prepared = input_preview.PreparedPreview(
+                            "meanb0",
+                            mean_b0=Path(str(payload["mean_b0"])),
+                            estimated_bytes=int(payload.get("estimated_bytes", 0)),
+                            limit_bytes=int(payload.get("limit_bytes", 0)),
+                            reason=str(payload.get("reason") or "size"),
+                        )
+                except BaseException as exc:
+                    _ack_worker()
+                    err = exc
+                finally:
+                    # Wait briefly for worker to unlink SharedMemory and exit, then clean up temp files.
+                    try:
+                        if hasattr(process, "waitForFinished"):
+                            process.waitForFinished(3000)
+                    except Exception:
+                        pass
+                    self._cleanup_input_preview_process(terminate=False)
+                apply_prepared(prepared, err)
+
+            def _on_ready_read() -> None:
+                if state["done"] or getattr(self, "_cleanedUp", False):
+                    return
+                chunk = self._qbytearray_to_text(process.readAllStandardOutput())
+                state["buf"] += chunk
+                if READY_SENTINEL in state["buf"]:
+                    _consume_result()
+
+            def _on_finished(exit_code: int, _exit_status: int = 0) -> None:
+                if state["done"]:
+                    return
+                if hasattr(process, "readAllStandardOutput"):
+                    try:
+                        state["buf"] += self._qbytearray_to_text(process.readAllStandardOutput())
+                    except Exception:
+                        pass
+                _consume_result(exit_code=exit_code)
+
+            def _on_error(proc_err: Any) -> None:
+                if state["done"]:
+                    return
+                _consume_result(exit_code=-1)
+
+            process.connect("readyReadStandardOutput()", _on_ready_read)
+            process.connect("finished(int,QProcess::ExitStatus)", _on_finished)
+            process.connect("errorOccurred(QProcess::ProcessError)", _on_error)
+            process.start(launcher, args)
+            if hasattr(process, "waitForStarted") and not process.waitForStarted(5000):
+                _consume_result(exit_code=-1)
+            return
+
+        # Fallback path for headless / fake-Qt unit tests without QProcess.
+        future: Future = Future()
+
+        def work() -> None:
+            # Worker thread: all file I/O and the voxel copy; writes nothing except the size fallback's cache file.
+            try:
+                future.set_result(input_preview.prepare_input_preview(source, cache_dir))
+            except BaseException as exc:
+                future.set_exception(exc)
+
+        def finish() -> None:
+            try:
+                prepared = future.result()
+                err = None
+            except BaseException as exc:
+                prepared = None
+                err = exc
+            apply_prepared(prepared, err)
+
         def poll() -> None:
             if getattr(self, "_cleanedUp", False):
+                set_input_preview_button_loading(self, False, language="zh" if zh else "en")
                 return
             if future.done():
                 finish()
@@ -3392,6 +3585,14 @@ class SharedWidgetMixin:
         job = getattr(self, "_setupJob", None)
         if job:
             job.shutdown()
+        self._inputPreviewPending = False
+        self._cleanup_input_preview_process(terminate=True)
+        try:
+            from shared.ui_compact import stop_input_preview_loading_animation
+
+            stop_input_preview_loading_animation(self)
+        except Exception:
+            pass
         self._inputImportPending = False
         self._cleanup_import_process_resources(terminate=True)
         process = getattr(self, "_backgroundProcess", None)
@@ -4610,7 +4811,10 @@ class SharedWidgetMixin:
                 # treating a non-zero exit as a blanket process failure.
                 self._load_background_manifest_result(manifest_path)
             elif outcome == "worker_killed":
-                message = worker_killed_message(worker_kill_info(exit_code, exit_status, abnormal_exit_seen=abnormal_exit) or {})
+                message = worker_killed_message(
+                    worker_kill_info(exit_code, exit_status, abnormal_exit_seen=abnormal_exit) or {},
+                    exit_code=exit_code,
+                )
                 self._mark_unfinished_rows("failed", message)
                 self._setStatus("error", "Pipeline failed: the worker was killed")
                 set_run_state(self, "failed")

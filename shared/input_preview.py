@@ -1095,7 +1095,11 @@ def _fill_block(view: Any, block: Any, start: int) -> None:
         view[z, :, :, start:stop] = block[:, :, z, :].transpose(1, 0, 2)
 
 
-def _read_full_dwi_nifti(source: PreviewSource, block: int) -> FullDwi:
+def _read_full_dwi_nifti_into(
+    source: PreviewSource,
+    alloc_buffer: Callable[[tuple[int, int, int], int, Any], tuple[Any, Any]],
+    block: int,
+) -> tuple[Any, dict[str, Any]]:
     import nibabel as nib
     import numpy as np
 
@@ -1114,62 +1118,286 @@ def _read_full_dwi_nifti(source: PreviewSource, block: int) -> FullDwi:
     affine = np.array(image.affine, dtype=float)
     gradients = gradients_ras(affine, read_bvecs(source.bvec, count))
     dtype = _nifti_build_dtype(image)
-    vtk_image, view = _new_vtk_image(shape[:3], count, dtype)
+    owner, view = alloc_buffer(shape[:3], count, dtype)
     for start in range(0, count, block):
         # The volumes of one block are contiguous in the file; a block keeps the peak near 1.3x the array (b2-dwi).
         chunk = np.asarray(image.dataobj[..., start:min(count, start + block)])
         _fill_block(view, chunk, start)
         del chunk
-    del view, image  # the view points into VTK memory; the image closes the file that keep_file_open holds
-    return FullDwi(vtk_image, affine, gradients, [float(b) for b in bvals], np.eye(3),
-                   int(np.prod(shape, dtype=np.int64)) * dtype.itemsize, vtk_image.GetScalarTypeAsString())
+    del view, image  # the view points into caller memory; the image closes the file that keep_file_open holds
+    meta = {
+        "shape_ijk": shape[:3],
+        "count": count,
+        "dtype": dtype.name,
+        "ijk_to_ras": affine,
+        "gradients": gradients,
+        "bvalues": [float(b) for b in bvals],
+        "measurement_frame": np.eye(3),
+        "voxel_bytes": int(np.prod(shape, dtype=np.int64)) * dtype.itemsize,
+    }
+    return owner, meta
 
 
-def _read_full_dwi_nrrd(source: PreviewSource, block: int) -> FullDwi:
+def _stream_full_dwi_nrrd_into(
+    header: Mapping[str, Any],
+    target: str,
+    attached_fh: Any,
+    axis: int,
+    nrrd_mod: Any,
+    view: Any,
+    block: int,
+) -> bool:
+    """Stream raw/gzip NRRD voxel data directly into the (nz, ny, nx, count) view without a full 4D copy.
+
+    Returns True when streamed, or False when the encoding/layout requires falling back to ``nrrd.read``.
+    """
+    import numpy as np
+
+    encoding = str(header.get("encoding", "")).strip().lower()
+    if encoding not in {"raw", "gzip", "gz"}:
+        return False
+    data_filename = header.get("datafile", header.get("data file", None))
+    if data_filename is not None:
+        if not isinstance(data_filename, str):
+            return False
+        stripped = data_filename.strip()
+        if not stripped or stripped.upper().startswith("LIST") or "%" in stripped:
+            return False
+        data_filename = stripped
+    line_skip = int(header.get("lineskip", header.get("line skip", 0)))
+    byte_skip = int(header.get("byteskip", header.get("byte skip", 0)))
+    if line_skip < 0 or byte_skip < -1:
+        raise PreviewError("bad_data", "The NRRD header has an invalid line skip or byte skip.")
+    if encoding != "raw" and byte_skip != 0:
+        return False
+
+    sizes = tuple(int(s) for s in header.get("sizes", []))
+    if axis not in (0, len(sizes) - 1):
+        return False
+    dtype = _nrrd_numpy_dtype(header, nrrd_mod)
+    itemsize = int(dtype.itemsize)
+    total_voxels = int(np.prod(sizes, dtype=np.int64))
+    spatial_shape = tuple(s for i, s in enumerate(sizes) if i != axis)
+    nx, ny, nz = (int(s) for s in spatial_shape)
+    count = int(sizes[axis])
+
+    with contextlib.ExitStack() as stack:
+        if data_filename is not None:
+            data_path = (
+                data_filename
+                if os.path.isabs(data_filename)
+                else os.path.join(os.path.dirname(target), data_filename)
+            )
+            data_fh = stack.enter_context(open(data_path, "rb"))
+        else:
+            data_fh = attached_fh
+
+        for _ in range(line_skip):
+            data_fh.readline()
+        if byte_skip > 0:
+            data_fh.seek(byte_skip, os.SEEK_CUR)
+        elif byte_skip == -1:
+            data_fh.seek(-total_voxels * itemsize, os.SEEK_END)
+
+        if encoding == "raw":
+            base_offset = data_fh.tell()
+            data_fh.seek(0, os.SEEK_END)
+            if data_fh.tell() < base_offset + total_voxels * itemsize:
+                raise PreviewError("bad_data", "The NRRD data file is shorter than the header dimensions.")
+            data_fh.seek(base_offset, os.SEEK_SET)
+            stream = data_fh
+        else:
+            stream = stack.enter_context(gzip.GzipFile(fileobj=data_fh, mode="rb"))
+
+        if axis == len(sizes) - 1:
+            # sizes = (nx, ny, nz, count) Fortran order: each 3D volume is contiguous.
+            vol_bytes = nx * ny * nz * itemsize
+            step = max(1, int(block))
+            for start in range(0, count, step):
+                cur = min(step, count - start)
+                raw_bytes = _read_exact_bytes(stream, cur * vol_bytes)
+                chunk = np.frombuffer(raw_bytes, dtype=dtype).reshape((nx, ny, nz, cur), order="F")
+                _fill_block(view, chunk, start)
+                del chunk, raw_bytes
+            return True
+
+        # axis == 0: sizes = (count, nx, ny, nz) Fortran order == (nz, ny, nx, count) C order directly!
+        slab_bytes = ny * nx * count * itemsize
+        slab_step = max(1, min(nz, _NRRD_STREAM_CHUNK_BYTES // max(1, slab_bytes)))
+        z0 = 0
+        while z0 < nz:
+            z1 = min(nz, z0 + slab_step)
+            raw_bytes = _read_exact_bytes(stream, (z1 - z0) * slab_bytes)
+            chunk = np.frombuffer(raw_bytes, dtype=dtype).reshape((z1 - z0, ny, nx, count))
+            view[z0:z1] = chunk
+            del chunk, raw_bytes
+            z0 = z1
+        return True
+
+
+def _read_full_dwi_nrrd_into(
+    source: PreviewSource,
+    alloc_buffer: Callable[[tuple[int, int, int], int, Any], tuple[Any, Any]],
+    block: int,
+) -> tuple[Any, dict[str, Any]]:
     import numpy as np
 
     try:
         import nrrd
     except ImportError as exc:
         raise PreviewError("bad_data", "Reading NRRD needs pynrrd, which is not installed.") from exc
+    owner = None
     try:
         with _nrrd_read_target(source) as target:
-            announced = _nrrd_announced_bytes(nrrd.read_header(target))
-            if announced > MAX_NRRD_BYTES:
-                raise PreviewError(
-                    "bad_data",
-                    "The NRRD holds about %.1f GiB of voxel data; the preview reads at most %d GiB."
-                    % (announced / (1 << 30), MAX_NRRD_BYTES >> 30),
-                )
-            data, header = nrrd.read(target)
+            with open(target, "rb") as attached_fh:
+                header = nrrd.read_header(attached_fh)
+                sizes = tuple(int(s) for s in header.get("sizes", []))
+                if len(sizes) != 4:
+                    raise PreviewError("bad_data", f"The NRRD is {len(sizes)}D; a 4D diffusion series is required.")
+                announced = _nrrd_announced_bytes(header)
+                if announced > MAX_NRRD_BYTES:
+                    raise PreviewError(
+                        "bad_data",
+                        "The NRRD holds about %.1f GiB of voxel data; the preview reads at most %d GiB."
+                        % (announced / (1 << 30), MAX_NRRD_BYTES >> 30),
+                    )
+                axis = _nrrd_diffusion_axis(header, len(sizes))
+                count = int(sizes[axis])
+                spatial_shape = tuple(int(s) for i, s in enumerate(sizes) if i != axis)
+                bvals = _nrrd_bvalues(header, count)
+                vectors = [[float(token) for token in str(header["DWMRI_gradient_%04d" % i]).split()] for i in range(count)]
+                if any(len(vector) != 3 for vector in vectors):
+                    raise PreviewError("bad_data", "A DWMRI_gradient entry does not have 3 components.")
+                affine = _nrrd_ras_affine(header, axis)
+                frame = header.get("measurement frame")
+                # pynrrd returns one header vector per row; the NRRD vectors are the matrix columns.
+                matrix = np.asarray(frame, dtype=float).T if frame is not None else np.eye(3)
+                if matrix.shape != (3, 3) or not np.all(np.isfinite(matrix)):
+                    raise PreviewError("bad_data", "The NRRD 'measurement frame' field is not usable.")
+                measurement_frame = np.diag(_space_signs(header.get("space"))) @ matrix
+                disk_dtype = _nrrd_numpy_dtype(header, nrrd)
+                dtype = _build_dtype(disk_dtype)
+                owner, view = alloc_buffer(spatial_shape, count, dtype)
+                streamed = _stream_full_dwi_nrrd_into(header, target, attached_fh, axis, nrrd, view, block)
+            if not streamed:
+                data, header = nrrd.read(target)
+                volumes = np.moveaxis(data, axis, -1)
+                for start in range(0, count, block):
+                    _fill_block(view, volumes[..., start:min(count, start + block)], start)
+                del volumes, data
+            del view
     except PreviewError:
         raise
     except Exception as exc:
         raise PreviewError("bad_data", f"Could not read the NRRD file: {exc}") from exc
-    if data.ndim != 4:
-        raise PreviewError("bad_data", f"The NRRD is {data.ndim}D; a 4D diffusion series is required.")
-    axis = _nrrd_diffusion_axis(header, data.ndim)
-    count = int(data.shape[axis])
-    bvals = _nrrd_bvalues(header, count)
-    vectors = [[float(token) for token in str(header["DWMRI_gradient_%04d" % i]).split()] for i in range(count)]
-    if any(len(vector) != 3 for vector in vectors):
-        raise PreviewError("bad_data", "A DWMRI_gradient entry does not have 3 components.")
-    affine = _nrrd_ras_affine(header, axis)
-    frame = header.get("measurement frame")
-    # pynrrd returns one header vector per row; the NRRD vectors are the matrix columns.
-    matrix = np.asarray(frame, dtype=float).T if frame is not None else np.eye(3)
-    if matrix.shape != (3, 3) or not np.all(np.isfinite(matrix)):
-        raise PreviewError("bad_data", "The NRRD 'measurement frame' field is not usable.")
-    measurement_frame = np.diag(_space_signs(header.get("space"))) @ matrix
-    volumes = np.moveaxis(data, axis, -1)
-    dtype = _build_dtype(volumes.dtype)
-    vtk_image, view = _new_vtk_image(volumes.shape[:3], count, dtype)
-    for start in range(0, count, block):
-        _fill_block(view, volumes[..., start:min(count, start + block)], start)
-    del view, volumes, data
-    return FullDwi(vtk_image, affine, _unit_rows(vectors), bvals, measurement_frame,
-                   int(np.prod(vtk_image.GetDimensions(), dtype=np.int64)) * count * dtype.itemsize,
-                   vtk_image.GetScalarTypeAsString())
+    meta = {
+        "shape_ijk": spatial_shape,
+        "count": count,
+        "dtype": dtype.name,
+        "ijk_to_ras": affine,
+        "gradients": _unit_rows(vectors),
+        "bvalues": bvals,
+        "measurement_frame": measurement_frame,
+        "voxel_bytes": int(np.prod(spatial_shape, dtype=np.int64)) * count * dtype.itemsize,
+    }
+    return owner, meta
+
+
+def _read_full_dwi_nifti(source: PreviewSource, block: int) -> FullDwi:
+    vtk_image, meta = _read_full_dwi_nifti_into(source, _new_vtk_image, block)
+    return FullDwi(
+        vtk_image,
+        meta["ijk_to_ras"],
+        meta["gradients"],
+        meta["bvalues"],
+        meta["measurement_frame"],
+        meta["voxel_bytes"],
+        vtk_image.GetScalarTypeAsString(),
+    )
+
+
+def _read_full_dwi_nrrd(source: PreviewSource, block: int) -> FullDwi:
+    vtk_image, meta = _read_full_dwi_nrrd_into(source, _new_vtk_image, block)
+    return FullDwi(
+        vtk_image,
+        meta["ijk_to_ras"],
+        meta["gradients"],
+        meta["bvalues"],
+        meta["measurement_frame"],
+        meta["voxel_bytes"],
+        vtk_image.GetScalarTypeAsString(),
+    )
+
+
+def read_full_dwi_to_shared_memory(source: PreviewSource, block: int = _FILL_BLOCK) -> tuple[Any, dict[str, Any]]:
+    """Stream the whole DWI into a POSIX/Windows SharedMemory block in VTK (k, j, i, c) layout.
+
+    Returns ``(shm, metadata_dict)``. Caller owns ``shm`` and must close/unlink it when done.
+    """
+    from multiprocessing.shared_memory import SharedMemory
+    import numpy as np
+
+    if not Path(source.dwi).is_file():
+        raise PreviewError("missing")
+    created: list[Any] = []
+
+    def alloc_shm(shape_ijk: tuple[int, int, int], count: int, dtype: Any) -> tuple[Any, Any]:
+        nx, ny, nz = (int(s) for s in shape_ijk)
+        nbytes = int(nx) * int(ny) * int(nz) * int(count) * int(np.dtype(dtype).itemsize)
+        shm = SharedMemory(create=True, size=max(1, nbytes))
+        created.append(shm)
+        view = np.ndarray((nz, ny, nx, int(count)), dtype=np.dtype(dtype), buffer=shm.buf)
+        return shm, view
+
+    try:
+        if source.kind == "nrrd":
+            shm, meta = _read_full_dwi_nrrd_into(source, alloc_shm, block)
+        else:
+            shm, meta = _read_full_dwi_nifti_into(source, alloc_shm, block)
+    except BaseException:
+        for shm in created:
+            try:
+                shm.close()
+            except Exception:
+                pass
+            try:
+                shm.unlink()
+            except Exception:
+                pass
+        raise
+    meta["shm_name"] = shm.name
+    return shm, meta
+
+
+def full_dwi_from_shared_memory(meta: Mapping[str, Any]) -> FullDwi:
+    """GUI thread: copy a SharedMemory (k, j, i, c) buffer into a VTK-owned vtkImageData in one memcpy."""
+    from multiprocessing.shared_memory import SharedMemory
+    import numpy as np
+
+    shape_ijk = tuple(int(s) for s in meta["shape_ijk"])
+    nx, ny, nz = shape_ijk
+    count = int(meta["count"])
+    dtype = _build_dtype(np.dtype(str(meta["dtype"])))
+    shm = SharedMemory(name=str(meta["shm_name"]), create=False)
+    try:
+        src = np.ndarray((nz, ny, nx, count), dtype=dtype, buffer=shm.buf)
+        vtk_image, view = _new_vtk_image(shape_ijk, count, dtype)
+        np.copyto(view, src)
+        del src, view
+    finally:
+        try:
+            shm.close()
+        except Exception:
+            pass
+    return FullDwi(
+        vtk_image,
+        np.asarray(meta["ijk_to_ras"], dtype=float),
+        np.asarray(meta["gradients"], dtype=float),
+        [float(b) for b in meta["bvalues"]],
+        np.asarray(meta["measurement_frame"], dtype=float),
+        int(meta["voxel_bytes"]),
+        vtk_image.GetScalarTypeAsString(),
+    )
 
 
 def read_full_dwi(source: PreviewSource, block: int = _FILL_BLOCK) -> FullDwi:

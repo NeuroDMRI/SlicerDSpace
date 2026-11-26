@@ -404,8 +404,31 @@ def _start_task_timer(label: str, log: Optional[Callable[[str], None]] = None) -
     return started
 
 
+def _release_stage_memory() -> None:
+    """Release dead Python/PyTorch buffers between heavy in-process stages to curb heap growth."""
+    import gc
+
+    gc.collect()
+    torch = sys.modules.get("torch")
+    if torch is None:
+        return
+    try:
+        cuda = getattr(torch, "cuda", None)
+        if cuda is not None and cuda.is_initialized():
+            cuda.empty_cache()
+    except Exception:
+        pass
+    try:
+        mps = getattr(torch, "mps", None)
+        if mps is not None and callable(getattr(mps, "empty_cache", None)):
+            mps.empty_cache()
+    except Exception:
+        pass
+
+
 def _finish_task_timer(label: str, started: float, log: Optional[Callable[[str], None]] = None) -> None:
     _emit(f"[Orchestrator] {label} completed in {time.monotonic() - started:0.1f}s", log)
+    _release_stage_memory()
 
 
 def _read_json(path: Path) -> dict[str, object]:

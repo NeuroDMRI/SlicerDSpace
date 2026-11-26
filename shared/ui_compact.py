@@ -1300,6 +1300,108 @@ def organize_environment_section(owner: Any) -> None:
     owner._environmentSectionOrganized = True
 
 
+def _shimmer_gradient_stops(phase: float, *, dark: bool) -> list[tuple[float, tuple[int, int, int, int]]]:
+    """Compute smooth left-to-right text-shimmer RGBA gradient stops for phase in [0, 1)."""
+    pos = -0.35 + (float(phase) % 1.0) * 1.70
+    half_width = 0.28
+    if dark:
+        base = (132, 138, 146, 255)   # calm muted gray matching dark tab bar labels
+        mid = (196, 203, 212, 255)
+        peak = (248, 250, 252, 255)   # crisp bright highlight sweeping left -> right
+    else:
+        base = (146, 152, 160, 255)   # calm muted gray matching light tab bar labels
+        mid = (78, 84, 92, 255)
+        peak = (24, 28, 34, 255)      # crisp dark sheen sweeping left -> right
+    raw = [
+        (0.0, base),
+        (pos - half_width, base),
+        (pos - half_width * 0.45, mid),
+        (pos, peak),
+        (pos + half_width * 0.45, mid),
+        (pos + half_width, base),
+        (1.0, base),
+    ]
+    stops: list[tuple[float, tuple[int, int, int, int]]] = []
+    for p, rgba in raw:
+        c = round(max(0.0, min(1.0, p)), 4)
+        if stops and c <= stops[-1][0]:
+            if c == stops[-1][0]:
+                stops[-1] = (c, rgba)
+            continue
+        stops.append((c, rgba))
+    if stops[-1][0] < 1.0:
+        stops.append((1.0, base))
+    return stops
+
+
+def _qt_attr(obj: Any, name: str, default: Any = None) -> Any:
+    """Read a Qt attribute whether PythonQt exposes it as a property or PyQt exposes it as a method."""
+    if not hasattr(obj, name):
+        return default
+    val = getattr(obj, name)
+    if callable(val):
+        try:
+            return val()
+        except TypeError:
+            return val
+    return val
+
+
+def _render_shimmer_text_icon(qt: Any, button: Any, text: str, phase: float, *, dark: bool) -> Optional[tuple[Any, Any]]:
+    """Render borderless left-to-right shimmering text into a high-DPI QIcon (Normal + Disabled)."""
+    required = ("QImage", "QPainter", "QPixmap", "QIcon", "QLinearGradient", "QColor", "QBrush", "QFontMetrics", "QRectF", "QSize")
+    if not all(hasattr(qt, attr) for attr in required):
+        return None
+    try:
+        font = _qt_attr(button, "font")
+        if font is None:
+            return None
+        fm = qt.QFontMetrics(font)
+        text_w = int(fm.horizontalAdvance(text) if hasattr(fm, "horizontalAdvance") else fm.width(text))
+        text_h = int(fm.height() if hasattr(fm, "height") else 16)
+        w = max(text_w + 4, 48)
+        h = max(text_h + 4, 20)
+        try:
+            dpr = max(1.0, float(_qt_attr(button, "devicePixelRatioF", 1.0) or 1.0))
+        except Exception:
+            dpr = 1.0
+        img = qt.QImage(
+            max(1, int(round(w * dpr))),
+            max(1, int(round(h * dpr))),
+            qt.QImage.Format_ARGB32_Premultiplied,
+        )
+        if hasattr(img, "setDevicePixelRatio"):
+            img.setDevicePixelRatio(dpr)
+        img.fill(0)
+
+        left = max(0.0, (float(w) - float(text_w)) * 0.5)
+        right = min(float(w), left + max(1.0, float(text_w)))
+        painter = qt.QPainter(img)
+        try:
+            painter.setRenderHint(qt.QPainter.Antialiasing, True)
+            painter.setRenderHint(qt.QPainter.TextAntialiasing, True)
+            painter.setFont(font)
+            painter.setPen(qt.QColor(255, 255, 255, 255))
+            painter.drawText(qt.QRectF(0.0, 0.0, float(w), float(h)), qt.Qt.AlignCenter, text)
+            grad = qt.QLinearGradient(left, 0.0, right, 0.0)
+            for stop_pos, (r, g, b, a) in _shimmer_gradient_stops(phase, dark=dark):
+                grad.setColorAt(stop_pos, qt.QColor(r, g, b, a))
+            painter.setCompositionMode(qt.QPainter.CompositionMode_SourceIn)
+            painter.fillRect(qt.QRectF(0.0, 0.0, float(w), float(h)), qt.QBrush(grad))
+        finally:
+            painter.end()
+
+        pix = qt.QPixmap.fromImage(img)
+        if hasattr(pix, "setDevicePixelRatio"):
+            pix.setDevicePixelRatio(dpr)
+        icon = qt.QIcon()
+        icon.addPixmap(pix, qt.QIcon.Normal)
+        icon.addPixmap(pix, qt.QIcon.Disabled)
+        return icon, qt.QSize(w, h)
+    except Exception:
+        return None
+
+
 def install_input_preview_controls(owner: Any) -> None:
     """Add the 'View input' button, its volume stepper and its status label to the end of 1. Inputs (H1).
 
@@ -1385,6 +1487,164 @@ def install_input_preview_controls(owner: Any) -> None:
     refresh_input_preview_controls(owner)
 
 
+def input_preview_loading_stylesheet(*, dark: bool = False) -> str:
+    """Return a borderless transparent stylesheet for QPushButton#inputPreviewButton while loading."""
+    ink = "#9AA0A6" if dark else "#606367"
+    rule = (
+        f"background: transparent; color: {ink}; border: 1px solid transparent;"
+        " border-radius: 5px; padding: 2px 10px; font-size: 11px; min-height: 20px;"
+    )
+    return (
+        f"QPushButton#inputPreviewButton {{ {rule} }}"
+        f"QPushButton#inputPreviewButton:disabled {{ {rule} }}"
+    )
+
+
+def _input_preview_dark_mode(owner: Any, button: Any) -> bool:
+    cached = getattr(owner, "_lastAppliedDarkMode", None)
+    if cached is not None:
+        return bool(cached)
+    try:
+        from shared.ui_styles import is_dark_mode
+
+        return bool(is_dark_mode(button))
+    except Exception:
+        return False
+
+
+def stop_input_preview_loading_animation(owner: Any) -> None:
+    """Stop the View input button's left-to-right text-shimmer timer if active."""
+    timer = getattr(owner, "_inputPreviewAnimTimer", None)
+    if timer is not None:
+        stop_fn = getattr(timer, "stop", None)
+        if callable(stop_fn):
+            try:
+                stop_fn()
+            except Exception:
+                pass
+
+
+def set_input_preview_button_loading(owner: Any, loading: bool, *, language: str | None = None) -> None:
+    """Replace 'View input' in place with borderless shimmering 'Loading…' text while loading."""
+    widgets = getattr(owner, "_inputPreviewWidgets", None)
+    if not isinstance(widgets, dict) or "button" not in widgets:
+        stop_input_preview_loading_animation(owner)
+        return
+    button = widgets["button"]
+    lang = language or getattr(owner, "_onboardingLanguage", "en")
+    zh = str(lang).startswith("zh")
+    try:
+        import qt
+    except Exception:
+        qt = None
+
+    def _apply_shimmer_frame(text: str, phase: float, *, dark: bool) -> None:
+        rendered = _render_shimmer_text_icon(qt, button, text, phase, dark=dark) if qt is not None else None
+        if rendered is not None and hasattr(button, "setIcon") and hasattr(button, "setIconSize"):
+            icon, size = rendered
+            if hasattr(button, "setText"):
+                button.setText("")
+            button.setIcon(icon)
+            button.setIconSize(size)
+        elif hasattr(button, "setText"):
+            button.setText(text)
+
+    if loading:
+        # Preserve at least the idle button width so the tab header row does not shift while loading.
+        if getattr(owner, "_inputPreviewIdleMinWidth", None) is None:
+            width = 0
+            try:
+                raw_w = _qt_attr(button, "width", 0)
+                width = int(raw_w or 0)
+            except Exception:
+                width = 0
+            if width <= 0:
+                try:
+                    hint = _qt_attr(button, "sizeHint", None)
+                    width = int(_qt_attr(hint, "width", 0) or 0) if hint is not None else 0
+                except Exception:
+                    width = 0
+            owner._inputPreviewIdleMinWidth = width
+            if width > 0 and hasattr(button, "setMinimumWidth"):
+                try:
+                    button.setMinimumWidth(width)
+                except Exception:
+                    pass
+        loading_text = "加载中…" if zh else "Loading…"
+        loading_tip = "正在载入完整 DWI…" if zh else "Loading the full DWI…"
+        owner._inputPreviewLoadingText = loading_text
+        if hasattr(button, "setAccessibleName"):
+            button.setAccessibleName(loading_tip)
+        if hasattr(button, "setToolTip"):
+            button.setToolTip(loading_tip)
+        owner._inputPreviewAnimPhase = 0.0
+        dark = _input_preview_dark_mode(owner, button)
+        button._dspaceLoading = True
+        if hasattr(button, "setStyleSheet"):
+            try:
+                button.setStyleSheet(input_preview_loading_stylesheet(dark=dark))
+            except Exception:
+                pass
+        _apply_shimmer_frame(loading_text, 0.0, dark=dark)
+        timer_cls = getattr(qt, "QTimer", None) if qt is not None else None
+        if timer_cls is not None and callable(timer_cls):
+            timer = getattr(owner, "_inputPreviewAnimTimer", None)
+            if timer is None:
+                try:
+                    timer = timer_cls(button)
+                except TypeError:
+                    timer = timer_cls()
+                if hasattr(timer, "setInterval"):
+                    timer.setInterval(33)
+
+                def _tick() -> None:
+                    if getattr(owner, "_cleanedUp", False) or not getattr(owner, "_inputPreviewPending", False):
+                        stop_input_preview_loading_animation(owner)
+                        return
+                    phase = (float(getattr(owner, "_inputPreviewAnimPhase", 0.0)) + 0.025) % 1.0
+                    owner._inputPreviewAnimPhase = phase
+                    cur_text = str(getattr(owner, "_inputPreviewLoadingText", loading_text) or loading_text)
+                    _apply_shimmer_frame(cur_text, phase, dark=_input_preview_dark_mode(owner, button))
+
+                if hasattr(timer, "timeout") and hasattr(timer.timeout, "connect"):
+                    timer.timeout.connect(_tick)
+                elif hasattr(timer, "connect"):
+                    timer.connect("timeout()", _tick)
+                owner._inputPreviewAnimTimer = timer
+            if hasattr(timer, "start"):
+                try:
+                    timer.start()
+                except Exception:
+                    pass
+        return
+
+    stop_input_preview_loading_animation(owner)
+    owner._inputPreviewAnimPhase = 0.0
+    owner._inputPreviewLoadingText = ""
+    button._dspaceLoading = False
+    if qt is not None and hasattr(qt, "QIcon") and hasattr(button, "setIcon"):
+        try:
+            button.setIcon(qt.QIcon())
+        except Exception:
+            pass
+    if getattr(owner, "_inputPreviewIdleMinWidth", None) is not None:
+        owner._inputPreviewIdleMinWidth = None
+        if hasattr(button, "setMinimumWidth"):
+            try:
+                button.setMinimumWidth(0)
+            except Exception:
+                pass
+    if hasattr(button, "setStyleSheet"):
+        try:
+            button.setStyleSheet("")
+        except Exception:
+            pass
+    if hasattr(button, "setText"):
+        button.setText("预览输入" if zh else "View input")
+    if hasattr(button, "setAccessibleName"):
+        button.setAccessibleName("预览输入" if zh else "View input")
+
+
 def refresh_input_preview_controls(owner: Any, language: str | None = None) -> None:
     """Translate the 'View input' button; the owner sets its enabled state and tooltip."""
 
@@ -1394,9 +1654,12 @@ def refresh_input_preview_controls(owner: Any, language: str | None = None) -> N
     lang = language or getattr(owner, "_onboardingLanguage", "en")
     zh = str(lang).startswith("zh")
     button = widgets["button"]
-    button.setText("预览输入" if zh else "View input")
-    if hasattr(button, "setAccessibleName"):
-        button.setAccessibleName("预览输入" if zh else "View input")
+    if getattr(owner, "_inputPreviewPending", False):
+        set_input_preview_button_loading(owner, True, language=lang)
+    else:
+        button.setText("预览输入" if zh else "View input")
+        if hasattr(button, "setAccessibleName"):
+            button.setAccessibleName("预览输入" if zh else "View input")
     stepper_label, slider, spin = widgets.get("stepper_label"), widgets.get("slider"), widgets.get("spin")
     if stepper_label is not None:
         stepper_label.setText("体积" if zh else "Volume")

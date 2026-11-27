@@ -241,5 +241,148 @@ class BatchFolderGuardTest(unittest.TestCase):
         self.assertEqual(lines, [f"[Batch] Skipped notes: {OLD_REASON}"])
 
 
+def write_raw_files_directly(folder: Path) -> None:
+    """The four names that make ``_arrange_subject_input`` fire (``write_direct_nifti`` does not)."""
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in ("data.nii.gz", "bvals", "bvecs", "nodif_brain_mask.nii.gz"):
+        (folder / name).write_bytes(b"x")
+
+
+class BatchScanGuardRowsTest(unittest.TestCase):
+    """Backlog rows "22 November 2026: batch scan guard": Opus (scan) P2-1..P2-4, Opus (scan re-review) P2-1..P2-2."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name).resolve()
+        self.batch = self.root / "batch"
+        self.batch.mkdir()
+
+    def reasons_by_path(self, skipped):
+        return {item["path"]: item["reason"] for item in skipped}
+
+    @skip_unless_symlinks
+    def test_opus_scan_p2_1_symlink_to_the_parent_is_not_a_subject(self):
+        write_dicom(self.batch / "sub-a")
+        (self.batch / "up").symlink_to(self.batch.parent, target_is_directory=True)
+        subjects, skipped = batch_cli.discover_subjects(self.batch)
+        for subject in subjects:
+            self.assertNotIn(subject.subject_root, [self.batch, *self.batch.parents], subject)
+        self.assertEqual([s.subject_id for s in subjects], ["sub-a"])
+        self.assertEqual(self.reasons_by_path(skipped), {self.root.as_posix(): batch_cli.BATCH_FOLDER_ANCESTOR_REASON})
+
+    def test_opus_scan_p2_2_nested_glob_runs_one_subject_per_root(self):
+        write_canonical(self.batch / "sub-b")
+        (self.batch / "site1" / "sub-b").mkdir(parents=True)
+        subjects, skipped = batch_cli.discover_subjects(self.batch, subject_glob="*/*")
+        self.assertEqual([(s.subject_id, s.subject_root) for s in subjects], [("sub-b", self.batch / "sub-b")])
+        self.assertEqual(
+            self.reasons_by_path(skipped),
+            {(self.batch / "sub-b" / "input").as_posix(): f"same input as subject sub-b: {self.batch / 'sub-b'}"},
+        )
+
+    def test_opus_scan_p2_2_include_missing_keeps_the_duplicate_as_missing_in_candidate_order(self):
+        write_canonical(self.batch / "sub-b")
+        (self.batch / "site1" / "sub-b").mkdir(parents=True)
+        subjects, _ = batch_cli.discover_subjects(self.batch, subject_glob="*/*", include_missing=True)
+        self.assertEqual([(s.subject_id, s.mode) for s in subjects], [("sub-b", "subject_root"), ("input", "missing")])
+
+    def test_opus_scan_p2_2_survivor_is_the_id_named_like_the_folder_even_when_it_comes_second(self):
+        write_canonical(self.batch / "sub-b")
+        listing = self.root / "list.txt"
+        listing.write_text("sub-b/input\nsub-b\n", encoding="utf-8")
+        subjects, skipped = batch_cli.discover_subjects(self.batch, subject_list=listing)
+        self.assertEqual([(s.subject_id, s.subject_root) for s in subjects], [("sub-b", self.batch / "sub-b")])
+        self.assertEqual([item["subject_id"] for item in skipped], ["input"])
+
+    def test_opus_scan_p2_3_help_documents_the_same_id_lookup(self):
+        # argparse wraps the help text (also after hyphens), so compare without any whitespace.
+        text = "".join(batch_cli.build_parser().format_help().split())
+        for sentence in ("a subject folder (absolute or relative to --batch-root) or a subject ID",
+                         "An entry with no input of its own is looked up as <batch-root>/<entry name>"):
+            self.assertIn("".join(sentence.split()), text)
+
+    def test_opus_scan_p2_4_text_file_entry_does_not_take_the_batch_folder_as_input(self):
+        write_dicom(self.batch / "sub-a")
+        (self.batch / "sub-b").mkdir()
+        (self.batch / "sub-b" / "notes.txt").write_text("not an image\n", encoding="utf-8")
+        listing = self.root / "list.txt"
+        listing.write_text("sub-a\nsub-b/notes.txt\n", encoding="utf-8")
+        subjects, skipped = batch_cli.discover_subjects(self.batch, subject_list=listing)
+        self.assertEqual([s.subject_id for s in subjects], ["sub-a"])
+        self.assertEqual(self.reasons_by_path(skipped), {(self.batch / "sub-b" / "notes.txt").as_posix(): NEW_REASON})
+
+    @skip_unless_symlinks
+    def test_opus_scan_rr_p2_1_alias_of_the_batch_folder_is_rejected_before_arrange(self):
+        write_raw_files_directly(self.batch)
+        (self.batch / "alias").symlink_to(self.batch, target_is_directory=True)
+        subjects, skipped = batch_cli.discover_subjects(self.batch, arrange_inputs="copy")
+        self.assertEqual(subjects, [])
+        self.assertEqual(self.reasons_by_path(skipped), {self.batch.as_posix(): NEW_REASON})
+        self.assertFalse((self.batch / "input").exists())
+
+    @skip_unless_symlinks
+    def test_opus_scan_rr_p2_2_alias_with_output_root_writes_nothing_and_gives_no_subject(self):
+        write_raw_files_directly(self.batch)
+        (self.batch / "alias").symlink_to(self.batch, target_is_directory=True)
+        out = self.root / "out"
+        subjects, skipped = batch_cli.discover_subjects(self.batch, arrange_inputs="copy", output_root=out)
+        self.assertEqual(subjects, [])
+        self.assertFalse((out / "batch").exists())
+        self.assertEqual(self.reasons_by_path(skipped), {self.batch.as_posix(): NEW_REASON})
+
+    def test_opus_scan_rr_p2_2_recursive_glob_gives_one_subject_for_a_nested_input_folder(self):
+        write_canonical(self.batch / "sub-1")
+        subjects, skipped = batch_cli.discover_subjects(self.batch, subject_glob="**")
+        self.assertEqual([(s.subject_id, s.subject_root) for s in subjects], [("sub-1", self.batch / "sub-1")])
+        self.assertEqual(len(skipped), 2, skipped)
+
+    def test_two_nifti_file_entries_in_one_folder_stay_two_subjects(self):
+        folder = self.batch / "sub-c"
+        folder.mkdir()
+        for stem in ("a", "b"):
+            for suffix in (".nii.gz", ".bval", ".bvec"):
+                (folder / f"{stem}{suffix}").write_bytes(b"x")
+        listing = self.root / "list.txt"
+        listing.write_text("sub-c/a.nii.gz\nsub-c/b.nii.gz\n", encoding="utf-8")
+        subjects, skipped = batch_cli.discover_subjects(self.batch, subject_list=listing)
+        self.assertEqual([(s.subject_id, s.subject_root) for s in subjects],
+                         [("a.nii.gz", folder), ("b.nii.gz", folder)])
+        self.assertEqual(skipped, [])
+
+    def test_two_legacy_registered_subjects_in_the_batch_folder_are_both_kept(self):
+        write_registered(self.batch, "sub-l1")
+        write_registered(self.batch, "sub-l2")
+        listing = self.root / "list.txt"
+        listing.write_text("sub-l1\nsub-l2\n", encoding="utf-8")
+        subjects, skipped = batch_cli.discover_subjects(self.batch, subject_list=listing)
+        self.assertEqual([(s.subject_id, s.mode) for s in subjects],
+                         [("sub-l1", "legacy_registered"), ("sub-l2", "legacy_registered")])
+        self.assertEqual(skipped, [])
+
+    def test_subject_list_entry_that_is_an_ancestor_of_the_batch_folder_is_not_rejected(self):
+        """Design: the subject-list exemption stays; only scan mode rejects ancestors."""
+        write_canonical(self.root)
+        listing = self.root / "list.txt"
+        listing.write_text(f"{self.root}\n", encoding="utf-8")
+        subjects, _ = batch_cli.discover_subjects(self.batch, subject_list=listing)
+        self.assertEqual([s.subject_root for s in subjects], [self.root])
+
+    def test_opus_scan_p2_1_inspected_root_above_the_batch_folder_is_rejected_in_scan_mode_only(self):
+        """The post-inspection guard: an inspected root above the Batch Folder (not reachable by a plain folder)."""
+        (self.batch / "sub-x").mkdir()
+        fake = {"mode": "nifti", "subject_root": self.root, "subject_dir": self.root}
+        original = batch_cli.inspect_subject_directory
+        batch_cli.inspect_subject_directory = lambda *args, **kwargs: dict(fake)
+        self.addCleanup(setattr, batch_cli, "inspect_subject_directory", original)
+        subjects, skipped = batch_cli.discover_subjects(self.batch)
+        self.assertEqual(subjects, [])
+        self.assertEqual([item["reason"] for item in skipped], [batch_cli.BATCH_FOLDER_ANCESTOR_REASON])
+        listing = self.root / "list.txt"
+        listing.write_text("sub-x\n", encoding="utf-8")
+        subjects, _ = batch_cli.discover_subjects(self.batch, subject_list=listing)
+        self.assertEqual([s.subject_root for s in subjects], [self.root])
+
+
 if __name__ == "__main__":
     unittest.main()

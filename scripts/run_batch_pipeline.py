@@ -110,20 +110,29 @@ def _parse_subject_list(path: Path, batch_root: Path) -> list[Path]:
 
 
 BATCH_FOLDER_REASON = "no input in this subfolder; the input found is the Batch Folder itself"
+BATCH_FOLDER_ANCESTOR_REASON = "this subfolder points to a folder that contains the Batch Folder"
 
 
-def _resolves_to_batch_folder(inspected: dict, candidate: Path, root: Path, *, from_subject_list: bool) -> bool:
-    """Batch scan: a subject never resolves to the Batch Folder itself (except ``legacy_registered``).
+def _batch_folder_reason(
+    inspected: dict, candidate: Path, root: Path, *, from_subject_list: bool, via_root_fallback: bool = False
+) -> str | None:
+    """Batch scan: a subject never resolves to the Batch Folder (or a folder above it); return the skip reason.
 
-    A file entry of ``--subject-list`` and a subject-list entry that is the Batch Folder itself keep their behaviour.
-    In scan (glob) mode a candidate that is the Batch Folder itself (a symlink back to it, a recursive glob) gets
-    no such exemption.
+    Exempt: ``legacy_registered``; a file entry of ``--subject-list`` that was read as input itself (not one that
+    only resolved through the ``<Batch Folder>/<subject ID>`` fallback); a subject-list entry that is the Batch
+    Folder itself. In scan (glob) mode a candidate that is the Batch Folder itself (a symlink back to it, a
+    recursive glob) gets no such exemption, and an inspected root above the Batch Folder is rejected.
     """
-    if inspected["mode"] == "legacy_registered" or candidate.is_file():
-        return False
+    if inspected["mode"] == "legacy_registered" or (candidate.is_file() and not via_root_fallback):
+        return None
     if from_subject_list and candidate.resolve() == root:
-        return False
-    return Path(inspected["subject_root"] or inspected["subject_dir"]).expanduser().resolve() == root
+        return None
+    inspected_root = Path(inspected["subject_root"] or inspected["subject_dir"]).expanduser().resolve()
+    if inspected_root == root:
+        return BATCH_FOLDER_REASON
+    if not from_subject_list and inspected_root in root.parents:
+        return BATCH_FOLDER_ANCESTOR_REASON
+    return None
 
 
 def discover_subjects(
@@ -146,35 +155,87 @@ def discover_subjects(
         candidates = [path for path in sorted(root.glob(subject_glob)) if path.is_dir()]
     candidates = _unique_path_candidates(candidates)
 
+    source = "subject-list" if subject_list else "glob"
     subjects: list[BatchSubject] = []
     skipped: list[dict[str, str]] = []
+    accepted: list[tuple[int, Path, object]] = []  # (index in subjects, candidate, duplicate key)
     for candidate in candidates:
         subject_id = candidate.name
-        target_subject_root = (resolved_output_root / subject_id) if resolved_output_root is not None else candidate
-        arranged = _arrange_subject_input(candidate, arrange_inputs, target_subject_root=target_subject_root)
-        inspect_dir = target_subject_root if (arranged and resolved_output_root is not None) else candidate
-        inspected = inspect_subject_directory(inspect_dir, subject_id)
-        if inspected["mode"] == "missing" and resolved_output_root is not None:
-            inspected = inspect_subject_directory(target_subject_root, subject_id)
-        if inspected["mode"] == "missing":
-            inspected = inspect_subject_directory(root, subject_id)
         reason = "missing required input/data.nii.gz, bvals, or bvecs"
-        if inspected["mode"] != "missing" and _resolves_to_batch_folder(
-            inspected, candidate, root, from_subject_list=bool(subject_list)
-        ):
-            inspected = {"mode": "missing"}
-            reason = BATCH_FOLDER_REASON
+        arranged = False
+        inspected: dict = {"mode": "missing"}
+        via_root_fallback = False
+        pre_reason = None
+        if not subject_list:  # scan mode: reject before the arrange step writes anything
+            if candidate == root:
+                pre_reason = BATCH_FOLDER_REASON
+            elif candidate in root.parents:
+                pre_reason = BATCH_FOLDER_ANCESTOR_REASON
+        if pre_reason is not None:
+            reason = pre_reason
+        else:
+            target_subject_root = (resolved_output_root / subject_id) if resolved_output_root is not None else candidate
+            arranged = _arrange_subject_input(candidate, arrange_inputs, target_subject_root=target_subject_root)
+            inspect_dir = target_subject_root if (arranged and resolved_output_root is not None) else candidate
+            inspected = inspect_subject_directory(inspect_dir, subject_id)
+            if inspected["mode"] == "missing" and resolved_output_root is not None:
+                inspected = inspect_subject_directory(target_subject_root, subject_id)
+            if inspected["mode"] == "missing":
+                inspected = inspect_subject_directory(root, subject_id)
+                via_root_fallback = True
+            if inspected["mode"] != "missing":
+                guard_reason = _batch_folder_reason(
+                    inspected, candidate, root, from_subject_list=bool(subject_list), via_root_fallback=via_root_fallback
+                )
+                if guard_reason is not None:
+                    inspected = {"mode": "missing"}
+                    reason = guard_reason
         if inspected["mode"] == "missing":
             skipped.append({"path": candidate.as_posix(), "subject_id": subject_id, "reason": reason})
             if include_missing:
-                subjects.append(BatchSubject(subject_id, candidate, "subject-list" if subject_list else "glob", "missing"))
+                subjects.append(BatchSubject(subject_id, candidate, source, "missing"))
             continue
         subject_root = Path(inspected["subject_root"] or inspected["subject_dir"]).expanduser().resolve()
         mode = str(inspected["mode"])
         if arranged:
             mode = f"{mode}+arranged"
-        subjects.append(BatchSubject(subject_id, subject_root, "subject-list" if subject_list else "glob", mode))
-    return subjects, skipped
+        # Duplicate key: the resolved root. Several legacy subjects share one folder (key adds the ID); a file
+        # that was read as input is its own key because two files in one folder both report the folder as root.
+        if inspected["mode"] == "legacy_registered":
+            key: object = ("legacy", subject_root, subject_id)
+        elif candidate.is_file() and not via_root_fallback:
+            key = ("file", candidate)
+        else:
+            key = ("root", subject_root)
+        accepted.append((len(subjects), candidate, key))
+        subjects.append(BatchSubject(subject_id, subject_root, source, mode))
+
+    by_key: dict[object, list[int]] = {}
+    for position, (_, _, key) in enumerate(accepted):
+        by_key.setdefault(key, []).append(position)
+    dropped: set[int] = set()
+    for positions in by_key.values():
+        if len(positions) < 2:
+            continue
+        kept = next(
+            (pos for pos in positions if subjects[accepted[pos][0]].subject_id == subjects[accepted[pos][0]].subject_root.name),
+            positions[0],
+        )
+        kept_subject = subjects[accepted[kept][0]]
+        for pos in positions:
+            if pos == kept:
+                continue
+            index, candidate, _ = accepted[pos]
+            skipped.append({
+                "path": candidate.as_posix(),
+                "subject_id": subjects[index].subject_id,
+                "reason": f"same input as subject {kept_subject.subject_id}: {kept_subject.subject_root}",
+            })
+            if include_missing:
+                subjects[index] = BatchSubject(subjects[index].subject_id, candidate, source, "missing")
+            else:
+                dropped.add(index)
+    return [subject for index, subject in enumerate(subjects) if index not in dropped], skipped
 
 
 def build_subject_command(
@@ -470,7 +531,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--batch-root", required=True, type=Path, help="Directory containing one subdirectory per subject.")
     parser.add_argument("--subject-glob", default="*", help="Glob used under --batch-root when --subject-list is omitted.")
-    parser.add_argument("--subject-list", type=Path, help="Optional text file listing subject directories or relative IDs.")
+    parser.add_argument("--subject-list", type=Path, help=("Optional text file. Each line is a subject folder (absolute or relative to --batch-root) or a subject ID. "
+                              "An entry with no input of its own is looked up as <batch-root>/<entry name>."))
     parser.add_argument('--subject-limit', type=_parse_jobs, help='Process the first N eligible subjects; default: all.')
     parser.add_argument("--output-root", type=Path, help="Batch output root. Each subject writes under <output-root>/<subject-id>/{input,preprocessed,cache,outputs}.")
     parser.add_argument("--run-name", default="Test1", help="Run name forwarded to each subject. Defaults to Test1.")

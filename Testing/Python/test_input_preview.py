@@ -135,7 +135,8 @@ class MeanB0Test(unittest.TestCase):
     def test_h1_a_failed_delete_is_best_effort_and_the_next_preview_prunes_again(self):
         """FLAKY-H1, second path: a stale preview that another process holds (PermissionError) cannot be deleted. The
         prune is best effort: no error, the new preview stays, and 7 files remain until the next new preview prunes
-        back to 6. Only a failed delete in the last prune leaves 7; FileNotFoundError leaves 6."""
+        back to 6. Measured 27 November 2026, not asserted here: only a failed delete in the last prune leaves 7;
+        FileNotFoundError leaves 6."""
         real_unlink = Path.unlink
         armed, blocked = [False], []
 

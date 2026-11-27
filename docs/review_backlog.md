@@ -407,4 +407,4 @@ Scope: branch `fix/h1-unlink-best-effort` (`Testing/Python/test_input_preview.py
 
 | Source | Label | Item | Proposed fix |
 |---|---|---|---|
-| Opus P2 | P2 | `test_h1_a_failed_delete_is_best_effort_and_the_next_preview_prunes_again`: the last docstring sentence ("Only a failed delete in the last prune leaves 7; FileNotFoundError leaves 6.") is a measured fact that the test does not assert, so a reader can take it as pinned. | Mark it as a measured note ("measured 27 November 2026, not asserted here"), or drop it. |
+| Opus P2 | Fixed | **Fixed** (27 November 2026, branch `fix/h1-docstring-note`): the sentence now starts with "Measured 27 November 2026, not asserted here:". Was: `test_h1_a_failed_delete_is_best_effort_and_the_next_preview_prunes_again`: the last docstring sentence ("Only a failed delete in the last prune leaves 7; FileNotFoundError leaves 6.") is a measured fact that the test does not assert, so a reader can take it as pinned. | Mark it as a measured note ("measured 27 November 2026, not asserted here"), or drop it. |

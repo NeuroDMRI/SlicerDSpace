@@ -135,8 +135,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install NumPy for streaming HCP NIfTI -> NRRD conversion
-        run: python -m pip install --no-cache-dir numpy
+      - name: Install NumPy, SciPy and NiBabel for HCP NIfTI -> 2mm NRRD conversion
+        run: python -m pip install --no-cache-dir numpy scipy nibabel
 
       - name: Convert & upload HCP 100307 NRRD example zip to assets release
         env:

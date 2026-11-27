@@ -2185,10 +2185,11 @@ def cmd_migrate_assets(args: argparse.Namespace) -> int:
 
 
 def convert_hcp_nifti_zip_to_nrrd_zip(nifti_zip: Path, out_zip: Path, *, work_dir: Path) -> dict[str, Any]:
-    """Convert HCP 100307 NIfTI example zip into a Slicer/DWIConvert-native gzipped int16 NRRD zip."""
+    """Convert HCP 100307 NIfTI example zip into a compact 2.0 mm dual-shell (66-vol) NRRD zip."""
     import math
-    import struct
+    import nibabel as nib
     import numpy as np
+    from scipy.ndimage import gaussian_filter, map_coordinates
     from shared import gradient_frame
 
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -2204,8 +2205,7 @@ def convert_hcp_nifti_zip_to_nrrd_zip(nifti_zip: Path, out_zip: Path, *, work_di
     bvals_path = src_root / "input" / "bvals"
     bvecs_path = src_root / "input" / "bvecs"
     mask_path = src_root / "input" / "nodif_brain_mask.nii.gz"
-    terms_path = src_root / "README_HCP_DATA_USE_TERMS.txt"
-    for req_p in (dwi_nii, bvals_path, bvecs_path, mask_path, terms_path):
+    for req_p in (dwi_nii, bvals_path, bvecs_path, mask_path):
         if not req_p.is_file():
             raise FileNotFoundError(f"Expected file missing from HCP NIfTI zip: {req_p}")
 
@@ -2213,34 +2213,58 @@ def convert_hcp_nifti_zip_to_nrrd_zip(nifti_zip: Path, out_zip: Path, *, work_di
     bvecs = np.loadtxt(bvecs_path)
     bvecs_rows = bvecs.T if bvecs.shape == (3, len(bvals)) else bvecs
 
-    with gzip.open(dwi_nii, "rb") as fh:
-        hdr = fh.read(348)
-        dim = struct.unpack_from("<8h", hdr, 40)
-        datatype, bitpix = struct.unpack_from("<2h", hdr, 70)
-        vox_offset, scl_slope, scl_inter = struct.unpack_from("<3f", hdr, 108)
-        srow_x = struct.unpack_from("<4f", hdr, 280)
-        srow_y = struct.unpack_from("<4f", hdr, 296)
-        srow_z = struct.unpack_from("<4f", hdr, 312)
-
-    if dim[0] != 4 or datatype != 16 or bitpix != 32:
-        raise RuntimeError(f"Unexpected HCP NIfTI header: dim={dim}, datatype={datatype}, bitpix={bitpix}")
-    nx, ny, nz, nt = (int(v) for v in dim[1:5])
+    dwi_img = nib.load(str(dwi_nii))
+    nx, ny, nz, nt = (int(v) for v in dwi_img.shape)
     if nt != len(bvals) or bvecs_rows.shape != (nt, 3):
         raise RuntimeError(f"Gradient count mismatch: nt={nt}, bvals={len(bvals)}, bvecs={bvecs_rows.shape}")
-    if (scl_slope not in (0.0, 1.0)) or scl_inter != 0.0:
-        raise RuntimeError(f"Unexpected NIfTI scaling slope={scl_slope}, inter={scl_inter}")
 
-    affine = np.array([srow_x, srow_y, srow_z, [0.0, 0.0, 0.0, 1.0]], dtype=np.float64)
+    affine = dwi_img.affine.astype(np.float64)
     if not np.allclose(affine[:3, :3], np.diag([-1.25, 1.25, 1.25]), atol=1e-5):
         raise RuntimeError(f"Unexpected HCP NIfTI affine:\n{affine}")
 
-    # Canonical LPS layout matching DWIConvert FSLToNrrd (positive spacing, Y-flipped voxel order):
-    # S = diag(-1, -1, 1) maps RAS <-> LPS.
-    S = np.diag([-1.0, -1.0, 1.0])
-    lps_origin = S @ (affine[:3, 3] + affine[:3, 1] * (ny - 1))
-    max_b = float(bvals.max())
     world_g = gradient_frame.fsl_to_world(bvecs_rows, affine)
+    S = np.diag([-1.0, -1.0, 1.0])
 
+    # Select 6 b0 + 30 uniform b=1000 + 30 uniform b=2000 directions (66 volumes total; full multi-shell support).
+    def _select_uniform(indices: list[int], k: int) -> list[int]:
+        unit = np.zeros((len(indices), 3), dtype=np.float64)
+        for pos, vol_idx in enumerate(indices):
+            vec = world_g[vol_idx]
+            norm = float(np.linalg.norm(vec))
+            unit[pos] = vec / norm if norm > 1e-12 else np.array([1.0, 0.0, 0.0])
+        chosen = [0]
+        min_dist = np.full(len(indices), np.inf, dtype=np.float64)
+        while len(chosen) < k:
+            dots = np.clip(np.abs(unit @ unit[chosen[-1]]), 0.0, 1.0)
+            min_dist = np.minimum(min_dist, np.arccos(dots))
+            min_dist[chosen] = -1.0
+            chosen.append(int(np.argmax(min_dist)))
+        return [indices[c] for c in sorted(chosen)]
+
+    b0_idx = [i for i in range(nt) if bvals[i] < 100.0]
+    b1k_idx = [i for i in range(nt) if 700.0 <= bvals[i] <= 1300.0]
+    b2k_idx = [i for i in range(nt) if 1700.0 <= bvals[i] <= 2300.0]
+    sel_b0 = [b0_idx[int(round(x))] for x in np.linspace(0, len(b0_idx) - 1, 6)]
+    sel_all = sorted(sel_b0 + _select_uniform(b1k_idx, 30) + _select_uniform(b2k_idx, 30))
+    nt_new = len(sel_all)
+
+    # Exact centered 1.25 mm -> 2.0 mm isotropic grid (91 x 109 x 91)
+    old_vox, new_vox = 1.25, 2.0
+    scale = new_vox / old_vox
+    nx_new, ny_new, nz_new = int(round(nx / scale)), int(round(ny / scale)), int(round(nz / scale))
+    ox_old = (nx - 1) / 2.0 + (np.arange(nx_new) - (nx_new - 1) / 2.0) * scale
+    oy_old = (ny - 1) / 2.0 + (np.arange(ny_new) - (ny_new - 1) / 2.0) * scale
+    oz_old = (nz - 1) / 2.0 + (np.arange(nz_new) - (nz_new - 1) / 2.0) * scale
+    gx, gy, gz = np.meshgrid(ox_old, oy_old, oz_old, indexing="ij")
+    coords = np.array([gx, gy, gz], dtype=np.float32)
+    shift_old_ijk = np.array([ox_old[0], oy_old[0], oz_old[0]], dtype=np.float64)
+
+    A_new = affine.copy()
+    A_new[:3, :3] = affine[:3, :3] * scale
+    A_new[:3, 3] = affine[:3, 3] + affine[:3, :3] @ shift_old_ijk
+    lps_origin = S @ (A_new[:3, 3] + A_new[:3, 1] * (ny_new - 1))
+
+    max_b = float(max(bvals[i] for i in sel_all))
     header_lines = [
         "NRRD0005",
         "# Complete NRRD file format specification at:",
@@ -2248,9 +2272,9 @@ def convert_hcp_nifti_zip_to_nrrd_zip(nifti_zip: Path, out_zip: Path, *, work_di
         "type: short",
         "dimension: 4",
         "space: left-posterior-superior",
-        f"sizes: {nx} {ny} {nz} {nt}",
-        "thicknesses: NaN NaN 1.25 NaN",
-        "space directions: (1.25,0,0) (0,1.25,0) (0,0,1.25) none",
+        f"sizes: {nx_new} {ny_new} {nz_new} {nt_new}",
+        f"thicknesses: NaN NaN {new_vox:g} NaN",
+        f"space directions: ({new_vox:g},0,0) (0,{new_vox:g},0) (0,0,{new_vox:g}) none",
         "centerings: cell cell cell ???",
         "kinds: space space space list",
         "endian: little",
@@ -2261,33 +2285,62 @@ def convert_hcp_nifti_zip_to_nrrd_zip(nifti_zip: Path, out_zip: Path, *, work_di
         "modality:=DWMRI",
         f"DWMRI_b-value:={max_b:g}",
     ]
-    for i in range(nt):
-        g = world_g[i]
+    sel_world_g = []
+    for out_i, src_i in enumerate(sel_all):
+        g = world_g[src_i]
+        sel_world_g.append(g)
         gn = float(np.linalg.norm(g))
-        if bvals[i] <= 0 or gn <= 1e-12:
+        if bvals[src_i] <= 0 or gn <= 1e-12:
             gv = np.zeros(3)
         else:
             g_lps = S @ (g / gn)
-            gv = g_lps * math.sqrt(float(bvals[i]) / max_b)
-        header_lines.append(f"DWMRI_gradient_{i:04d}:={gradient_frame.format_nrrd_vector(gv)}")
+            gv = g_lps * math.sqrt(float(bvals[src_i]) / max_b)
+        header_lines.append(f"DWMRI_gradient_{out_i:04d}:={gradient_frame.format_nrrd_vector(gv)}")
     header_bytes = ("\n".join(header_lines) + "\n\n").encode("ascii")
 
     nrrd_path = work_dir / "100307_dwi.nrrd"
-    nvox = nx * ny * nz
+    out_dwi_lps = np.empty((nx_new, ny_new, nz_new, nt_new), dtype="<i2")
     clamped_count = 0
-    with gzip.open(dwi_nii, "rb") as src_fh, nrrd_path.open("wb") as out_fh:
-        src_fh.read(int(vox_offset))
+    sel_map = {src_i: out_i for out_i, src_i in enumerate(sel_all)}
+    nvox = nx * ny * nz
+    import struct
+
+    with gzip.open(dwi_nii, "rb") as src_fh:
+        hdr_raw = src_fh.read(348)
+        vox_offset = int(struct.unpack_from("<f", hdr_raw, 108)[0])
+        if vox_offset > 348:
+            src_fh.read(vox_offset - 348)
+        for t in range(nt):
+            raw_vol = src_fh.read(nvox * 4)
+            if len(raw_vol) != nvox * 4:
+                raise EOFError(f"Truncated NIfTI volume at index {t}")
+            out_i = sel_map.get(t)
+            if out_i is None:
+                continue
+            vol_3d = np.frombuffer(raw_vol, dtype="<f4").reshape((nx, ny, nz), order="F")
+            vol_lps = vol_3d[:, ::-1, :]
+            vol_smooth = gaussian_filter(vol_lps, sigma=0.45)
+            resampled = map_coordinates(vol_smooth, coords, order=1, mode="nearest")
+            clamped_count += int((resampled > 32767.0).sum() + (resampled < 0.0).sum())
+            out_dwi_lps[:, :, :, out_i] = np.clip(np.rint(resampled), 0.0, 32767.0).astype("<i2")
+
+    with nrrd_path.open("wb") as out_fh:
         out_fh.write(header_bytes)
         with gzip.GzipFile(fileobj=out_fh, mode="wb", compresslevel=6, mtime=0, filename="") as gz_out:
-            for t in range(nt):
-                raw_vol = src_fh.read(nvox * 4)
-                if len(raw_vol) != nvox * 4:
-                    raise EOFError(f"Truncated NIfTI volume at index {t}")
-                vol_3d = np.frombuffer(raw_vol, dtype="<f4").reshape((nx, ny, nz), order="F")
-                vol_lps = vol_3d[:, ::-1, :]
-                clamped_count += int((vol_lps > 32767.0).sum() + (vol_lps < 0.0).sum())
-                vol_i16 = np.clip(np.rint(vol_lps), 0.0, 32767.0).astype("<i2")
-                gz_out.write(vol_i16.tobytes(order="F"))
+            gz_out.write(out_dwi_lps.tobytes(order="F"))
+
+    # Resample brain mask onto the exact matching 2.0 mm RAS grid & intersect with positive mean b0
+    mask_img = nib.load(str(mask_path))
+    mask_res = map_coordinates(mask_img.get_fdata(dtype=np.float32), coords, order=1, mode="nearest")
+    mask_bin = (mask_res >= 0.5).astype(np.uint8)
+    b0_local = [i for i, orig_i in enumerate(sel_all) if bvals[orig_i] < 100.0]
+    mean_b0_ras = out_dwi_lps[:, ::-1, :, :][:, :, :, b0_local].mean(axis=3)
+    mask_bin[mean_b0_ras <= 0] = 0
+    mask_out = work_dir / "nodif_brain_mask.nii.gz"
+    mask_hdr = mask_img.header.copy()
+    mask_hdr.set_data_dtype(np.uint8)
+    mask_hdr.set_zooms((new_vox, new_vox, new_vox))
+    nib.save(nib.Nifti1Image(mask_bin, A_new, mask_hdr), str(mask_out))
 
     # Self-verify NRRD header gradients and gzip payload byte count
     with nrrd_path.open("rb") as verify_fh:
@@ -2307,10 +2360,10 @@ def convert_hcp_nifti_zip_to_nrrd_zip(nifti_zip: Path, out_zip: Path, *, work_di
             for ln in parsed_head.splitlines()
             if ln.startswith("DWMRI_gradient_")
         ]
-        if len(g_vals) != nt:
-            raise RuntimeError(f"Verified NRRD gradient count mismatch: {len(g_vals)} != {nt}")
+        if len(g_vals) != nt_new:
+            raise RuntimeError(f"Verified NRRD gradient count mismatch: {len(g_vals)} != {nt_new}")
         rt_world = gradient_frame.nrrd_to_world(np.array(g_vals), "left-posterior-superior", np.eye(3))
-        max_ang = float(gradient_frame.axis_angle_degrees(world_g, rt_world).max())
+        max_ang = float(gradient_frame.axis_angle_degrees(np.array(sel_world_g), rt_world).max())
         if max_ang > 1e-4:
             raise RuntimeError(f"Verified NRRD gradient angle drift too high: {max_ang} deg")
         verify_fh.seek(payload_offset)
@@ -2321,18 +2374,44 @@ def convert_hcp_nifti_zip_to_nrrd_zip(nifti_zip: Path, out_zip: Path, *, work_di
                 if not buf:
                     break
                 decoded_bytes += len(buf)
-        expected_bytes = nvox * nt * 2
+        expected_bytes = nx_new * ny_new * nz_new * nt_new * 2
         if decoded_bytes != expected_bytes:
             raise RuntimeError(f"Verified NRRD payload size mismatch: {decoded_bytes} != {expected_bytes}")
+
+    terms_out = work_dir / "README_HCP_DATA_USE_TERMS.txt"
+    terms_out.write_text(
+        "SlicerDSpace Example Dataset: HCP Subject 100307 (2.0 mm Dual-Shell NRRD Quickstart)\n\n"
+        "Contents\n--------\n"
+        "- HCP-100307/100307_dwi.nrrd               Preprocessed 4D DWI in NRRD format (2.0 mm isotropic, 91 x 109 x 91 x 66 volumes; b = 0 x 6, 1000 x 30, 2000 x 30 s/mm^2), derived by spatially resampling and uniformly subsampling the WU-Minn HCP 100307 minimal-preprocessing diffusion dataset for fast desktop/workshop execution while preserving full multi-shell compatibility (DTI, Free Water, NODDI, DKI / MK-Curve, UKF, CSD/ACT, DDSeg, DDParcel, DDSurfer, TractCloud, WMA, Connectome).\n"
+        "- HCP-100307/nodif_brain_mask.nii.gz       Binary brain mask aligned to the 2.0 mm DWI grid\n"
+        "- HCP-100307/README_HCP_DATA_USE_TERMS.txt This attribution and data-use notice\n\n"
+        "Data Attribution & WU-Minn HCP Consortium Open Access Data Use Terms\n"
+        "--------------------------------------------------------------------\n"
+        "These data are derived from the preprocessed diffusion MRI files for subject 100307 from the WU-Minn Human Connectome Project (HCP) Young Adult 1200 Subjects release and are redistributed under the WU-Minn HCP Consortium Open Access Data Use Terms (https://www.humanconnectome.org/study/hcp-young-adult/document/wu-minn-hcp-consortium-open-access-data-use-terms).\n\n"
+        "By downloading or using these files, you agree to abide by the WU-Minn HCP Open Access Data Use Terms, including:\n"
+        "1. No re-identification: You will not attempt to establish the identity of, or make contact with, any of the included human subjects.\n"
+        "2. Institutional compliance: You will comply with all relevant rules and regulations of your institution.\n"
+        "3. Redistribution: Original or derived WU-Minn HCP Open Access data may be redistributed only under these same Data Use Terms.\n"
+        "4. Mandatory acknowledgment: Any publication, presentation, poster, or public release using these data must acknowledge:\n"
+        '   "Data were provided [in part] by the Human Connectome Project, WU-Minn Consortium (Principal Investigators: David Van Essen and Kamil Ugurbil; 1U54MH091657) funded by the 16 NIH Institutes and Centers that support the NIH Blueprint for Neuroscience Research; and by the McDonnell Center for Systems Neuroscience at Washington University."\n'
+        "   Please also cite the relevant HCP methodology papers (e.g., Van Essen et al., NeuroImage 2013; Glasser et al., NeuroImage 2013; Sotiropoulos et al., NeuroImage 2013).\n\n"
+        "Using This Example Dataset in SlicerDSpace\n"
+        "------------------------------------------\n"
+        "Because these HCP files have already undergone HCP minimal preprocessing:\n"
+        "- In 3D Slicer GUI: Enter a Subject ID (e.g., 100307), drag HCP-100307/100307_dwi.nrrd into the NRRD tab under Inputs (optionally load nodif_brain_mask.nii.gz when Brain mask is set to Provided), and leave Preprocessing unchecked to avoid redundant interpolation.\n"
+        "- Via CLI: Pass `--source <path-to>/HCP-100307/100307_dwi.nrrd --source-kind nrrd --subject-id 100307`.\n",
+        encoding="utf-8",
+        newline="\n",
+    )
 
     out_zip.parent.mkdir(parents=True, exist_ok=True)
     tmp_zip = out_zip.with_name(out_zip.name + ".tmp")
     try:
         with zipfile.ZipFile(tmp_zip, "w", allowZip64=True) as zf:
             for arc_name, src_file, comp in (
-                ("HCP-100307/README_HCP_DATA_USE_TERMS.txt", terms_path, zipfile.ZIP_DEFLATED),
+                ("HCP-100307/README_HCP_DATA_USE_TERMS.txt", terms_out, zipfile.ZIP_DEFLATED),
                 ("HCP-100307/100307_dwi.nrrd", nrrd_path, zipfile.ZIP_STORED),
-                ("HCP-100307/nodif_brain_mask.nii.gz", mask_path, zipfile.ZIP_STORED),
+                ("HCP-100307/nodif_brain_mask.nii.gz", mask_out, zipfile.ZIP_STORED),
             ):
                 zi = zipfile.ZipInfo(filename=arc_name, date_time=(2026, 1, 1, 0, 0, 0))
                 zi.compress_type = comp
@@ -2343,13 +2422,15 @@ def convert_hcp_nifti_zip_to_nrrd_zip(nifti_zip: Path, out_zip: Path, *, work_di
     finally:
         tmp_zip.unlink(missing_ok=True)
         nrrd_path.unlink(missing_ok=True)
+        mask_out.unlink(missing_ok=True)
+        terms_out.unlink(missing_ok=True)
         shutil.rmtree(extract_dir, ignore_errors=True)
 
     return {
         "filename": out_zip.name,
         "size_bytes": out_zip.stat().st_size,
         "sha256": sha256_file(out_zip),
-        "shape": [nx, ny, nz, nt],
+        "shape": [nx_new, ny_new, nz_new, nt_new],
         "clamped_voxels": clamped_count,
         "max_angle_error_deg": max_ang,
     }
@@ -2369,10 +2450,11 @@ def cmd_build_example_hcp_nrrd(args: argparse.Namespace) -> int:
 
     remote_assets = {} if args.dry_run else _fetch_remote_release_assets(assets_tag, repo)
     existing = remote_assets.get(nrrd_name)
+    # Compact 2.0 mm dual-shell 66-vol NRRD zip is ~32 MB; replace legacy >100 MB 1.25 mm archives automatically.
     already_uploaded = (
         isinstance(existing, dict)
         and str(existing.get("state") or "").lower() == "uploaded"
-        and int(existing.get("size") or 0) > 100_000_000
+        and 20_000_000 < int(existing.get("size") or 0) < 60_000_000
     )
 
     if already_uploaded:

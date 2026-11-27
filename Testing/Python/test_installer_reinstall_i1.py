@@ -22,12 +22,17 @@ class FakeSlicerState:
     """The extension state on disk and in the settings file, shared by every Slicer start."""
 
     def __init__(self, installed: bool = False, scheduled: bool = False, locked: bool = False,
-                 cancel_works: bool = True, schedule_after_install: bool = False) -> None:
+                 cancel_works: bool = True, schedule_after_install: bool = False,
+                 exit_codes: dict = None, install_raises: bool = False, install_fails: bool = False, skip_helper_starts: tuple = ()) -> None:
         self.installed = installed
         self.scheduled = scheduled
         self.locked = locked  # a Windows file lock: the start-up removal cannot delete the files
         self.cancel_works = cancel_works
         self.schedule_after_install = schedule_after_install
+        self.exit_codes = dict(exit_codes or {})  # Slicer start number -> the exit code that start returns
+        self.install_fails = install_fails  # installExtension returns False without raising
+        self.install_raises = install_raises  # installExtension raises (a failed pass 2 after the start-up removal)
+        self.skip_helper_starts = tuple(skip_helper_starts)  # starts where the helper never runs and writes no receipt
         self.starts = 0
         self.cancelled = []
         self.history = []
@@ -64,6 +69,10 @@ class FakeEm:
             self.state.scheduled = False
     def isExtensionScheduledForUninstall(self, name): return self.state.scheduled
     def installExtension(self, name, meta, archive, a, b):
+        if self.state.install_raises:
+            raise RuntimeError("fake installExtension failure")
+        if self.state.install_fails:
+            return False
         if self.state.installed:  # S4
             return False
         self.state.installed = True
@@ -101,6 +110,8 @@ def _run_installer_function(ns: dict, state: FakeSlicerState, tmp: Path, slicer_
             raise FileNotFoundError(cmd[0])
         seen: dict = {}
         em = state.start()
+        if state.starts in state.skip_helper_starts:
+            return subprocess.CompletedProcess(orig_cmd, state.exit_codes.get(state.starts, 1))
         slicer_stub = types.ModuleType("slicer")
         slicer_stub.app = types.SimpleNamespace(
             extensionsManagerModel=lambda: em, majorVersion=5, minorVersion=10, exit=lambda code: seen.update(code=code)
@@ -115,7 +126,7 @@ def _run_installer_function(ns: dict, state: FakeSlicerState, tmp: Path, slicer_
                 exec(compile(Path(helper).read_text(encoding="utf-8"), helper, "exec"), {"__name__": "helper"})
         finally:
             sys.argv = saved_argv
-        return subprocess.CompletedProcess(orig_cmd, seen.get("code", 1))
+        return subprocess.CompletedProcess(orig_cmd, state.exit_codes.get(state.starts, seen.get("code", 1)))
 
     archive = tmp / "ext.zip"
     archive.write_bytes(b"PK")
@@ -276,6 +287,59 @@ class I1ReinstallTests(_InstallerCopies, unittest.TestCase):
                     self.assertIsNone(error)
                     self.assertEqual(len(calls), 1)
                     self.assertEqual(calls[0]["xvfb_prefix"], [])
+
+    def test_opus_r2_p2_a_pass_one_exit_code_after_a_scheduled_removal_does_not_stop_the_installer(self) -> None:
+        warn = ("[WARN] 3D Slicer exited with code 1 after it scheduled the old SlicerDSpace for removal; "
+                "the installer goes on with the second start.")
+        for state, (calls, logs, error) in self._each(installed=True, exit_codes={1: 1}):
+            self.assertIsNone(error)
+            self.assertEqual(state.starts, 2)
+            self.assertEqual([c["args"][-1] for c in calls], ["1", "2"])
+            self.assertTrue(state.installed)
+            self.assertFalse(state.scheduled)
+            self.assertIn(warn, logs)
+
+    def test_opus_r2_p2_a_no_warning_when_pass_one_exits_with_zero(self) -> None:
+        for state, (calls, logs, error) in self._each(installed=True):
+            self.assertIsNone(error)
+            self.assertFalse(any("after it scheduled the old SlicerDSpace" in line for line in logs), logs)
+
+    def test_opus_r2_p2_b_pass_two_failure_after_the_removal_says_the_old_copy_is_gone(self) -> None:
+        for state, (calls, logs, error) in self._each(installed=True, install_raises=True):
+            self.assertIsNotNone(error)
+            self.assertIn("fake installExtension failure", error)
+            self.assertIn("The previous SlicerDSpace was removed when 3D Slicer started for the second pass; "
+                          "run the installer again to install SlicerDSpace.", error)
+            self.assertEqual(state.starts, 2)
+            self.assertFalse(state.installed)
+
+    def test_opus_r2_p2_b_pass_two_install_returning_false_says_the_old_copy_is_gone(self) -> None:
+        for state, (calls, logs, error) in self._each(installed=True, install_fails=True):
+            self.assertIsNotNone(error)
+            self.assertIn("rejected", error)
+            self.assertIn("The previous SlicerDSpace was removed when 3D Slicer started for the second pass; "
+                          "run the installer again to install SlicerDSpace.", error)
+            self.assertNotIn("may have removed", error)
+            self.assertEqual(state.starts, 2)
+            self.assertFalse(state.installed)
+
+    def test_opus_r2_p2_b_pass_two_without_a_receipt_says_the_old_copy_may_be_gone(self) -> None:
+        for state, (calls, logs, error) in self._each(installed=True, skip_helper_starts=(2,)):
+            self.assertIsNotNone(error)
+            self.assertIn("3D Slicer may have removed the previous SlicerDSpace when it started for the second pass; "
+                          "run the installer again if SlicerDSpace is missing.", error)
+            self.assertNotIn("was removed when 3D Slicer started", error)
+
+    def test_opus_r2_p2_b_windows_lock_case_gets_no_suffix(self) -> None:
+        for state, (calls, logs, error) in self._each(installed=True, locked=True):
+            self.assertIn("Close all 3D Slicer windows and run the installer again", error)
+            self.assertNotIn("was removed when 3D Slicer started", error)
+            self.assertNotIn("may have removed", error)
+
+    def test_opus_r2_p2_b_pass_one_error_and_fresh_install_error_get_no_suffix(self) -> None:
+        for state, (calls, logs, error) in self._each(installed=False, install_raises=True):
+            self.assertEqual(error, "fake installExtension failure")
+            self.assertEqual(state.starts, 1)
 
 
 if __name__ == "__main__":

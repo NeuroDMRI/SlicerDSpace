@@ -158,7 +158,7 @@ class GapGuiReinstallTests(unittest.TestCase):
         self.assertEqual(restarts, [])
         self.assertNotIn("SlicerDSpace", slicer.scheduled)
         self.assertEqual(slicer.scheduled, {"SlicerDSpaceSetup"})
-        self.assertIn("Restart 3D Slicer first", note)
+        self.assertIn("Restart 3D Slicer (this removes Setup)", note)
         self.assertIn(note, logs)
         slicer.start()
         self.assertIn("SlicerDSpace", slicer.installed)
@@ -192,13 +192,59 @@ class GapGuiReinstallTests(unittest.TestCase):
         source = self.source
         start = source.index("    def _on_start():")
         body = source[start:source.index("    def _on_cancel():")]
-        self.assertLess(body.index('if state["done"]'), body.index("_handle_installed_copy("))
-        self.assertLess(body.index("_handle_installed_copy("), body.index('state["running"] = True'))
+        self.assertLess(body.index('if state["done"]'), body.index("_installed_copy_note("))
+        self.assertLess(body.index("_installed_copy_note("), body.index('state["running"] = True'))
         self.assertLess(body.index('state["running"] = True'), body.index("_start_worker_process("))
         ready = source[source.index('elif kind == "downloads_ready":'):source.index('elif kind == "all_done":')]
         self.assertIn("_install_extension_gui(", ready)
         self.assertNotIn("uninstallScheduledExtensions", ready)
         self.assertEqual(source.count("uninstallScheduledExtensions()"), 1)
+
+    def test_opus_r2_p2_c_installed_copy_note_is_skipped_when_this_session_installed_the_copy(self) -> None:
+        ns = self._ns()
+        asked, restarts = [], []
+        ask = lambda: asked.append(1) or True
+        restart = lambda: restarts.append(1) or True
+        state = FakeSlicerState(installed=True)
+        em = state.start()
+        note = ns["_installed_copy_note"]({"installed_here": True}, em, ask, restart, lambda _m: None)
+        self.assertIsNone(note)
+        self.assertEqual((asked, restarts, state.scheduled), ([], [], False))
+        note = ns["_installed_copy_note"]({}, em, ask, restart, lambda _m: None)
+        self.assertTrue(note.startswith("Restarting"), note)
+        self.assertEqual((asked, restarts, state.scheduled), ([1], [1], True))
+
+    def test_opus_r2_p2_c_on_start_uses_the_note_and_downloads_ready_records_the_install(self) -> None:
+        source = self.source
+        start = source.index("    def _on_start():")
+        body = source[start:source.index("    def _on_cancel():")]
+        self.assertIn("_installed_copy_note(state, slicer.app.extensionsManagerModel(),", body)
+        self.assertNotIn("_handle_installed_copy(", body)
+        ready = source[source.index('elif kind == "downloads_ready":'):source.index('elif kind == "all_done":')]
+        self.assertLess(ready.index("_install_extension_gui("), ready.index('state["installed_here"] = True'))
+        self.assertLess(ready.index('state["installed_here"] = True'), ready.index("_resolve_mod_root("))
+
+    def test_opus_r2_p2_c_a_second_install_in_the_same_session_replaces_the_copy_installed_here(self) -> None:
+        ns = self._ns()
+        state = FakeSlicerState(installed=False)
+        em = state.start()  # the running window had no copy at its start, so the copy installed below is not loaded
+        with tempfile.TemporaryDirectory() as tmp:
+            ns["_install_extension_gui"](em, Path(tmp) / "ext.zip", tmp, lambda _m: None)
+            self.assertTrue(state.installed)
+            ns["_install_extension_gui"](em, Path(tmp) / "ext.zip", tmp, lambda _m: None)  # the retry: no error
+        self.assertTrue(state.installed)
+        self.assertFalse(state.scheduled)
+
+    def test_opus_r3_p2_setup_that_cannot_cancel_its_own_removal_says_to_restart_and_install_setup_again(self) -> None:
+        ns = self._ns()
+        slicer = TwoExtensionSlicer(cancel_works=False)
+        logs, restarts = [], []
+        note = ns["_handle_installed_copy"](slicer, lambda: True, lambda: restarts.append(1) or True, logs.append)
+        self.assertEqual(restarts, [])
+        self.assertIn("this removes Setup", note)
+        self.assertIn("install SlicerDSpaceSetup again", note)
+        self.assertNotIn("open Setup again", note)
+        self.assertIn(note, logs)
 
 
 if __name__ == "__main__":

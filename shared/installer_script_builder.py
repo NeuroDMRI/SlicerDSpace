@@ -1063,10 +1063,15 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             "                if (c / 'SlicerDSpace.py').is_file():",
             "                    ext_root = str(c.parents[2].resolve())",
             "                    break",
-            "        receipt.write_text(json.dumps({'installed': ok, 'module_paths': paths, 'ext_root': ext_root, 'needs_remap': needs_remap, 'scheduled_uninstall_cancelled': sched_cancelled, 'scheduled_uninstall_left': sched_left, 'rev': rev, 'target_subdir': tsub, 'slicer_os': sos, 'slicer_arch': sarch, 'slicer_major': maj, 'slicer_minor': minv, 'py_minor': f'{sys.version_info[0]}.{sys.version_info[1]}'}), encoding='utf-8')",
+            "        receipt.write_text(json.dumps({'installed': ok, 'extension_installed': bool(em.isExtensionInstalled('SlicerDSpace')), 'module_paths': paths, 'ext_root': ext_root, 'needs_remap': needs_remap, 'scheduled_uninstall_cancelled': sched_cancelled, 'scheduled_uninstall_left': sched_left, 'rev': rev, 'target_subdir': tsub, 'slicer_os': sos, 'slicer_arch': sarch, 'slicer_major': maj, 'slicer_minor': minv, 'py_minor': f'{sys.version_info[0]}.{sys.version_info[1]}'}), encoding='utf-8')",
             "        slicer.app.exit(0 if ok else 1)",
             "    except Exception as exc:",
-            "        receipt.write_text(json.dumps({'installed': False, 'error': str(exc), 'traceback': traceback.format_exc()}), encoding='utf-8')",
+            "        ext_installed = None",
+            "        try:",
+            "            ext_installed = bool(slicer.app.extensionsManagerModel().isExtensionInstalled('SlicerDSpace'))",
+            "        except Exception:",
+            "            ext_installed = None",
+            "        receipt.write_text(json.dumps({'installed': False, 'error': str(exc), 'traceback': traceback.format_exc(), 'extension_installed': ext_installed}), encoding='utf-8')",
             "        slicer.app.exit(1)",
             "qt.QTimer.singleShot(500, _run)",
         ]
@@ -1090,7 +1095,9 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             if not receipt.is_file():
                 raise RuntimeError(f"Slicer extension installation failed with exit code {proc.returncode}")
             result = json.loads(receipt.read_text(encoding="utf-8"))
-            if result.get("phase") == "scheduled_uninstall" and proc.returncode == 0:
+            if result.get("phase") == "scheduled_uninstall":
+                if proc.returncode != 0:
+                    _log(f"[WARN] 3D Slicer exited with code {proc.returncode} after it scheduled the old SlicerDSpace for removal; the installer goes on with the second start.")
                 return result
             if proc.returncode != 0 or not result.get("installed"):
                 raise RuntimeError(result.get("error") or f"Slicer ExtensionManager rejected archive: {archive_path}")
@@ -1100,7 +1107,22 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             data = _launch("1")
             if data.get("phase") == "scheduled_uninstall":
                 _log("An older SlicerDSpace is installed. 3D Slicer removes it at its next start, so the installer starts Slicer a second time to install the new copy.")
-                data = _launch("2")
+                try:
+                    data = _launch("2")
+                except RuntimeError as exc:
+                    # Pass 2 started Slicer after the removal was scheduled: say whether the old copy is gone.
+                    try:
+                        info = json.loads(receipt.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        info = {}
+                    was_installed = info.get("extension_installed") if isinstance(info, dict) else None
+                    if was_installed is False:
+                        note = " The previous SlicerDSpace was removed when 3D Slicer started for the second pass; run the installer again to install SlicerDSpace."
+                    elif was_installed is True:
+                        note = ""
+                    else:
+                        note = " 3D Slicer may have removed the previous SlicerDSpace when it started for the second pass; run the installer again if SlicerDSpace is missing."
+                    raise RuntimeError(str(exc) + note) from exc
         finally:
             shutil.rmtree(receipt.parent, ignore_errors=True)
         if data.get("scheduled_uninstall_cancelled"):

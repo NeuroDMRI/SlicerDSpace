@@ -104,20 +104,42 @@ def _workflow_trigger_violations(name: str, text: str) -> list[str]:
     events = re.search(r"(?ms)^on:\n(.*?)(?=^[^\s#]|\Z)", text)  # a column-0 comment does not end the block
     if events is None:
         return ["no 'on:' block"]
-    block = events.group(1)
-    violations = [] if "workflow_dispatch:" in block else ["no workflow_dispatch"]
-    lines = block.splitlines()
+    lines = events.group(1).splitlines()
+    # Event keys are the non-comment lines at indent 2, compared without quotes or spaces around the name
+    # ("push", '"push"', "push :"); a "- push" list item counts as an event too.
+    event_keys = []
     for index, line in enumerate(lines):
-        event = re.match(r"  (push|pull_request|schedule|workflow_run|release):(.*)$", line)
-        if event is None:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or len(line) - len(line.lstrip(" ")) != 2:
             continue
-        if event.group(1) == "push" and name == "pages.yml":
+        # A "- item" is an event too. A quoted name runs to its closing quote ("#" inside it is part of the name,
+        # Codex P1 round 3); otherwise an inline comment (whitespace then "#") is dropped first (Opus B1).
+        body = stripped[1:].strip() if stripped.startswith("-") else stripped
+        quoted = re.match(r"""(["'])(.*?)\1(.*)$""", body)
+        rest = re.split(r"(?:^|\s)#", quoted.group(3), maxsplit=1)[0].strip() if quoted else ""
+        if quoted and (not rest or rest.startswith(":")):
+            # The quoted name is the key only when nothing but ":" follows its closing quote; any other text (a
+            # doubled '' escape, a suffix) makes the whole line a different name, which matches no event.
+            key, value = quoted.group(2).strip(), rest[1:]
+        elif quoted:
+            key, value = body, ""
+        else:
+            body = re.split(r"\s#", body, maxsplit=1)[0].rstrip()
+            key, _, value = body.partition(":")
+            key = key.strip()
+        event_keys.append((index, key, value))
+    keys = {key for _, key, _ in event_keys}
+    violations = [] if "workflow_dispatch" in keys else ["no workflow_dispatch"]
+    for index, key, value in event_keys:
+        if key not in ("push", "pull_request", "schedule", "workflow_run", "release"):
+            continue
+        if key == "push" and name == "pages.yml":
             continue  # Pages deploys on every push to main.
-        if event.group(1) == "push" and name == "repackage-release.yml" and not event.group(2).strip():
+        if key == "push" and name == "repackage-release.yml" and not value.strip():
             # The release workflow may run on a pushed tag (5b6cb473), but on no branch or path push.
             # Every line at indent 3-4 is a direct key of push (quoted or not); comments and blank lines are skipped,
             # and same-indent "- item" lines are list values. Accept only when the keys are exactly ["tags"].
-            keys = []
+            push_keys = []
             for sub in lines[index + 1:]:
                 stripped = sub.strip()
                 if not stripped or stripped.startswith("#"):
@@ -126,10 +148,10 @@ def _workflow_trigger_violations(name: str, text: str) -> list[str]:
                 if indent <= 2:
                     break
                 if indent <= 4 and not stripped.startswith("-"):
-                    keys.append(stripped.split(":", 1)[0].strip().strip("\"'"))
-            if keys == ["tags"]:
+                    push_keys.append(stripped.split(":", 1)[0].strip().strip("\"'"))
+            if push_keys == ["tags"]:
                 continue
-        violations.append(event.group(1) + ":")
+        violations.append(key + ":")
     return violations
 
 
@@ -262,6 +284,50 @@ class RepositoryStructureTest(unittest.TestCase):
         self.assertEqual(_workflow_trigger_violations("repackage-release.yml", on(allowed)), [])
         # Opus P2-2: this case keeps workflow_dispatch, so only the push can make it fail.
         self.assertIn("push:", _workflow_trigger_violations("other.yml", on("  push:\n")))
+
+    def test_manual_only_rule_reads_event_keys_not_substrings(self) -> None:
+        # Backlog 27 November 2026, Opus (re-review) P2 x2: workflow_dispatch must be a real event key (not text in a
+        # comment or a deeper key), and event keys count with quotes or a space before the colon.
+        def text(block: str) -> str:
+            return "name: x\non:\n" + block + "\njobs: {}\n"
+
+        for block in (
+            "  workflow_call:\n# workflow_dispatch: removed\n",
+            "  workflow_call:\n  # workflow_dispatch:\n",
+            "  workflow_call:\n    workflow_dispatch:\n",
+        ):
+            with self.subTest(block=block):
+                self.assertIn("no workflow_dispatch", _workflow_trigger_violations("other.yml", text(block)))
+        for block in ("  \"workflow_dispatch\":\n", "  'workflow_dispatch':\n", "  workflow_dispatch :\n"):
+            with self.subTest(block=block):
+                self.assertEqual(_workflow_trigger_violations("other.yml", text(block)), [])
+        for block, expected in (
+            ("  push :\n    branches: [main]\n", "push:"),
+            ("  \"push\":\n    branches: [main]\n", "push:"),
+            ("  'schedule':\n    - cron: \"0 0 * * *\"\n", "schedule:"),
+            ("  pull_request :\n", "pull_request:"),
+            ("  \"workflow_run\" :\n    workflows: [x]\n", "workflow_run:"),
+            ("  - push\n", "push:"),
+        ):
+            with self.subTest(block=block):
+                self.assertIn(expected, _workflow_trigger_violations("other.yml", text(block + "  workflow_dispatch:\n")))
+        # Review fix round (Opus B1): an inline comment must not hide an event, in list or bare-scalar form.
+        for block in ("  - push  # every push\n  - workflow_dispatch\n", "  - \"push\" # c\n  - workflow_dispatch\n",
+                      "  push # every push\n  workflow_dispatch:\n"):
+            with self.subTest(block=block):
+                self.assertIn("push:", _workflow_trigger_violations("other.yml", text(block)))
+        # Round 3 (Codex P1): a "#" inside a quoted key is part of the name, not a comment.
+        # After round 3 (Opus B1, Codex P1): text after the closing quote other than ":" makes it a different name.
+        for block in ("  \"workflow_dispatch # disabled\":\n", "  - 'workflow_dispatch # off'\n",
+                      "  'workflow_dispatch''x':\n", "  'workflow_dispatch''disabled':\n", "  \"workflow_dispatch\" off:\n",
+                      "  \"workflow_dispatch\"x:\n", "  - \"workflow_dispatch\" off\n"):
+            with self.subTest(block=block):
+                self.assertIn("no workflow_dispatch", _workflow_trigger_violations("other.yml", text(block)))
+        # Allowance guards (not fix checks): a quoted or spaced push key still gets the tag-only allowance.
+        for key in ("  \"push\":\n", "  push :\n"):
+            with self.subTest(key=key):
+                block = key + "    tags:\n      - \"v1.*\"\n  workflow_dispatch:\n"
+                self.assertEqual(_workflow_trigger_violations("repackage-release.yml", text(block)), [])
 
     def test_cache_settings_preserve_scientific_evidence(self) -> None:
         project = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")

@@ -18,6 +18,15 @@ def _cmake_executable() -> str | None:
     return shutil.which("cmake")
 
 
+def _captured_text(value) -> str:
+    """TimeoutExpired keeps the output read before the kill; on POSIX it is bytes even with text=True."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 class CMakeExtensionConfigTest(unittest.TestCase):
     def test_sdk_prerequisites_are_requested_before_project(self):
         content = (REPO_ROOT / 'CMakeLists.txt').read_text(encoding='utf-8')
@@ -72,21 +81,26 @@ class CMakeExtensionConfigTest(unittest.TestCase):
                 encoding="utf-8",
             )
             build = root / "build"
-            completed = subprocess.run(
-                [
-                    cmake,
-                    "-S",
-                    REPO_ROOT.as_posix(),
-                    "-B",
-                    build.as_posix(),
-                    f"-DSlicer_DIR={sdk.as_posix()}",
-                    "-DBUILD_TESTING=ON",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
+            try:
+                completed = subprocess.run(
+                    [
+                        cmake,
+                        "-S",
+                        REPO_ROOT.as_posix(),
+                        "-B",
+                        build.as_posix(),
+                        f"-DSlicer_DIR={sdk.as_posix()}",
+                        "-DBUILD_TESTING=ON",
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+            except subprocess.TimeoutExpired as exc:
+                # The last "-- " line before the kill names the configure step that did not finish.
+                self.fail(f"cmake configure timed out after {exc.timeout} s\n--- stdout so far ---\n"
+                          f"{_captured_text(exc.stdout)}\n--- stderr so far ---\n{_captured_text(exc.stderr)}")
 
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             module_contract = (build / "scripted-module.txt").read_text(encoding="utf-8")

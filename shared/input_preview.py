@@ -723,13 +723,15 @@ def preview_cache_path(source: PreviewSource, cache_dir: Any, threshold: float =
 
 
 def _prune_cache(cache_dir: Path, keep: Path) -> None:
-    entries = sorted(cache_dir.glob("preview_*_meanb0.nii.gz"), key=lambda p: p.stat().st_mtime, reverse=True)
-    for stale in entries[MAX_CACHED_PREVIEWS:]:
-        if stale != keep:
-            try:
-                stale.unlink()
-            except OSError:
-                pass
+    # ``keep`` is set aside before the sort: when previews share one mtime (a coarse file clock), it can sort past the
+    # newest MAX_CACHED_PREVIEWS, and skipping it there left one file too many.
+    others = sorted((p for p in cache_dir.glob("preview_*_meanb0.nii.gz") if p != keep),
+                    key=lambda p: p.stat().st_mtime, reverse=True)
+    for stale in others[MAX_CACHED_PREVIEWS - 1:]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
 
 
 def mean_b0_image(source: PreviewSource, cache_dir: Any, threshold: float = B0_THRESHOLD) -> Path:

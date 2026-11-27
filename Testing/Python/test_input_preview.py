@@ -8,6 +8,7 @@ may not) and are skipped without them.
 from __future__ import annotations
 
 import ast
+import os
 import sys
 import tempfile
 import unittest
@@ -127,6 +128,26 @@ class MeanB0Test(unittest.TestCase):
             source = PreviewSource(source.kind, source.dwi, source.bval, None, f"sub-{index}")
             mean_b0_image(source, self.cache)
         self.assertEqual(len(list(self.cache.glob("preview_*_meanb0.nii.gz"))), 6)
+
+    def test_flaky_h1_previews_written_in_the_same_clock_tick(self):
+        """FLAKY-H1: the prune sorts the previews by mtime. On a coarse file clock (Windows, ~16 ms) the 8 small
+        previews can share one mtime; the stable sort then keeps the listing order, NTFS lists by name, and the new
+        preview lands past the newest 6. The prune skips it and deletes one file too few. This forces both."""
+        from shared import input_preview
+
+        real_replace, real_glob = os.replace, Path.glob
+        tick = 1_700_000_000_000_000_000
+
+        def replace_in_one_tick(src, dst):
+            real_replace(src, dst)
+            os.utime(dst, ns=(tick, tick))
+
+        def glob_in_name_order(path, pattern):
+            return iter(sorted(real_glob(path, pattern)))
+
+        with mock.patch.object(input_preview.os, "replace", replace_in_one_tick), \
+                mock.patch.object(Path, "glob", glob_in_name_order):
+            self.test_h1_cache_keeps_only_the_newest_previews()
 
     def write_nrrd(self, axis_last: bool, space: str = "left-posterior-superior") -> Path:
         shape = (4, 5, 6)

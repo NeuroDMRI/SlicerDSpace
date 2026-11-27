@@ -7,6 +7,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[2]
@@ -131,9 +132,23 @@ class HeartbeatStallTests(unittest.TestCase):
                 now[0] += 60
                 with log.open("a") as stream:
                     stream.write("y" * 10)
+                # FLAKY-H2: the ticks run in a few ms, and Linux stamps the append with a coarse clock that can be
+                # behind the stage start (time.time()); stamp it clearly after the start, as a real tool's later
+                # write is.
+                stamp = time.time() + 5.0
+                os.utime(log, (stamp, stamp))
                 beat.tick()
             self.assertIn("log_bytes=", lines[-1])
             self.assertFalse([line for line in lines if "stalled_min" in line])
+
+    def test_flaky_h2_file_clock_behind_the_wall_clock(self):
+        """FLAKY-H2: Linux stamps a write with a coarse clock that can be a few ms behind time.time(). The ticks run
+        in a few ms, so each append gets an mtime before the stage start and the log is never counted. This runs the
+        H2 test with the stage-start clock 1 s ahead of the file clock (larger than any run time of the ticks)."""
+        real_time = time.time
+        ahead = SimpleNamespace(time=lambda: real_time() + 1.0, monotonic=time.monotonic)
+        with patch.object(hb, "time", ahead):
+            self.test_h2_active_stage_log_size_is_reported_and_growth_counts_as_progress()
 
     def test_h2_missing_psutil_prints_elapsed_only(self):
         lines = []

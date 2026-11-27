@@ -30,7 +30,7 @@ SlicerDSpace is a unified 3D Slicer extension for T1-weighted-image-free anatomi
   - **Linux (`x86_64`)**: `SlicerDSpace-v1.0.0-Linux-x64.tar.gz`
   - **macOS (Apple Silicon `arm64`)**: `SlicerDSpace-v1.0.0-macOS-arm64.tar.gz`
 - **Shared Cross-Platform Model Packs, Atlases & Example Data**:
-  - Cross-platform modular model weight packs (`SlicerDSpace-Model-DDSurfer-v1.tar.gz`, `SlicerDSpace-Model-DDSeg-v1.tar.gz`, `SlicerDSpace-Model-DDParcel-v1.tar.gz`, `SlicerDSpace-Model-PNL-CNN-v1.tar.gz`, `SlicerDSpace-Model-TractCloud-v1.tar.gz`), optional WMA white-matter atlases (`ORG`, `NABA`, `East-West`), prebuilt runtimes, and the preprocessed HCP example DWI dataset are hosted in the shared [`assets`](https://github.com/NeuroDMRI/SlicerDSpace/releases/tag/assets) release.
+  - Cross-platform modular model weight packs (`SlicerDSpace-Model-DDSurfer-v1.tar.gz`, `SlicerDSpace-Model-DDSeg-v1.tar.gz`, `SlicerDSpace-Model-DDParcel-v1.tar.gz`, `SlicerDSpace-Model-PNL-CNN-v1.tar.gz`, `SlicerDSpace-Model-TractCloud-v1.tar.gz`), optional WMA white-matter atlases (`ORG`, `NABA`, `East-West`), prebuilt runtimes, and the skull-intact Sherbrooke example DWI dataset (`SlicerDSpace-Example-Sherbrooke-NRRD.zip`, DWI-only for automatic PNL CNN brain masking) are hosted in the shared [`assets`](https://github.com/NeuroDMRI/SlicerDSpace/releases/tag/assets) release.
   - Option A downloads and verifies all core model packs and the NITRC `IITmean_b0_256.nii.gz` template automatically; optional WMA atlases can be downloaded on demand inside Slicer.
 - **Incremental Updates & Verification**:
   - Existing installations can apply code updates from **Modules -> Diffusion -> SlicerDSpace -> Update -> Check for updates** (`SlicerDSpace-v1.0.0-CodeOverlay.tar.gz`).

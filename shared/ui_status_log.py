@@ -251,6 +251,7 @@ def apply_widget_styles(owner: Any) -> None:
         ("shared.ui_compact", "refresh_input_format_help_popover_style"),
         ("shared.ui_run_history", "refresh_run_progress_styles"),
         ("shared.ui_run_history", "refresh_results_window"),
+        ("shared.ui_roi_tracking", "refresh_roi_tracking_styles"),
     ):
         try:
             mod = __import__(module_name, fromlist=[fn_name])

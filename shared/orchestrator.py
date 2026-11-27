@@ -862,7 +862,7 @@ def _resolve_bundle_input_tractography(
     candidates.extend(sorted(layout.tractography.glob("**/*.vt*")))
     candidates.extend(sorted(layout.stage_cache("03_tractography").glob("**/*.vt*")))
     candidates.extend(sorted(subject_root.glob("tractography/**/*.vt*")) + sorted(subject_root.glob("tractography/*.vt*")))
-    excluded_parts = {"saf", "short_association_fibers", "bundles", "wmql", "wma", "tractcloud", "tract_cloud_dl"}
+    excluded_parts = {"saf", "short_association_fibers", "roi_tracking", "bundles", "wmql", "wma", "tractcloud", "tract_cloud_dl"}
     return next(
         (
             path.resolve()
@@ -895,7 +895,7 @@ def _resolve_wma_input_tractography(
         return resolved_explicit if resolved_explicit.is_file() else None
 
     layout = subject_layout(subject_root, output_root=output_root)
-    excluded_parts = {"saf", "short_association_fibers", "bundles", "wma", "wmql", "tractcloud", "tract_cloud_dl"}
+    excluded_parts = {"saf", "short_association_fibers", "roi_tracking", "bundles", "wma", "wmql", "tractcloud", "tract_cloud_dl"}
     candidates = sorted(layout.tractography.glob("**/*.vtk"))
     candidates.extend(sorted(layout.tractography.glob("**/*.vtp")))
     candidates.extend(sorted(layout.tractography.glob("**/*.tck")))
@@ -5975,6 +5975,133 @@ def _run_subject_products_locked(
         target_will_run="tractcloud" in run_targets,
     )
 
+    micro_stage_dir = layout.stage_cache("02_microstructure")
+    dti_ran_before_parcellation = False
+    dti_task_index: Optional[int] = None
+    dti_failed_reason: Optional[str] = None
+    if "microstructure" in run_targets:
+        micro_outputs = _microstructure_dti_outputs(subject_root, config.subject_id, output_root)
+        freewater_outputs = _microstructure_freewater_outputs(subject_root, config.subject_id, output_root)
+        noddi_outputs = _microstructure_noddi_outputs(subject_root, config.subject_id, output_root)
+        # K6: when a parcellation is available now (and won't be newly generated later in this run),
+        # outputs without ROI statistics are not complete.
+        roi_json_path = micro_outputs.get("roi_stats_json") or (
+            micro_stage_dir / "regional_microstructure" / f"{config.subject_id}_ROIWise-Microstructure.json"
+        )
+        roi_statistics_missing = parcellation is not None and not roi_json_path.is_file()
+        if (config.resume and not roi_statistics_missing
+                and _microstructure_dti_complete(subject_root, config.subject_id, output_root, fit_method=config.microstructure_fit_method)):
+            published_dti = _publish_microstructure_dti_outputs(micro_outputs, layout, config.subject_id)
+            dti_task_index = len(tasks)
+            tasks.append(
+                ProductTaskRecord(
+                    name="microstructure.dti",
+                    status="skipped",
+                    reason="completed DTI microstructure outputs found",
+                    regional_statistics=regional_statistics_note(parcellation, log),  # K6: keep the C8 status on resume
+                    manifest_path=micro_outputs["manifest"],
+                    qc_path=micro_outputs["qc"],
+                    outputs=published_dti,
+                )
+            )
+            dti_ran_before_parcellation = parcellation is None
+        elif not config.execute:
+            dti_task_index = len(tasks)
+            tasks.append(ProductTaskRecord(name="microstructure.dti", status="planned", reason="execute=False"))
+        elif any(not path.is_file() for path in raw.values()):
+            missing = [label for label, path in raw.items() if not path.is_file()]
+            dti_task_index = len(tasks)
+            tasks.append(ProductTaskRecord(name="microstructure.dti", status="blocked", reason="missing raw input: " + ", ".join(missing)))
+        else:
+            from microstructure import MicrostructureConfig, run_microstructure
+            from shared.pipeline import ensure_native_dti_bundle, find_subject_root, resolve_preprocessed_input_bundle
+
+            _emit("[Orchestrator] Running Microstructure DTI", log)
+            task_started = _start_task_timer("Microstructure DTI", log)
+            try:
+                raw_bundle = find_subject_root(
+                    subject_root,
+                    config.subject_id,
+                    brain_mask_config=selected_mask_config,
+                    output_root=output_root,
+                )
+                analysis_input_bundle = resolve_preprocessed_input_bundle(raw_bundle, output_root=output_root)
+                native_bundle = ensure_native_dti_bundle(
+                    analysis_input_bundle,
+                    fit_method=config.microstructure_fit_method,
+                    # This shared cache is keyed by its own input manifest. A fresh
+                    # product run must not force an unrelated Slicer CLI rebuild.
+                    reuse=True,
+                    log=log,
+                )
+                result = run_microstructure(
+                    MicrostructureConfig(
+                        subject_id=config.subject_id,
+                        raw_input_bundle=analysis_input_bundle,
+                        native_bundle=native_bundle,
+                        output_dir=micro_stage_dir,
+                        roi_label_map=parcellation,
+                        run_free_water=False,
+                        run_noddi=False,
+                        free_water_chunk_size=config.microstructure_free_water_chunk_size,
+                        free_water_engine=config.microstructure_free_water_engine,
+                        free_water_n_jobs=config.microstructure_free_water_n_jobs,
+                        free_water_vox_per_chunk=config.microstructure_free_water_vox_per_chunk,
+                        free_water_max_fraction_for_tissue=config.microstructure_free_water_max_fraction_for_tissue,
+                        free_water_device=_stage_compute_device(config),
+                        noddi_device=_stage_compute_device(config),
+                        force_recompute=not config.resume,
+                    ),
+                    log=log,
+                )
+            except ValueError:
+                raise
+            except Exception as exc:
+                if "microstructure" not in config.target_required_by:
+                    raise
+                dti_failed_reason = stage_failure_text("microstructure", exc, output_root)
+                dti_task_index = len(tasks)
+                tasks.append(
+                    ProductTaskRecord(
+                        name="microstructure.dti",
+                        status="failed",
+                        reason=dti_failed_reason,
+                    )
+                )
+                _emit(
+                    f"[Orchestrator] Microstructure DTI failed; independent stages can continue: "
+                    f"{dti_failed_reason}",
+                    log,
+                )
+            else:
+                _finish_task_timer("Microstructure DTI", task_started, log)
+                raw_dti_outputs = {
+                    "fa": result.fa_path,
+                    "md": result.md_path,
+                    "ad": result.ad_path,
+                    "rd": result.rd_path,
+                    "l1": result.l1_path,
+                    "l2": result.l2_path,
+                    "l3": result.l3_path,
+                    "trace": result.trace_path,
+                    "dec": getattr(result, "dec_path", None),
+                    "roi_stats_csv": result.roi_stats_csv_path,
+                    "roi_stats_json": result.roi_stats_json_path,
+                }
+                published_dti = _publish_microstructure_dti_outputs(raw_dti_outputs, layout, config.subject_id)
+                dti_task_index = len(tasks)
+                tasks.append(
+                    ProductTaskRecord(
+                        name="microstructure.dti",
+                        status="completed",
+                        regional_statistics=regional_statistics_note(parcellation, log),
+                        manifest_path=micro_stage_dir / "manifest.json",
+                        qc_path=micro_stage_dir / "dti" / "dti_qc.json",
+                        outputs=published_dti,
+                    )
+                )
+                dti_ran_before_parcellation = parcellation is None
+
     if "segmentation" in run_targets:
         if config.resume and _segmentation_complete(subject_root, output_root):
             published_seg = _publish_segmentation_outputs(segmentation_outputs, layout)
@@ -5989,6 +6116,8 @@ def _run_subject_products_locked(
             )
         elif not config.execute:
             tasks.append(ProductTaskRecord(name="segmentation.ddseg", status="planned", reason="execute=False"))
+        elif dti_failed_reason is not None:
+            tasks.append(ProductTaskRecord(name="segmentation.ddseg", status="blocked", reason=f"DTI prerequisite failed: {dti_failed_reason}"))
         elif any(not path.is_file() for path in raw.values()):
             missing = [label for label, path in raw.items() if not path.is_file()]
             tasks.append(ProductTaskRecord(name="segmentation.ddseg", status="blocked", reason="missing raw input: " + ", ".join(missing)))
@@ -6044,6 +6173,8 @@ def _run_subject_products_locked(
             )
         elif not config.execute:
             tasks.append(ProductTaskRecord(name="parcellation.ddparcel", status="planned", reason="execute=False"))
+        elif dti_failed_reason is not None:
+            tasks.append(ProductTaskRecord(name="parcellation.ddparcel", status="blocked", reason=f"DTI prerequisite failed: {dti_failed_reason}"))
         elif not atlas_t2.is_file():
             tasks.append(ProductTaskRecord(name="parcellation.ddparcel", status="blocked", reason=f"missing atlas T2: {atlas_t2}"))
         elif any(not path.is_file() for path in raw.values()):
@@ -6193,6 +6324,8 @@ def _run_subject_products_locked(
                         reason="missing DDSurfer resources: " + ", ".join(str(item) for item in missing),
                     )
                 )
+            elif dti_failed_reason is not None:
+                tasks.append(ProductTaskRecord(name="surface.ddsurfer", status="blocked", reason=f"DTI prerequisite failed: {dti_failed_reason}"))
             elif any(not path.is_file() for path in raw.values()):
                 missing = [label for label, path in raw.items() if not path.is_file()]
                 tasks.append(ProductTaskRecord(name="surface.ddsurfer", status="blocked", reason="missing raw input: " + ", ".join(missing)))
@@ -6348,41 +6481,17 @@ def _run_subject_products_locked(
                     )
                 )
 
-    micro_stage_dir = layout.stage_cache("02_microstructure")
-    if "microstructure" in run_targets:
+    if "microstructure" in run_targets and config.execute and dti_ran_before_parcellation and parcellation is not None:
+        # K6/C8: DTI ran ahead of anatomical priors so DDSeg/DDParcel/DDSurfer reuse native DTI
+        # and users see DTI running explicitly; now that parcellation is available, populate ROI stats.
         micro_outputs = _microstructure_dti_outputs(subject_root, config.subject_id, output_root)
-        freewater_outputs = _microstructure_freewater_outputs(subject_root, config.subject_id, output_root)
-        noddi_outputs = _microstructure_noddi_outputs(subject_root, config.subject_id, output_root)
-        # K6: when a parcellation is available to this run, outputs without ROI statistics are not complete.
         roi_json_path = micro_outputs.get("roi_stats_json") or (
             micro_stage_dir / "regional_microstructure" / f"{config.subject_id}_ROIWise-Microstructure.json"
         )
-        roi_statistics_missing = parcellation is not None and not roi_json_path.is_file()
-        if (config.resume and not roi_statistics_missing
-                and _microstructure_dti_complete(subject_root, config.subject_id, output_root, fit_method=config.microstructure_fit_method)):
-            published_dti = _publish_microstructure_dti_outputs(micro_outputs, layout, config.subject_id)
-            tasks.append(
-                ProductTaskRecord(
-                    name="microstructure.dti",
-                    status="skipped",
-                    reason="completed DTI microstructure outputs found",
-                    regional_statistics=regional_statistics_note(parcellation, log),  # K6: keep the C8 status on resume
-                    manifest_path=micro_outputs["manifest"],
-                    qc_path=micro_outputs["qc"],
-                    outputs=published_dti,
-                )
-            )
-        elif not config.execute:
-            tasks.append(ProductTaskRecord(name="microstructure.dti", status="planned", reason="execute=False"))
-        elif any(not path.is_file() for path in raw.values()):
-            missing = [label for label, path in raw.items() if not path.is_file()]
-            tasks.append(ProductTaskRecord(name="microstructure.dti", status="blocked", reason="missing raw input: " + ", ".join(missing)))
-        else:
+        if not config.resume or not roi_json_path.is_file():
             from microstructure import MicrostructureConfig, run_microstructure
             from shared.pipeline import ensure_native_dti_bundle, find_subject_root, resolve_preprocessed_input_bundle
 
-            _emit("[Orchestrator] Running Microstructure DTI", log)
-            task_started = _start_task_timer("Microstructure DTI", log)
             raw_bundle = find_subject_root(
                 subject_root,
                 config.subject_id,
@@ -6393,8 +6502,6 @@ def _run_subject_products_locked(
             native_bundle = ensure_native_dti_bundle(
                 analysis_input_bundle,
                 fit_method=config.microstructure_fit_method,
-                # This shared cache is keyed by its own input manifest. A fresh
-                # product run must not force an unrelated Slicer CLI rebuild.
                 reuse=True,
                 log=log,
             )
@@ -6414,11 +6521,10 @@ def _run_subject_products_locked(
                     free_water_max_fraction_for_tissue=config.microstructure_free_water_max_fraction_for_tissue,
                     free_water_device=_stage_compute_device(config),
                     noddi_device=_stage_compute_device(config),
-                    force_recompute=not config.resume,
+                    force_recompute=False,
                 ),
                 log=log,
             )
-            _finish_task_timer("Microstructure DTI", task_started, log)
             raw_dti_outputs = {
                 "fa": result.fa_path,
                 "md": result.md_path,
@@ -6433,16 +6539,14 @@ def _run_subject_products_locked(
                 "roi_stats_json": result.roi_stats_json_path,
             }
             published_dti = _publish_microstructure_dti_outputs(raw_dti_outputs, layout, config.subject_id)
-            tasks.append(
-                ProductTaskRecord(
-                    name="microstructure.dti",
+            if dti_task_index is not None and 0 <= dti_task_index < len(tasks):
+                prev = tasks[dti_task_index]
+                tasks[dti_task_index] = replace(
+                    prev,
                     status="completed",
                     regional_statistics=regional_statistics_note(parcellation, log),
-                    manifest_path=micro_stage_dir / "manifest.json",
-                    qc_path=micro_stage_dir / "dti" / "dti_qc.json",
                     outputs=published_dti,
                 )
-            )
 
     parallel_tasks = {}
     parallel_targets = tuple(target for target in run_targets

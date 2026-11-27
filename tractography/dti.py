@@ -40,6 +40,7 @@ class DTITrackingConfig:
     min_length_mm: float = 10.0
     max_length_mm: float = 250.0
     device: str = "cpu"
+    seed_mask_path: Optional[Path] = None
     force_recompute: bool = False
     execute: bool = False
 
@@ -658,6 +659,16 @@ def _run_dipy_dti_tracking(
     )
     del data_in_mask
     seed_mask = tracking_mask
+    if config.seed_mask_path is not None:
+        roi_img = nib.load(Path(config.seed_mask_path).expanduser().resolve().as_posix())
+        roi_arr = np.asarray(roi_img.get_fdata()) > 0
+        if roi_arr.shape != mask.shape:
+            raise ValueError(f"ROI seed mask shape {roi_arr.shape} does not match DWI shape {mask.shape}")
+        seed_mask = roi_arr & tracking_mask
+        if not np.any(seed_mask):
+            # Cortical GM ROIs may sit just below min_fa; allow seeding in masked ROI voxels
+            # while keeping tracking_mask as the whole-brain stopping domain.
+            seed_mask = roi_arr & mask
     if config.max_seed_voxels is not None:
         voxel_indices = np.argwhere(seed_mask)
         if voxel_indices.shape[0] > int(config.max_seed_voxels):

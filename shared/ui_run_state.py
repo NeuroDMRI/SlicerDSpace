@@ -78,6 +78,8 @@ _LIVE_STAGE_TAG_RE = re.compile(
 _LIVE_STAGE_LABELS: dict[str, tuple[str, str]] = {
     "preprocessing": ("00 · Preprocessing", "00 · 预处理"),
     "brain_mask": ("00 · Preprocessing (Brain mask)", "00 · 预处理（脑掩膜）"),
+    "microstructure_dti": ("01 · DTI fitting", "01 · 正在计算 DTI"),
+    "dti_registration": ("01 · DTI atlas registration", "01 · 正在将 DTI 配准至模板"),
     "ddseg": ("01 · Tissue segmentation (DDSeg)", "01 · 组织分割 (DDSeg)"),
     "ddparcel": ("01 · Brain parcellation (DDParcel)", "01 · 脑区分割 (DDParcel)"),
     "ddsurfer": ("01 · Cortical surface (DDSurfer)", "01 · 皮层表面 (DDSurfer)"),
@@ -124,6 +126,23 @@ def _classify_live_stage_key(text: str) -> Optional[str]:
         return None
     if lowered.startswith("[orchestrator] plan ") or lowered.startswith("[orchestrator] run plan:"):
         return None
+
+    # Explicit native DTI fitting and atlas registration inside anatomical priors or microstructure.
+    if (
+        "running microstructure dti" in lowered
+        or "microstructure dti started" in lowered
+        or "building native dti bundle" in lowered
+        or "exporting dti scalar maps" in lowered
+        or "dtiestim" in lowered
+        or "native_tensor" in lowered
+    ):
+        return "microstructure_dti"
+    if (
+        "building registered dti bundle" in lowered
+        or "brainsfit" in lowered
+        or "resamplescalarvectordwivolume" in lowered
+    ):
+        return "dti_registration"
 
     # Check explicit surface postprocess before generic [DDSurfer] / DDSurfer tags.
     if lowered.startswith("[ddsurfer postprocess]") or _POSTPROCESS_RE.search(text):

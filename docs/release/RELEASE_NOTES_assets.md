@@ -13,7 +13,7 @@ This permanent release hosts version-independent binary assets shared across Sli
   - `SlicerDSpace-WMA-NABA-v1.tar.gz.001..002` — NABA lifespan atlas
   - `SlicerDSpace-WMA-EastWest-v1.tar.gz.001..007` — East-West cross-population atlas
 - **Example Data**:
-  - `SlicerDSpace-Example-HCP-100307-NRRD.zip` (~32 MB) — Preprocessed dual-shell HCP subject 100307 NRRD quickstart example DWI (2.0 mm isotropic, 66 volumes: b = 0, 1000, 2000; `100307_dwi.nrrd` + `nodif_brain_mask.nii.gz`, `DWIConvert` / 3D Slicer native; ~1 min end-to-end DTI + UKF + TractCloud)
+  - `SlicerDSpace-Example-Sherbrooke-NRRD.zip` (~61 MB) — Skull-intact dual-shell 3T NRRD example DWI derived from the public DIPY Sherbrooke 3-Shell dataset (2.0 mm isotropic, 61 volumes: b = 0, 1000, 2000; `sherbrooke_dwi.nrrd` only — no precomputed mask, demonstrating automatic PNL CNN brain masking out of the box)
 - **Prebuilt Runtimes & Individual-File Mirror**:
   - Standalone `UKFTractography` binaries (`ukf-standalone-*`), prebuilt FreeSurfer surface runtimes (`surface-runtime-*`), and SHA-256-indexed individual model files for manifest verification and per-file downloads.
 

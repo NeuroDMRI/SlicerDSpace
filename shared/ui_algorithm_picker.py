@@ -488,14 +488,79 @@ def _missing_direct_asset_blocks(owner, family, zh) -> dict:
         return {}
 
 
+def _roi_tracking_button(qt, owner, algorithm, *, roi_spec, disabled, zh, dark=None):
+    """Compact 'ROI' trigger button placed beside Settings on every tractography algorithm row."""
+    from shared.ui_styles import is_dark_mode
+
+    use_dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else bool(dark)
+    is_batch = bool(roi_spec.get("is_batch", False))
+    ddparcel_ready = bool(roi_spec.get("enabled", False))
+    can_use = ddparcel_ready and not is_batch and not disabled
+    name = "algorithmRoi_" + algorithm
+    btn = qt.QToolButton()
+    btn.setObjectName(name)
+    btn.setText("ROI")
+    if hasattr(btn, "setFixedSize"):
+        btn.setFixedSize(34, 24)
+    if hasattr(btn, "setFocusPolicy") and hasattr(qt.Qt, "NoFocus"):
+        btn.setFocusPolicy(qt.Qt.NoFocus)
+    btn.setEnabled(can_use)
+    pointing = getattr(qt.Qt, "PointingHandCursor", None)
+    if can_use and pointing is not None and hasattr(btn, "setCursor"):
+        btn.setCursor(pointing)
+    if can_use:
+        tip = (
+            "打开 DDParcel 脑区取色笔并启动该算法的局部 ROI 纤维追踪（独立支线任务，不参与全脑分束）" if zh
+            else "Pick a DDParcel brain region with the eyedropper and run standalone ROI tracking"
+        )
+    elif is_batch:
+        tip = (
+            "ROI 纤维追踪仅支持单被试模式" if zh
+            else "ROI tracking is available in single-subject mode only"
+        )
+    else:
+        tip = (
+            "请先运行 DDParcel 脑区分区后再使用 ROI 纤维追踪" if zh
+            else "Run Brain parcellation (DDParcel) first to enable ROI tracking"
+        )
+    btn.setToolTip(tip)
+    if hasattr(btn, "setAccessibleName"):
+        btn.setAccessibleName(tip)
+    if use_dark:
+        bg, hover, border, fg = "#1D3C53", "#265270", "#2F668A", "#C7E6FA"
+        dis_bg, dis_border, dis_fg = "#21262D", "#30363D", "#6E7681"
+    else:
+        bg, hover, border, fg = "#E7F3FA", "#D3EAF7", "#9AC5DE", "#154E73"
+        dis_bg, dis_border, dis_fg = "#EEF2F6", "#D6DEE6", "#9AA5B1"
+    btn.setStyleSheet(
+        f"QToolButton#{name} {{ background: {bg}; color: {fg}; border: 1px solid {border}; "
+        f"border-radius: 4px; font-size: 11px; font-weight: 600; padding: 0px 4px; }}"
+        f"QToolButton#{name}:hover {{ background: {hover}; }}"
+        f"QToolButton#{name}:disabled {{ background: {dis_bg}; color: {dis_fg}; border-color: {dis_border}; }}"
+    )
+    on_click = roi_spec.get("on_click")
+    if callable(on_click):
+        sig = getattr(btn, "clicked", None)
+        if sig is not None and hasattr(sig, "connect"):
+            sig.connect(lambda *_a, alg=algorithm: on_click(alg))
+        elif hasattr(btn, "connect"):
+            btn.connect("clicked()", lambda alg=algorithm: on_click(alg))
+    return btn
+
+
 def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, resize_popup, dark=None,
                        disabled=False, disabled_tooltip="", create_marker=False, shared_editors=None,
-                       missing_asset=None, on_download=None):
+                       missing_asset=None, on_download=None, roi_spec=None):
     specs = ALGORITHM_SETTINGS.get((family, algorithm), ())
     need_marker = bool(disabled or create_marker)
     marker = _unavailable_marker(qt, owner, algorithm, disabled_tooltip, dark) if need_marker else None
     if marker is not None and not disabled:
         marker.setVisible(False)
+    roi_button = (
+        _roi_tracking_button(qt, owner, algorithm, roi_spec=roi_spec, disabled=disabled, zh=zh, dark=dark)
+        if isinstance(roi_spec, dict)
+        else None
+    )
     ui_root = getattr(owner, "ui", None)
     fields = [(attribute, getattr(ui_root, control, None), getattr(ui_root, label, None))
               for attribute, control, label in specs] if ui_root is not None else []
@@ -525,29 +590,37 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
         bundle_source,
     ))
     if not fields and not has_code_panel:
-        if marker is None:
+        if marker is None and roi_button is None:
             layout.addWidget(box)
-            return {"gear": None, "panel": None, "marker": None, "reason_label": None, "collapse_reason": None}
+            return {"gear": None, "panel": None, "marker": None, "roi_button": None, "reason_label": None, "collapse_reason": None}
         row = qt.QHBoxLayout()
         row.addWidget(box, 1)
-        row.addWidget(marker)
+        if roi_button is not None:
+            row.addWidget(roi_button)
+        if marker is not None:
+            row.addWidget(marker)
         layout.addLayout(row)
         reason_state = {}
-        reason_label = _unavailable_reason(
-            qt, owner, algorithm, disabled_tooltip, marker, resize_popup, dark, state=reason_state
-        )
-        layout.addWidget(reason_label)
+        reason_label = None
+        if marker is not None:
+            reason_label = _unavailable_reason(
+                qt, owner, algorithm, disabled_tooltip, marker, resize_popup, dark, state=reason_state
+            )
+            layout.addWidget(reason_label)
         if isinstance(missing_asset, dict) and callable(on_download):
             layout.addWidget(_missing_asset_action_widget(qt, owner, algorithm, missing_asset, on_download, dark=dark))
         return {
             "gear": None,
             "panel": None,
             "marker": marker,
+            "roi_button": roi_button,
             "reason_label": reason_label,
             "collapse_reason": reason_state.get("collapse"),
         }
     row = qt.QHBoxLayout()
     row.addWidget(box, 1)
+    if roi_button is not None:
+        row.addWidget(roi_button)
     button = qt.QToolButton()
     button.setObjectName("algorithmSettings_" + algorithm)
     caption = "设置" if zh else "Settings"
@@ -671,6 +744,7 @@ def _add_algorithm_row(qt, owner, layout, box, family, algorithm, staged, zh, re
         "gear": button,
         "panel": panel,
         "marker": marker,
+        "roi_button": roi_button,
         "reason_label": reason_label,
         "collapse_reason": reason_state.get("collapse"),
     }
@@ -1590,9 +1664,26 @@ def choose_algorithms(owner, family):
     data_tips = {} if is_anatomical else _data_block_texts(owner, choices, zh)
     missing_assets = _missing_direct_asset_blocks(owner, family, zh)
     pending_download = [None]
+    pending_roi = [None]
 
     def _request_asset_download(spec):
         pending_download[0] = spec
+        _finish_popup(False)
+
+    roi_is_batch = False
+    roi_ddparcel_info = None
+    if family == "tractography":
+        roi_is_batch = _is_batch_mode(owner)
+        if not roi_is_batch:
+            try:
+                from shared.ui_roi_tracking import resolve_owner_ddparcel
+
+                roi_ddparcel_info = resolve_owner_ddparcel(owner)
+            except Exception:
+                roi_ddparcel_info = None
+
+    def _request_roi_tracking(alg):
+        pending_roi[0] = (alg, roi_ddparcel_info)
         _finish_popup(False)
 
     for value in choices:
@@ -1620,11 +1711,21 @@ def choose_algorithms(owner, family):
             box.setCursor(pointing_cursor)
         boxes[value] = box
         inline_topup_picker = family == "preprocessing" and value == "topup" and not fsl_missing and not is_batch
+        roi_spec = (
+            {
+                "enabled": roi_ddparcel_info is not None,
+                "is_batch": roi_is_batch,
+                "on_click": _request_roi_tracking,
+            }
+            if family == "tractography"
+            else None
+        )
         row_controls = _add_algorithm_row(
             qt, owner, body_layout, box, family, value, staged, zh, resize_popup,
             dark=dark, disabled=blocked, disabled_tooltip=blocked_tip,
             create_marker=inline_topup_picker, shared_editors=shared_editors,
             missing_asset=asset_spec, on_download=_request_asset_download if asset_spec is not None else None,
+            roi_spec=roi_spec,
         )
         if inline_topup_picker:
             _add_topup_reverse_b0_controls(
@@ -1887,6 +1988,14 @@ def choose_algorithms(owner, family):
             qt.QTimer.singleShot(0, lambda s=spec_to_download: prompt_download_missing_resource(owner, s))
         else:
             prompt_download_missing_resource(owner, spec_to_download)
+    if pending_roi[0] is not None:
+        from shared.ui_roi_tracking import open_roi_tracking_session
+
+        roi_alg, roi_info = pending_roi[0]
+        if hasattr(qt, "QTimer") and hasattr(qt.QTimer, "singleShot"):
+            qt.QTimer.singleShot(0, lambda a=roi_alg, i=roi_info: open_roi_tracking_session(owner, a, i))
+        else:
+            open_roi_tracking_session(owner, roi_alg, roi_info)
     return accepted
 
 

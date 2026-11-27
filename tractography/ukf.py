@@ -1428,13 +1428,22 @@ def build_command(
     use_gpu: bool = False,
     gpu_device: int = 0,
     gpu_precision: int = 0,
+    seeds_file=None,
+    seed_labels=None,
 ):
     """Use SEM switches explicitly: XML GUI defaults do not enable CLI switches."""
     nodes = {node.findtext("name"): node for node in schema.findall("./parameters/*") if node.find("name") is not None}
-    if not set(asdict(selected)).union(("dwiFile", "maskFile", "tracts")).issubset(nodes):
+    required_names = set(asdict(selected)).union(("dwiFile", "maskFile", "tracts"))
+    if seeds_file is not None:
+        required_names.update(("seedsFile", "seedLabels"))
+    if not required_names.issubset(nodes):
         raise RuntimeError("Installed UKF CLI lacks requested parameters; no fallback")
     command = [str(binary), "--dwiFile", str(dwi), "--maskFile", str(mask), "--tracts", str(target)]
+    if seeds_file is not None:
+        command.extend(("--seedsFile", str(seeds_file), "--seedLabels", str(seed_labels or "1")))
     for key, value in asdict(selected).items():
+        if seeds_file is not None and key == "seedingThreshold":
+            continue  # Option 3 (--seedsFile / --seedLabels) supersedes Option 1 (--seedingThreshold)
         if isinstance(value, bool):
             default = nodes[key].findtext("default", "").strip().lower()
             expected = "false" if key == "freeWater" else "true"
@@ -1786,7 +1795,18 @@ def _ukf_uses_gpu(*args, **kwargs) -> bool:
 
 
 @scheduled_stage('ukf', gpu=_ukf_uses_gpu)
-def run_ukf(raw, directory, *, options=None, executable=None, converter=None, device="auto", force=False, log=None):
+def run_ukf(
+    raw,
+    directory,
+    *,
+    options=None,
+    executable=None,
+    converter=None,
+    device="auto",
+    force=False,
+    seed_mask_path=None,
+    log=None,
+):
     from shared.external_process import merged_startup_environment
     from shared.pipeline import build_cli_environment
 
@@ -1891,6 +1911,7 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
         with work_ctx as temporary:
             work = Path(temporary)
             dwi, mask, tracts = work / "DWI.nrrd", work / "Mask.nrrd", work / "tracts.vtk"
+            seeds_nrrd = (work / "Seeds.nrrd") if seed_mask_path is not None else None
             probe_path, converted_probe = work / "geometry_probe.nii.gz", work / "geometry_probe.nrrd"
             probe = write_conversion_probe(raw, probe_path)
             if use_ascii_work:
@@ -1924,6 +1945,8 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
                 use_gpu=use_gpu,
                 gpu_device=gpu_device,
                 gpu_precision=gpu_precision,
+                seeds_file=seeds_nrrd,
+                seed_labels="1" if seeds_nrrd is not None else None,
             )
             record["commands"] = [conversion, command]
             save()
@@ -1957,6 +1980,27 @@ def run_ukf(raw, directory, *, options=None, executable=None, converter=None, de
                                 process.wait()
                 if index == 0:
                     record["conversion"] = restore_lossless_payload(tracking_raw, probe, converted_probe, dwi, mask)
+                    if seeds_nrrd is not None:
+                        import nibabel as _nib
+                        import nrrd as _nrrd
+                        import numpy as _np
+
+                        _, mask_hdr = _nrrd.read(str(mask))
+                        order = tuple(int(a) for a in record["conversion"]["axis_order"])
+                        neg = list(record["conversion"]["reversed_axes"])
+                        seed_arr = (_np.asanyarray(_nib.load(str(Path(seed_mask_path))).dataobj) > 0).astype(_np.uint8)
+                        seed_arr = _np.transpose(seed_arr, order)
+                        for ax_i, rev in enumerate(neg):
+                            if rev:
+                                seed_arr = _np.flip(seed_arr, ax_i)
+                        seed_hdr = {
+                            "space": mask_hdr["space"],
+                            "space directions": mask_hdr["space directions"],
+                            "space origin": mask_hdr["space origin"],
+                            "kinds": ["domain"] * 3,
+                            "encoding": "raw",
+                        }
+                        _nrrd.write(str(seeds_nrrd), _np.ascontiguousarray(seed_arr), seed_hdr)
                     save()
                 elif use_gpu:
                     gpu_log = log_path.read_text(encoding="utf-8", errors="replace").lower()

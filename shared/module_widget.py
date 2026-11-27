@@ -799,6 +799,9 @@ class SharedWidgetMixin:
         self._backgroundProcess = None
         self._backgroundOutputBuffer = ""
         self._backgroundManifestPath = None
+        self._backgroundManifestCandidate = None
+        self._backgroundExpectedManifestPath = None
+        self._backgroundStartedWall = datetime.now(timezone.utc).timestamp()
         self._backgroundCancelRequested = False
         self._backgroundRunContext = {}
 
@@ -2027,6 +2030,39 @@ class SharedWidgetMixin:
             self.appendLog(f"[Input preview] Could not remove the earlier preview: {exc}")
         self._inputPreviewDwiNodeId = None
         self._refresh_input_preview_stepper()
+        scroll_bar = None
+        saved_scroll = None
+        try:
+            curr = getattr(self, "parent", None) or (getattr(self, "_uiWidget", None).parentWidget() if getattr(self, "_uiWidget", None) is not None else None)
+            while curr is not None:
+                if hasattr(curr, "inherits") and curr.inherits("QScrollArea"):
+                    scroll_bar = curr.verticalScrollBar()
+                    saved_scroll = int(scroll_bar.value) if not callable(getattr(scroll_bar, "value", None)) else int(scroll_bar.value())
+                    break
+                curr = curr.parentWidget() if hasattr(curr, "parentWidget") else None
+        except Exception:
+            scroll_bar = None
+            saved_scroll = None
+
+        def _restore_scroll_position() -> None:
+            if scroll_bar is None or saved_scroll is None:
+                return
+            try:
+                cur_max = scroll_bar.maximum() if callable(getattr(scroll_bar, "maximum", None)) else int(getattr(scroll_bar, "maximum", saved_scroll))
+                target = max(0, min(int(saved_scroll), int(cur_max)))
+                if hasattr(scroll_bar, "setValue"):
+                    scroll_bar.setValue(target)
+                else:
+                    scroll_bar.value = target
+            except Exception:
+                pass
+
+        preview_btn = (getattr(self, "_inputPreviewWidgets", None) or {}).get("button")
+        if preview_btn is not None and hasattr(preview_btn, "clearFocus"):
+            try:
+                preview_btn.clearFocus()
+            except Exception:
+                pass
         self._inputPreviewPending = True
         self._set_input_preview_status("")
         try:
@@ -2035,6 +2071,12 @@ class SharedWidgetMixin:
             self._inputPreviewPending = False
             raise
         self._refresh_input_preview_controls()
+        _restore_scroll_position()
+        if hasattr(qt, "QTimer") and hasattr(qt.QTimer, "singleShot"):
+            try:
+                qt.QTimer.singleShot(0, _restore_scroll_position)
+            except Exception:
+                pass
         cache_dir = self._input_preview_cache_dir()
 
         def apply_prepared(prepared: Any, err: Optional[BaseException] = None) -> None:
@@ -2080,6 +2122,12 @@ class SharedWidgetMixin:
                 set_input_preview_button_loading(self, False, language="zh" if zh else "en")
                 self._refresh_input_preview_controls()
                 self._refresh_input_preview_stepper()
+                _restore_scroll_position()
+                if hasattr(qt, "QTimer") and hasattr(qt.QTimer, "singleShot"):
+                    try:
+                        qt.QTimer.singleShot(0, _restore_scroll_position)
+                    except Exception:
+                        pass
 
         launcher = str(self._slicer_launcher_program() or "").strip() if hasattr(self, "_slicer_launcher_program") else ""
         use_qprocess = bool(launcher) and hasattr(qt, "QProcess")
@@ -3581,6 +3629,13 @@ class SharedWidgetMixin:
         close_help_popup(self, destroy=True)
         _close_algorithm_picker(self)
         try:
+            from shared.ui_roi_tracking import cancel_roi_tracking_job, deactivate_roi_eyedropper
+
+            deactivate_roi_eyedropper(self)
+            cancel_roi_tracking_job(self)
+        except Exception:
+            pass
+        try:
             from shared.ui_update_panel import cleanup_update_panel
 
             cleanup_update_panel(self)
@@ -4281,7 +4336,7 @@ class SharedWidgetMixin:
             except Exception:
                 pass
         from shared.target_closure import closure_notice
-        return closure_notice(closure)
+        return closure_notice(closure, language=getattr(self, "_onboardingLanguage", "en"))
 
     def _requested_product_targets(self) -> tuple[str, ...]:
         closure = self._selected_closure()
@@ -4497,6 +4552,9 @@ class SharedWidgetMixin:
         self._backgroundProcessGroupId = None
         self._backgroundOutputBuffer = ""
         self._backgroundManifestPath = None
+        self._backgroundManifestCandidate = None
+        self._backgroundExpectedManifestPath = None
+        self._backgroundStartedWall = time.time() if "time" in globals() else datetime.now(timezone.utc).timestamp()
         self._backgroundCancelRequested = False
         # An experiment campaign (launch_args) prints a line only when a job starts or ends, so a quiet worker is normal.
         self._begin_worker_tracking(silence_check=launch_args is None)
@@ -4507,6 +4565,7 @@ class SharedWidgetMixin:
         self._set_run_progress_message("Background execution submitted.")
         manifest_path = getattr(self, "_pendingRunManifestPath", None)
         self._pendingRunManifestPath = None
+        self._backgroundExpectedManifestPath = Path(manifest_path) if manifest_path else None
         start_progress_polling(self, manifest_path)
         set_run_state(self, "running")
         zh = getattr(self, "_onboardingLanguage", "en").startswith("zh")
@@ -4573,6 +4632,9 @@ class SharedWidgetMixin:
         self._backgroundProcessGroupId = None
         self._backgroundOutputBuffer = ""
         self._backgroundManifestPath = None
+        self._backgroundManifestCandidate = None
+        self._backgroundExpectedManifestPath = None
+        self._backgroundStartedWall = datetime.now(timezone.utc).timestamp()
         self._backgroundCancelRequested = False
         self._begin_worker_tracking()
         self._backgroundBatchProgressPath = progress_file
@@ -4737,14 +4799,35 @@ class SharedWidgetMixin:
         path_text = parse_manifest_line(line)
         if path_text:
             path = Path(path_text)
+            self._backgroundManifestCandidate = path
             if path.is_file():
                 self._backgroundManifestPath = path
 
-    def _extract_background_manifest_path(self) -> Optional[Path]:
-        return extract_background_manifest_path(
-            getattr(self, "_backgroundOutputBuffer", "") or "",
-            explicit_path=getattr(self, "_backgroundManifestPath", None),
-        )
+    def _extract_background_manifest_path(self, *, allow_expected_fallback: bool = False) -> Optional[Path]:
+        explicit = getattr(self, "_backgroundManifestPath", None)
+        if explicit is not None and Path(explicit).is_file():
+            return Path(explicit)
+        candidate = getattr(self, "_backgroundManifestCandidate", None)
+        if candidate is not None and Path(candidate).is_file():
+            return Path(candidate)
+        recent_text = "\n".join(str(item) for item in (getattr(self, "_workerRecentLines", ()) or ()))
+        combined = "\n".join(part for part in (recent_text, getattr(self, "_backgroundOutputBuffer", "") or "") if part)
+        found = extract_background_manifest_path(combined, explicit_path=None)
+        if found is not None and found.is_file():
+            return found
+        if allow_expected_fallback:
+            expected = getattr(self, "_backgroundExpectedManifestPath", None)
+            if expected is not None:
+                expected_path = Path(expected)
+                if expected_path.is_file() and self._manifest_is_final(expected_path):
+                    started = getattr(self, "_backgroundStartedWall", None)
+                    try:
+                        mtime = expected_path.stat().st_mtime
+                    except OSError:
+                        mtime = None
+                    if started is None or mtime is None or mtime >= float(started) - 2.0:
+                        return expected_path
+        return None
 
     @staticmethod
     def _manifest_is_final(manifest_path: Optional[Path]) -> bool:
@@ -4784,6 +4867,13 @@ class SharedWidgetMixin:
         # P-e: the failure dialog is modal; show it only after the handle is released, not inside this callback.
         failure_notice = None
         try:
+            # Drain any unread trailing stdout before flushing the incremental UTF-8 decoder:
+            # on Windows, QProcess::finished can arrive before the final readyReadStandardOutput
+            # signal delivers the manifest path printed right before worker exit.
+            try:
+                self._onBackgroundProcessReadyRead()
+            except Exception:
+                pass
             decoder = getattr(self, "_backgroundOutputDecoder", None)
             if decoder is not None:
                 self._backgroundOutputBuffer = getattr(self, "_backgroundOutputBuffer", "") + decoder.flush()
@@ -4796,7 +4886,7 @@ class SharedWidgetMixin:
             self._poll_run_progress()
             stop_progress_polling(self)
             stop_run_animation(self)
-            manifest_path = self._extract_background_manifest_path()
+            manifest_path = self._extract_background_manifest_path(allow_expected_fallback=(not cancelled))
             manifest_available = bool(manifest_path and manifest_path.is_file())
             abnormal_exit = bool(getattr(self, "_workerAbnormalExit", False))
             outcome = classify_background_run_outcome(
@@ -5123,6 +5213,13 @@ class SharedWidgetMixin:
         if job:
             job.cancel()
             return
+        try:
+            from shared.ui_roi_tracking import cancel_roi_tracking_job
+
+            if cancel_roi_tracking_job(self):
+                return
+        except Exception:
+            pass
         process = getattr(self, "_backgroundProcess", None)
         if process is None:
             return

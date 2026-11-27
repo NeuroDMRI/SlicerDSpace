@@ -115,8 +115,8 @@ class UIRunControllerTest(unittest.TestCase):
             microstructure_noddi=False,
         )
 
-        # C1: surface postprocess needs the DDSurfer surfaces, so the closure adds "surface".
-        self.assertEqual(targets, ("validation", "surface", "surface_postprocess"))
+        # C1: surface postprocess needs DDSurfer surfaces (which need DTI), so the closure adds both.
+        self.assertEqual(targets, ("validation", "microstructure", "surface", "surface_postprocess"))
 
     def test_summary_and_streamline_state_are_backend_aware(self) -> None:
         summary, target_text = selected_products_summary(

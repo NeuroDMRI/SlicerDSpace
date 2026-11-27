@@ -36,11 +36,11 @@ from typing import Iterable, Optional
 TARGET_ORDER = (
     "validation",
     "preprocessing",
+    "microstructure",
     "segmentation",
     "parcellation",
     "surface",
     "surface_postprocess",
-    "microstructure",
     "microstructure_freewater",
     "microstructure_noddi",
     "microstructure_dki",
@@ -62,6 +62,9 @@ MASK_TARGETS = (
 
 # Static prerequisites: target -> targets it always needs.
 STATIC_REQUIREMENTS = {
+    "segmentation": ("microstructure",),
+    "parcellation": ("microstructure",),
+    "surface": ("microstructure",),
     "microstructure_freewater": ("microstructure",),
     "microstructure_noddi": ("microstructure",),
     "microstructure_dki": ("microstructure",),
@@ -294,42 +297,77 @@ def _algorithms_for_sources(ticked, explicit, requested, provided, wma_source_ex
     return algorithms
 
 
-def _requester_label(requester: str, closure: Closure) -> str:
+def _requester_label(requester: str, closure: Closure, *, zh: bool = False) -> str:
     if requester == "tractography":
         if set(closure.tractography_algorithms) & set(ACT_ALGORITHMS):
-            return "CSD/ACT tractography"
+            return "CSD/ACT 纤维追踪" if zh else "CSD/ACT tractography"
+    if zh:
+        return DISPLAY_NAMES_ZH.get(requester, DISPLAY_NAMES.get(requester, requester))
     return DISPLAY_NAMES.get(requester, requester)
+
+
+DISPLAY_NAMES_ZH = {
+    "preprocessing": "DWI 预处理",
+    "segmentation": "DDSeg",
+    "parcellation": "DDParcel",
+    "surface": "DDSurfer",
+    "surface_postprocess": "表面形态学后处理",
+    "microstructure": "DTI",
+    "microstructure_freewater": "Free Water",
+    "microstructure_noddi": "NODDI",
+    "microstructure_dki": "DKI",
+    "microstructure_ifw": "iFW",
+    "tractography": "纤维追踪",
+    "bundles": "WMQL 纤维束",
+    "saf": "SAF",
+    "wma": "WMA",
+    "tractcloud": "TractCloud",
+    "connectome": "连接组",
+}
 
 
 ALGORITHM_NAMES = {"csd_act": "CSD/ACT", "dti_det": "DTI", "ukf": "UKF", "saf": "SAF"}
 
 
-def closure_notice(closure: Closure) -> str:
+def closure_notice(closure: Closure, *, language: str = "en") -> str:
     """One plain line naming the targets and tracking algorithms that run automatically, or ``""``."""
+    zh = str(language or "en").strip().lower().startswith("zh")
     groups: dict = {}
     for target in closure.added:
         groups.setdefault(closure.required_by[target], []).append(target)
     added_algorithms = {name: tuple(who) for name, who in closure.added_algorithms.items()
                         if "tractography" in closure.targets}  # Q3
     parts = []
+    join_req = "、" if zh else " and "
+    join_shown = "、" if zh else ", "
     for requesters, names in groups.items():
-        label = " and ".join(_requester_label(item, closure) for item in requesters)
+        label = join_req.join(_requester_label(item, closure, zh=zh) for item in requesters)
         shown = []
         for name in names:
             if (name == "tractography" and added_algorithms
                     and set(closure.tractography_algorithms) == set(added_algorithms)
                     and {who for who in added_algorithms.values()} == {requesters}):
                 # tractography runs only because of the added algorithm(s): UKF for WMA, or a bundle source
-                shown.append(" and ".join(ALGORITHM_NAMES.get(item, item) for item in added_algorithms) + " tractography")
+                alg_text = join_req.join(ALGORITHM_NAMES.get(item, item) for item in added_algorithms)
+                shown.append((alg_text + " 纤维追踪") if zh else (alg_text + " tractography"))
                 added_algorithms = {}
             else:
-                shown.append(DISPLAY_NAMES.get(name, name))
-        parts.append(", ".join(shown) + f" (needed by {label})")
+                shown.append(DISPLAY_NAMES_ZH.get(name, DISPLAY_NAMES.get(name, name)) if zh else DISPLAY_NAMES.get(name, name))
+        if zh:
+            parts.append(join_shown.join(shown) + f"（被 {label} 需要）")
+        else:
+            parts.append(join_shown.join(shown) + f" (needed by {label})")
     for algorithm, requesters in added_algorithms.items():
-        label = " and ".join(_requester_label(item, closure) for item in requesters)
-        parts.append(f"{ALGORITHM_NAMES.get(algorithm, algorithm)} tractography (needed by {label})")
+        label = join_req.join(_requester_label(item, closure, zh=zh) for item in requesters)
+        alg = ALGORITHM_NAMES.get(algorithm, algorithm)
+        if zh:
+            parts.append(f"{alg} 纤维追踪（被 {label} 需要）")
+        else:
+            parts.append(f"{alg} tractography (needed by {label})")
     if not parts:
         return ""
+    if zh:
+        return "同时自动运行：" + "；".join(parts)
     return "Also runs automatically: " + "; ".join(parts)
 
 

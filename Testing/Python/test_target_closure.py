@@ -29,30 +29,36 @@ def _ordered(names):
 
 # (requested targets, keyword arguments, expected targets, expected required_by, expected algorithms)
 C1_TABLE = [
-    (("surface",), {}, ("surface",), {}, ("csd_act",)),
-    (("segmentation",), {}, ("segmentation",), {}, ("csd_act",)),
-    (("parcellation",), {}, ("parcellation",), {}, ("csd_act",)),
+    (("surface",), {}, ("microstructure", "surface"), {"microstructure": ("surface",)}, ("csd_act",)),
+    (("segmentation",), {}, ("microstructure", "segmentation"), {"microstructure": ("segmentation",)}, ("csd_act",)),
+    (("parcellation",), {}, ("microstructure", "parcellation"), {"microstructure": ("parcellation",)}, ("csd_act",)),
     (("microstructure",), {}, ("microstructure",), {}, ("csd_act",)),
     (("microstructure_noddi",), {}, ("microstructure", "microstructure_noddi"),
      {"microstructure": ("microstructure_noddi",)}, ("csd_act",)),
-    (("tractography",), {}, ("segmentation", "parcellation", "tractography"),
-     {"segmentation": ("tractography",), "parcellation": ("tractography",)}, ("csd_act",)),
+    (("tractography",), {}, ("microstructure", "segmentation", "parcellation", "tractography"),
+     {"microstructure": ("segmentation", "parcellation"),
+      "segmentation": ("tractography",), "parcellation": ("tractography",)}, ("csd_act",)),
     (("tractography",), {"tractography_algorithms": ("dti_det",)}, ("tractography",), {}, ("dti_det",)),
     (("tractography",), {"tractography_algorithms": ("ukf",)}, ("tractography",), {}, ("ukf",)),
-    (("bundles",), {}, ("segmentation", "parcellation", "tractography", "bundles"),
-     {"segmentation": ("tractography",), "parcellation": ("tractography", "bundles"), "tractography": ("bundles",)},
+    (("bundles",), {}, ("microstructure", "segmentation", "parcellation", "tractography", "bundles"),
+     {"microstructure": ("segmentation", "parcellation"),
+      "segmentation": ("tractography",), "parcellation": ("tractography", "bundles"), "tractography": ("bundles",)},
      ("csd_act",)),
-    (("connectome",), {}, ("segmentation", "parcellation", "tractography", "connectome"),
-     {"segmentation": ("tractography",), "parcellation": ("tractography", "connectome"),
+    (("connectome",), {}, ("microstructure", "segmentation", "parcellation", "tractography", "connectome"),
+     {"microstructure": ("segmentation", "parcellation"),
+      "segmentation": ("tractography",), "parcellation": ("tractography", "connectome"),
       "tractography": ("connectome",)}, ("csd_act",)),
-    (("tractcloud",), {}, ("segmentation", "parcellation", "tractography", "tractcloud"),
-     {"segmentation": ("tractography",), "parcellation": ("tractography",), "tractography": ("tractcloud",)},
+    (("tractcloud",), {}, ("microstructure", "segmentation", "parcellation", "tractography", "tractcloud"),
+     {"microstructure": ("segmentation", "parcellation"),
+      "segmentation": ("tractography",), "parcellation": ("tractography",), "tractography": ("tractcloud",)},
      ("csd_act",)),
     (("wma",), {}, ("tractography", "wma"), {"tractography": ("wma",)}, ("ukf",)),
-    (("surface_postprocess",), {}, ("surface", "surface_postprocess"), {"surface": ("surface_postprocess",)},
+    (("surface_postprocess",), {}, ("microstructure", "surface", "surface_postprocess"),
+     {"microstructure": ("surface",), "surface": ("surface_postprocess",)},
      ("csd_act",)),
-    (("saf",), {}, ("segmentation", "parcellation", "surface", "surface_postprocess", "tractography", "saf"),
-     {"segmentation": ("tractography",), "parcellation": ("tractography",), "surface": ("surface_postprocess",),
+    (("saf",), {}, ("microstructure", "segmentation", "parcellation", "surface", "surface_postprocess", "tractography", "saf"),
+     {"microstructure": ("segmentation", "parcellation", "surface"),
+      "segmentation": ("tractography",), "parcellation": ("tractography",), "surface": ("surface_postprocess",),
       "surface_postprocess": ("saf",), "tractography": ("saf",)}, ("csd_act",)),
 ]
 
@@ -79,7 +85,7 @@ class C1ClosureRulesTest(unittest.TestCase):
     def test_orchestrator_entry_point_applies_the_same_closure(self) -> None:
         from shared.orchestrator import normalize_orchestrator_targets
         self.assertEqual(normalize_orchestrator_targets(("connectome",)),
-                         ("segmentation", "parcellation", "tractography", "connectome"))
+                         ("microstructure", "segmentation", "parcellation", "tractography", "connectome"))
         self.assertEqual(normalize_orchestrator_targets(("tractography",), tractography_backend="dti_det"),
                          ("tractography",))
 
@@ -109,7 +115,7 @@ class C2ConsumersTest(unittest.TestCase):
                                                atlas_t2=root / "input" / "data.nii.gz", execute=True)
             plan = plan_subject_products(config, write=False)
             targets = [item.target for item in plan.items]
-            self.assertEqual(targets, ["segmentation", "parcellation", "tractography", "connectome"])
+            self.assertEqual(targets, ["microstructure", "segmentation", "parcellation", "tractography", "connectome"])
             for item in plan.items:
                 self.assertNotIn("select parcellation", item.reason)
                 self.assertNotIn("select segmentation", item.reason)
@@ -135,10 +141,10 @@ class C2ConsumersTest(unittest.TestCase):
     def test_cli_resolves_targets_through_the_closure(self) -> None:
         from shared.run_subject_pipeline_cli import _resolve_targets, build_parser
         args, _ = build_parser().parse_known_args(["--subject-root", "/none", "--targets", "tractography"])
-        self.assertEqual(_resolve_targets(args), ("segmentation", "parcellation", "tractography"))
+        self.assertEqual(_resolve_targets(args), ("microstructure", "segmentation", "parcellation", "tractography"))
         args, _ = build_parser().parse_known_args(
             ["--subject-root", "/none", "--targets", "tractography", "--skip-targets", "segmentation"])
-        self.assertEqual(_resolve_targets(args), ("parcellation", "tractography"))
+        self.assertEqual(_resolve_targets(args), ("microstructure", "parcellation", "tractography"))
 
     def test_gui_target_selection_and_setup_plan_follow_the_closure(self) -> None:
         from shared.environment import EnvironmentDoctorConfig, run_environment_doctor
@@ -148,7 +154,7 @@ class C2ConsumersTest(unittest.TestCase):
         targets = selected_product_targets(
             ProductTargetFlags(tractography=True), tractography_backend="csd_act", bundle_backend="wmql",
             microstructure_freewater=False, microstructure_noddi=False)
-        self.assertEqual(targets, ("validation", "segmentation", "parcellation", "tractography"))
+        self.assertEqual(targets, ("validation", "microstructure", "segmentation", "parcellation", "tractography"))
         with tempfile.TemporaryDirectory() as tmp:
             report = run_environment_doctor(EnvironmentDoctorConfig(
                 targets=targets, repo_root=REPO_ROOT, model_assets_dir=Path(tmp), tractography_backend="csd_act",
@@ -255,18 +261,26 @@ class C3ProvenanceTest(unittest.TestCase):
         tasks = {task["name"]: task for task in manifest["tasks"]}
         self.assertEqual((tasks["surface.ddsurfer"]["requested"], tasks["surface.ddsurfer"]["required_by"]),
                          (False, ["surface_postprocess"]))
-        self.assertEqual(manifest["closure"]["required_by"], {"surface": ["surface_postprocess"]})
+        self.assertEqual(manifest["closure"]["required_by"],
+                         {"microstructure": ["surface"], "surface": ["surface_postprocess"]})
 
 
 class C4NoticeTest(unittest.TestCase):
     def test_notice_names_the_added_targets_and_their_requesters(self) -> None:
+        self.assertEqual(closure_notice(expand_closure(("surface",))),
+                         "Also runs automatically: DTI (needed by DDSurfer)")
+        self.assertEqual(closure_notice(expand_closure(("surface",)), language="zh"),
+                         "同时自动运行：DTI（被 DDSurfer 需要）")
         self.assertEqual(closure_notice(expand_closure(("tractography",))),
-                         "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography)")
+                         "Also runs automatically: DTI (needed by DDSeg and DDParcel); "
+                         "DDSeg, DDParcel (needed by CSD/ACT tractography)")
         self.assertEqual(closure_notice(expand_closure(("surface_postprocess",))),
-                         "Also runs automatically: DDSurfer (needed by Surface postprocess)")
+                         "Also runs automatically: DTI (needed by DDSurfer); "
+                         "DDSurfer (needed by Surface postprocess)")
 
     def test_notice_is_empty_when_nothing_is_added(self) -> None:
-        self.assertEqual(closure_notice(expand_closure(("surface",))), "")
+        self.assertEqual(closure_notice(expand_closure(("microstructure",))), "")
+        self.assertEqual(closure_notice(expand_closure(("microstructure", "surface"))), "")
         self.assertEqual(closure_notice(expand_closure(("tractography",), tractography_algorithms=("dti_det",))), "")
 
     def test_run_log_gets_one_line_at_the_start_of_a_real_run(self) -> None:
@@ -277,8 +291,11 @@ class C4NoticeTest(unittest.TestCase):
         with mock.patch.object(orchestrator, "_run_subject_products_impl", return_value="done") as impl:
             orchestrator.run_subject_products(config, log=lines.append)
         impl.assert_called_once()
-        self.assertEqual([line for line in lines if line.startswith("[Targets]")],
-                         ["[Targets] Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography)"])
+        self.assertEqual(
+            [line for line in lines if line.startswith("[Targets]")],
+            ["[Targets] Also runs automatically: DTI (needed by DDSeg and DDParcel); "
+             "DDSeg, DDParcel (needed by CSD/ACT tractography)"],
+        )
 
     def test_plan_only_run_keeps_the_log_quiet(self) -> None:
         from shared import orchestrator
@@ -540,7 +557,7 @@ class K2GuiHonoursASuppliedTractogramTest(unittest.TestCase):
 class K3SafKeepsItsFodTest(unittest.TestCase):
     def test_k3_supplied_saf_tractogram_still_needs_the_tractography_stage(self) -> None:
         closure = expand_closure(("saf",), provided_tractography=("saf",))
-        self.assertEqual(closure.targets, ("segmentation", "parcellation", "surface", "surface_postprocess",
+        self.assertEqual(closure.targets, ("microstructure", "segmentation", "parcellation", "surface", "surface_postprocess",
                                            "tractography", "saf"))
         self.assertEqual(closure.tractography_algorithms, ("csd_act",))
         # WMA and TractCloud keep the shortcut.
@@ -633,7 +650,7 @@ class K5SkippedTargetsAreNeverExpandedTest(unittest.TestCase):
         args, _ = build_parser().parse_known_args(
             ["--subject-root", "/none", "--targets", "connectome", "--skip-targets", "tractography"])
         closure, _exclude = _resolve_closure(args)
-        self.assertEqual(closure.targets, ("parcellation", "connectome"))
+        self.assertEqual(closure.targets, ("microstructure", "parcellation", "connectome"))
         self.assertNotIn("segmentation", closure.targets)
         self.assertNotIn("tractography", closure.required_by)
         for requesters in closure.required_by.values():
@@ -643,7 +660,7 @@ class K5SkippedTargetsAreNeverExpandedTest(unittest.TestCase):
         from shared.orchestrator import ProductOrchestratorConfig, _with_closure
         config = _with_closure(ProductOrchestratorConfig(
             subject_id="s", subject_root=Path("/none"), targets=("connectome",), excluded_targets=("tractography",)))
-        self.assertEqual(config.targets, ("parcellation", "connectome"))
+        self.assertEqual(config.targets, ("microstructure", "parcellation", "connectome"))
         for requesters in config.target_required_by.values():
             self.assertNotIn("tractography", requesters)
 
@@ -765,7 +782,8 @@ class Q3NoticeNamesAddedAlgorithmsTest(unittest.TestCase):
 
     def test_q3_ukf_added_to_a_requested_tractography_run(self) -> None:
         self.assertEqual(closure_notice(expand_closure(("wma", "tractography"))),
-                         "Also runs automatically: DDSeg, DDParcel (needed by CSD/ACT tractography); "
+                         "Also runs automatically: DTI (needed by DDSeg and DDParcel); "
+                         "DDSeg, DDParcel (needed by CSD/ACT tractography); "
                          "UKF tractography (needed by WMA)")
 
     def test_q3_run_notice_for_a_closed_config_includes_the_algorithm(self) -> None:

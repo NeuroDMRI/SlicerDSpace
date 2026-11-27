@@ -335,10 +335,25 @@ class SurfaceRouteAdmissionTests(unittest.TestCase):
                 events.append(("cli", "resample"))
                 Path(command[-1]).write_bytes(b"registered")
 
-        def predict(config, resources, output_dir, subject_dir):
+        def predict(config, resources, output_dir, subject_dir, **_kwargs):
             events.append(("predict", "surface"))
             native = output_dir / "pred_results_SlicerDSpace/native" / config.subject_id
             native.mkdir(parents=True, exist_ok=True)
+
+        def fake_microstructure(micro_cfg, log=None):
+            import types
+            dti_dir = micro_cfg.output_dir / "dti"
+            dti_dir.mkdir(parents=True, exist_ok=True)
+            (micro_cfg.output_dir / "manifest.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+            (dti_dir / "dti_qc.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+            return types.SimpleNamespace(
+                fa_path=dti_dir / f"{micro_cfg.subject_id}_dti_FA.nii.gz",
+                md_path=dti_dir / f"{micro_cfg.subject_id}_dti_MD.nii.gz",
+                ad_path=dti_dir / f"{micro_cfg.subject_id}_dti_AD.nii.gz",
+                rd_path=dti_dir / f"{micro_cfg.subject_id}_dti_RD.nii.gz",
+                l1_path=None, l2_path=None, l3_path=None, trace_path=None, dec_path=None,
+                roi_stats_csv_path=None, roi_stats_json_path=None,
+            )
 
         patches = [
             patch.object(pipeline, "_require_slicer"),
@@ -349,6 +364,7 @@ class SurfaceRouteAdmissionTests(unittest.TestCase):
                          side_effect=lambda forward, inverse: inverse.write_bytes(b"inverse")),
             patch.object(pipeline, "_convert_nrrd_to_nifti",
                          side_effect=lambda source, target: target.write_bytes(source.read_bytes())),
+            patch("microstructure.run_microstructure", side_effect=fake_microstructure),
             patch("anatomy.surface.inspect_surface_resources", return_value=resources),
             patch("anatomy.surface.pipeline.inspect_surface_resources", return_value=resources),
             patch("anatomy.surface.pipeline.runtime_info", return_value={}),
@@ -393,9 +409,10 @@ class SurfaceRouteAdmissionTests(unittest.TestCase):
 
     def test_s1_surface_route_admits_native_then_registered_then_surface(self) -> None:
         result, events = self.surface_run()
-        self.assertEqual([task.status for task in result.tasks], ["completed"])
+        self.assertEqual([task.status for task in result.tasks], ["completed", "completed"])
         self.assertEqual([item for item in events if item[0] in ("enter", "exit")],
                          [("enter", "native_dti"), ("exit", "native_dti"),
+                          ("enter", "native_dti"), ("exit", "native_dti"),
                           ("enter", "registered_dti"), ("exit", "registered_dti"),
                           ("enter", "surface"), ("exit", "surface")])
         inside = events[events.index(("enter", "surface")):]
@@ -407,7 +424,7 @@ class SurfaceRouteAdmissionTests(unittest.TestCase):
     def test_r2_outside_cohort_mode_the_orchestrator_does_not_prepare_and_run_surface_gets_the_121345b_config(self) -> None:
         capture = {}
         result, events = self.surface_run(cohort=False, capture=capture)
-        self.assertEqual([task.status for task in result.tasks], ["completed"])
+        self.assertEqual([task.status for task in result.tasks], ["completed", "completed"])
         # Preparation happens only inside run_surface (_run_shared_raw), never from the orchestrator.
         self.assertEqual(capture["prepare"], ["_run_shared_raw"])
         config = capture["config"]

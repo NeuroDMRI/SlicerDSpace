@@ -8,11 +8,13 @@ from shared.process_group import capture_process_group_id, grouped_launch_comman
 
 
 class SetupJob:
-    def __init__(self, owner, title, commands, on_done):
+    def __init__(self, owner, title, commands, on_done, *, show_dialog: bool = True):
         import qt
         import slicer
 
         self.owner, self.commands, self.on_done = owner, commands, on_done
+        self.title = title
+        self.show_dialog = bool(show_dialog)
         self.index = 0
         self.cancelled = self.finished = False
         self.tail = ""
@@ -27,19 +29,26 @@ class SetupJob:
         owner._latestEnvironmentReportDir = folder
         self.log_path = folder / ("setup-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f") + ".log")
         self.log = self.log_path.open("w", encoding="utf-8")
-        self.dialog = qt.QProgressDialog(title, "Cancel", 0, 0, slicer.util.mainWindow())
-        self.dialog.setWindowTitle(title)
-        self.dialog.setWindowModality(qt.Qt.NonModal)
-        self.dialog.setAutoClose(False)
-        self.dialog.setMinimumDuration(0)
-        self.dialog.connect("canceled()", self.cancel)
+        self.dialog = None
+        if self.show_dialog:
+            self.dialog = qt.QProgressDialog(title, "Cancel", 0, 0, slicer.util.mainWindow())
+            self.dialog.setWindowTitle(title)
+            self.dialog.setWindowModality(qt.Qt.NonModal)
+            self.dialog.setAutoClose(False)
+            self.dialog.setMinimumDuration(0)
+            self.dialog.connect("canceled()", self.cancel)
         self.process = qt.QProcess(owner.parent)
         self.process.setProcessChannelMode(qt.QProcess.MergedChannels)
         self.process.connect("readyReadStandardOutput()", self.read)
         self.process.connect("finished(int,QProcess::ExitStatus)", self.step_finished)
         self.process.connect("errorOccurred(QProcess::ProcessError)", self.error)
         self.process.connect("started()", self.started)
-        self.dialog.show()
+        if self.dialog is not None:
+            self.dialog.show()
+
+    def _set_dialog_text(self, text: str) -> None:
+        if self.dialog is not None:
+            self.dialog.setLabelText(text)
 
     def start_next(self):
         import qt
@@ -71,7 +80,7 @@ class SetupJob:
         self.log.write(command_text + "\n")
         self.log.flush()
         self.owner.appendLog("[Setup] " + command_text)
-        self.dialog.setLabelText(f"Step {self.index + 1}/{len(self.commands)}\nStarting...\nLog: {self.log_path}")
+        self._set_dialog_text(f"Step {self.index + 1}/{len(self.commands)}\nStarting...\nLog: {self.log_path}")
         self.process.start(program, args)
 
     def started(self):
@@ -109,13 +118,13 @@ class SetupJob:
         self.tail = (self.tail + text)[-6000:]
         lines = text.strip().splitlines()
         if lines and not self.cancelled:
-            self.dialog.setLabelText(f"Step {self.index + 1}/{len(self.commands)}\n{lines[-1][-220:]}\nLog: {self.log_path}")
+            self._set_dialog_text(f"Step {self.index + 1}/{len(self.commands)}\n{lines[-1][-220:]}\nLog: {self.log_path}")
 
     def cancel(self):
         if self.finished or self.cancelled:
             return
         self.cancelled = True
-        self.dialog.setLabelText("Cancelling... waiting for the process to stop.")
+        self._set_dialog_text("Cancelling... waiting for the process to stop.")
         self.signal_process(False)
         self.schedule_force_stop()
 
@@ -135,9 +144,11 @@ class SetupJob:
         self.log.close()
         self.owner._setupJob = None
         self.owner._pipelineActive = False
-        self.dialog.close()
+        if self.dialog is not None:
+            self.dialog.close()
         self.process.deleteLater()
-        self.dialog.deleteLater()
+        if self.dialog is not None:
+            self.dialog.deleteLater()
 
     def signal_process(self, force):
         pid = int(self.process.processId())
@@ -169,7 +180,8 @@ class SetupJob:
         self.finished = True
         self.log.write(f"\nSTATUS: {status}\n")
         self.log.close()
-        self.dialog.close()
+        if self.dialog is not None:
+            self.dialog.close()
         self.owner._setPipelineActive(False)
         self.owner.appendLog(f"[Setup] {status}. Log: {self.log_path}")
         self.owner._setupJob = None
@@ -205,10 +217,11 @@ class SetupJob:
                         except Exception:
                             pass
             self.process.deleteLater()
-            self.dialog.deleteLater()
+            if self.dialog is not None:
+                self.dialog.deleteLater()
 
 
-def start_setup_job(owner, title, commands, on_done):
+def start_setup_job(owner, title, commands, on_done, *, show_dialog: bool = True):
     import slicer
     if getattr(owner, "_setupJob", None) or getattr(owner, "_pipelineActive", False):
         slicer.util.infoDisplay("Wait for the current job to finish or cancel it first.", parent=owner.parent)
@@ -217,7 +230,7 @@ def start_setup_job(owner, title, commands, on_done):
     if hasattr(owner, "_setStatus"):
         owner._setStatus("running", title + " (background)")
     try:
-        owner._setupJob = SetupJob(owner, title, commands, on_done)
+        owner._setupJob = SetupJob(owner, title, commands, on_done, show_dialog=show_dialog)
         owner._setupJob.start_next()
     except Exception:
         owner._setupJob = None

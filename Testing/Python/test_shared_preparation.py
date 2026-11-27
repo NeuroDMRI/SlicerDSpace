@@ -202,7 +202,14 @@ class SharedPreparationTests(unittest.TestCase):
                 self.assertEqual(prepare.call_args.kwargs['fit_method'], 'wls')
                 self.assertEqual(prepare.call_args.kwargs['scalar_format'], 'nrrd')
                 self.assertTrue(prepare.call_args.kwargs['reuse'])
-                predict.assert_called_once_with(config, resources, config.output_dir, bundle.bundle_dir)
+                predict.assert_called_once_with(
+                    config,
+                    resources,
+                    config.output_dir,
+                    bundle.bundle_dir,
+                    native_dti_dir=root / 'cache/native_dti/wls',
+                    native_mask_path=raw.mask_path,
+                )
                 native = config.output_dir / 'pred_results_SlicerDSpace/native/x'
                 native.mkdir(parents=True)
                 outputs = []

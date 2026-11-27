@@ -394,10 +394,12 @@ class RunSubjectPipelineCliTest(unittest.TestCase):
             )
 
             payload = json.loads(completed.stdout)
-            self.assertEqual([task["name"] for task in payload["tasks"]], ["surface.ddsurfer", "surface.ddsurfer_postprocess"])
-            self.assertEqual([task["requested"] for task in payload["tasks"]], [False, True])
-            self.assertEqual(payload["tasks"][0]["required_by"], ["surface_postprocess"])
-            self.assertEqual(payload["tasks"][1]["status"], "planned")
+            self.assertEqual([task["name"] for task in payload["tasks"]],
+                             ["microstructure.dti", "surface.ddsurfer", "surface.ddsurfer_postprocess"])
+            self.assertEqual([task["requested"] for task in payload["tasks"]], [False, False, True])
+            self.assertEqual(payload["tasks"][0]["required_by"], ["surface"])
+            self.assertEqual(payload["tasks"][1]["required_by"], ["surface_postprocess"])
+            self.assertEqual(payload["tasks"][2]["status"], "planned")
 
     def test_cli_records_surface_postprocess_atlases(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

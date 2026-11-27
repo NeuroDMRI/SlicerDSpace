@@ -1462,7 +1462,7 @@ def _fit_slice_views(slicer: Any, background_id: str, label_id: Optional[str]) -
     # C3: foreground=None clears the layer; the default 'keep-current' would let an old foreground volume hide the preview.
     layers = {"background": background_id, "foreground": None, "label": label_id}
     if label_id:
-        layers["labelOpacity"] = 0.35
+        layers["labelOpacity"] = 0.22
     try:
         slicer.util.setSliceViewerLayers(**layers, fit=True)
     except Exception:
@@ -1472,7 +1472,7 @@ def _fit_slice_views(slicer: Any, background_id: str, label_id: Optional[str]) -
             composite.SetForegroundVolumeID(None)
             composite.SetLabelVolumeID(label_id or "")
             if label_id:
-                composite.SetLabelOpacity(0.35)
+                composite.SetLabelOpacity(0.22)
     try:
         slicer.util.resetSliceViews()
     except Exception:

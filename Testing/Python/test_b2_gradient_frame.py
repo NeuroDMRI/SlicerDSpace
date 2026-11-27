@@ -1167,9 +1167,24 @@ class ProductReuseGradientFrameTests(unittest.TestCase):
             (config.output_folder / "ddseg_source.json").unlink()
             bundle.manifest_path.write_text(json.dumps(native))
 
+        def fake_microstructure(micro_cfg, log=None):
+            dti_dir = micro_cfg.output_dir / "dti"
+            dti_dir.mkdir(parents=True, exist_ok=True)
+            (micro_cfg.output_dir / "manifest.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+            (dti_dir / "dti_qc.json").write_text(json.dumps({"status": "completed"}), encoding="utf-8")
+            return types.SimpleNamespace(
+                fa_path=dti_dir / f"{raw.subject_id}_dti_FA.nii.gz",
+                md_path=dti_dir / f"{raw.subject_id}_dti_MD.nii.gz",
+                ad_path=dti_dir / f"{raw.subject_id}_dti_AD.nii.gz",
+                rd_path=dti_dir / f"{raw.subject_id}_dti_RD.nii.gz",
+                l1_path=None, l2_path=None, l3_path=None, trace_path=None, dec_path=None,
+                roi_stats_csv_path=None, roi_stats_json_path=None,
+            )
+
         config = orchestrator.ProductOrchestratorConfig(subject_id=raw.subject_id, subject_root=raw.subject_root,
                                                         targets=("segmentation",), execute=True)
         with mock.patch("shared.pipeline.ensure_native_dti_bundle", side_effect=ensure), \
+                mock.patch("microstructure.run_microstructure", side_effect=fake_microstructure), \
                 mock.patch("anatomy.segmentation.pipeline.run_ddseg", side_effect=run_ddseg), \
                 mock.patch.object(orchestrator, "_run_ddseg_world_qc_gate", return_value=None):
             result = orchestrator.run_subject_products(config)

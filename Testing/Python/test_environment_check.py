@@ -193,7 +193,8 @@ class EnvironmentCheckTests(unittest.TestCase):
                 appendLog=lambda *_a: None,
             )
 
-            def fake_start(_owner, _title, cmds, done):
+            def fake_start(_owner, _title, cmds, done, **kwargs):
+                self.assertIs(kwargs.get('show_dialog'), False)
                 args = cmds[0][1]
                 result_path = Path(args[args.index('--result') + 1])
                 result_path.write_text(json.dumps(EnvironmentDoctorResult(

@@ -94,7 +94,7 @@ def start_environment_check(owner, on_complete=None, *, on_failure=None):
     set_run_state(owner, 'preflight')
     set_live_stage_text(owner, _text(owner, 'Checking environment dependencies…', '正在检查环境依赖…'))
     started = start_setup_job(owner, _text(owner, 'Checking environment', '检查环境'),
-                              [(owner._slicer_launcher_program(), args, {})], done)
+                              [(owner._slicer_launcher_program(), args, {})], done, show_dialog=False)
     if not started:
         _reset_preflight_state('idle')
     return started

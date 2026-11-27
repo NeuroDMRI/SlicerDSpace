@@ -781,8 +781,9 @@ class EnvironmentAndWidgetFlowTests(unittest.TestCase):
 
         captured = {}
 
-        def fake_start_setup_job(owner, title, commands, done):
+        def fake_start_setup_job(owner, title, commands, done, **kwargs):
             captured["done"] = done
+            captured["show_dialog"] = kwargs.get("show_dialog")
             captured["state_at_start"] = owner._runState
             return True
 

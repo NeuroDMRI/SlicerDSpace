@@ -1425,6 +1425,9 @@ def install_input_preview_controls(owner: Any) -> None:
     button = qt.QPushButton()
     button.setObjectName("inputPreviewButton")
     button.setSizePolicy(qt.QSizePolicy.Maximum, qt.QSizePolicy.Fixed)
+    no_focus = getattr(qt.Qt, "NoFocus", None)
+    if no_focus is not None and hasattr(button, "setFocusPolicy"):
+        button.setFocusPolicy(no_focus)
     pointing = getattr(qt.Qt, "PointingHandCursor", None)
     if pointing is not None and hasattr(button, "setCursor"):
         button.setCursor(pointing)
@@ -1767,6 +1770,11 @@ def install_compact_layout(owner: Any) -> None:
 
     layout.removeWidget(ui.runCollapsibleButton)
     ui.targetsLayout.addWidget(ui.runCollapsibleButton)
+    try:
+        from shared.ui_roi_tracking import install_roi_tracking_bar
+        install_roi_tracking_bar(owner)
+    except Exception as exc:
+        logging.warning("ROI tracking bar could not be installed: %s", exc)
     layout.removeWidget(ui.statusFrame)
     if ui.runLayout.indexOf(ui.statusFrame) >= 0:
         ui.runLayout.removeWidget(ui.statusFrame)
@@ -1808,14 +1816,19 @@ def install_compact_layout(owner: Any) -> None:
     layout.addStretch(1)
     owner._fitHeightQueued = False
 
-    def _configure_parent_scroll_area() -> None:
+    def _find_parent_scroll_area():
         curr = getattr(owner, "parent", None) or root.parentWidget()
         while curr is not None:
             if curr.inherits("QScrollArea"):
-                curr.setVerticalScrollBarPolicy(qt.Qt.ScrollBarAlwaysOn)
-                curr.setHorizontalScrollBarPolicy(qt.Qt.ScrollBarAlwaysOff)
-                break
+                return curr
             curr = curr.parentWidget()
+        return None
+
+    def _configure_parent_scroll_area() -> None:
+        area = _find_parent_scroll_area()
+        if area is not None:
+            area.setVerticalScrollBarPolicy(qt.Qt.ScrollBarAlwaysOn)
+            area.setHorizontalScrollBarPolicy(qt.Qt.ScrollBarAlwaysOff)
 
     _configure_parent_scroll_area()
 
@@ -1825,6 +1838,14 @@ def install_compact_layout(owner: Any) -> None:
         # owner.layout's exact height calculation on the first pass without a 2-step vertical bounce.
         owner._fitHeightQueued = False
         try:
+            area = _find_parent_scroll_area()
+            scroll_bar = area.verticalScrollBar() if area is not None else None
+            saved_scroll = None
+            if scroll_bar is not None:
+                try:
+                    saved_scroll = scroll_bar.value() if callable(getattr(scroll_bar, "value", None)) else int(scroll_bar.value)
+                except Exception:
+                    saved_scroll = None
             _configure_parent_scroll_area()
             if root.width <= 0:
                 return
@@ -1854,6 +1875,12 @@ def install_compact_layout(owner: Any) -> None:
             if getattr(owner, "layout", None) is not None:
                 owner.layout.invalidate()
                 owner.layout.activate()
+            if scroll_bar is not None and saved_scroll is not None:
+                try:
+                    cur_max = scroll_bar.maximum() if callable(getattr(scroll_bar, "maximum", None)) else int(getattr(scroll_bar, "maximum", saved_scroll))
+                    scroll_bar.setValue(max(0, min(int(saved_scroll), int(cur_max))))
+                except Exception:
+                    pass
         except ValueError:
             return
 
@@ -1937,5 +1964,10 @@ def apply_compact_language(owner: Any, language: str) -> None:
     refresh_run_progress_styles(owner)
     from shared.ui_update_panel import refresh_update_panel_language
     refresh_update_panel_language(owner, language)
+    try:
+        from shared.ui_roi_tracking import refresh_roi_tracking_language
+        refresh_roi_tracking_language(owner, language)
+    except Exception:
+        pass
     from shared.ui_advanced_layout import apply_advanced_language
     apply_advanced_language(owner)

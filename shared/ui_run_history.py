@@ -85,7 +85,7 @@ RESULT_FAMILY_TITLES = {
 RESULT_SUBGROUP_ORDER = {
     "anatomy": ("segmentation", "parcellation", "surfaces", "postprocess"),
     "microstructure": ("dti", "freewater", "ifw", "noddi", "dki", "mkcurve"),
-    "tractography": ("ukf", "csd_act", "dti_det", "saf"),
+    "tractography": ("ukf", "csd_act", "dti_det", "saf", "roi_tracking"),
     "bundles": ("wmql", "wma", "tractcloud"),
     "connectome": ("streamline_count", "sift2_weighted"),
 }
@@ -104,6 +104,7 @@ RESULT_SUBGROUP_CAPTIONS = {
     ("tractography", "csd_act"): ("CSD / ACT", "CSD / ACT"),
     ("tractography", "dti_det"): ("DTI", "DTI"),
     ("tractography", "saf"): ("CSD + SAF", "CSD + SAF"),
+    ("tractography", "roi_tracking"): ("ROI tracking", "ROI 纤维追踪"),
     ("bundles", "wmql"): ("WMQL", "WMQL"),
     ("bundles", "wma"): ("WMA", "WMA"),
     ("bundles", "tractcloud"): ("TractCloud", "TractCloud"),
@@ -2527,7 +2528,16 @@ def _toggle_output(owner, item):
                         getattr(composite, f"Set{layer}VolumeID")(None)
                 else:
                     layer = "label" if node.IsA("vtkMRMLLabelMapVolumeNode") else "background"
-                    slicer.util.setSliceViewerLayers(**{layer: node})
+                    if layer == "label":
+                        from shared.result_scene import BRAIN_MASK_LABEL_OPACITY, SEGMENTATION_FILL_OPACITY
+
+                        role_attr = str(node.GetAttribute("SlicerDDSurfer.DisplayRole") or "")
+                        prod_attr = str(node.GetAttribute("SlicerDDSurfer.Product") or "")
+                        is_mask = role_attr == "categorical:mask" or prod_attr == "preprocessing.brain_mask"
+                        opacity = BRAIN_MASK_LABEL_OPACITY if is_mask else SEGMENTATION_FILL_OPACITY
+                        slicer.util.setSliceViewerLayers(label=node, labelOpacity=opacity)
+                    else:
+                        slicer.util.setSliceViewerLayers(background=node)
             else:
                 if (
                     not visible
@@ -3599,6 +3609,35 @@ def _populate_manifest_output_items(
             if txt_path.is_file() and not _is_internal_cache_path(txt_path, subject_root, output_root=output_root):
                 groups.setdefault("qc", {})[str(txt_path.resolve())] = False
 
+    # Standalone DDParcel ROI tracking side-task results under outputs/03_tractography/roi_tracking/
+    roi_manifest_by_path: dict[str, str] = {}
+    roi_tip_by_path: dict[str, str] = {}
+    roi_base = output_root
+    if roi_base is None and resolved_manifest is not None:
+        metadata = Path(metadata_dir) if metadata_dir is not None else Path(resolved_manifest).parent
+        roi_base = metadata.parent
+    if roi_base is not None:
+        roi_checked = memo.setdefault("roi_dirs", set()) if memo is not None else set()
+        roi_key = str(roi_base)
+        if roi_key not in roi_checked:
+            roi_checked.add(roi_key)
+            try:
+                from shared.roi_tracking import ROI_ALGORITHM_LABELS, discover_roi_tracking_results
+
+                for rec in discover_roi_tracking_results(roi_base):
+                    vtk_str = str(rec["vtk_path"])
+                    groups.setdefault("tractography.roi_tracking", {})[vtk_str] = True
+                    fiber_paths.add(vtk_str)
+                    roi_manifest_by_path[vtk_str] = str(rec["manifest_path"])
+                    alg_pair = ROI_ALGORITHM_LABELS.get(rec["algorithm"])
+                    alg_disp = (alg_pair[1 if str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh") else 0]
+                                if alg_pair else rec["algorithm"].upper())
+                    regs = ", ".join(rec.get("region_names") or ())
+                    cnt = int(rec.get("streamline_count") or 0)
+                    roi_tip_by_path[vtk_str] = f"{alg_disp} ROI ({regs}) · {cnt} streamlines\n{vtk_str}"
+            except Exception:
+                pass
+
     zh = str(getattr(owner, "_onboardingLanguage", "en")).startswith("zh")
     # family -> subgroup (None for a flat family) -> {path: visual}
     families: dict = {}
@@ -3739,11 +3778,16 @@ def _populate_manifest_output_items(
                     item.setData(0, _user_role(qt, ROLE_KIND), FIBER_ROW_KIND)
                 elif path in morphometry_paths:
                     item.setData(0, _user_role(qt, ROLE_KIND), MORPHOMETRY_ROW_KIND)
-                if manifest_str is not None:
-                    item.setData(0, role_manifest, manifest_str)
+                row_manifest_str = roi_manifest_by_path.get(path) or manifest_str
+                if row_manifest_str is not None:
+                    item.setData(0, role_manifest, row_manifest_str)
                 if run_index is not None:
                     item.setData(0, role_run, run_index)
-                leaf_tip = _morphometry_tooltip(path, zh) if path in morphometry_paths else path
+                leaf_tip = (
+                    roi_tip_by_path[path]
+                    if path in roi_tip_by_path
+                    else (_morphometry_tooltip(path, zh) if path in morphometry_paths else path)
+                )
                 if path in qc_marks:
                     qc_state, _, qc_reason = qc_marks[path].partition("\t")
                     if qc_state in QC_MARK_TEXT:

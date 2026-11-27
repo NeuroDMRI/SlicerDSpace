@@ -137,6 +137,7 @@ ALLOWED_URLS.update({
     REPO + "/releases/download/",
     REPO + "/releases/download/assets",
     REPO + "/releases/download/v1.0.0",
+    REPO + "/releases/download/assets/SlicerDSpace-Example-Sherbrooke-NRRD.zip",
     REPO + "/releases/download/assets/SlicerDSpace-Example-HCP-100307-NRRD.zip",
     "https://www.nitrc.org/frs/download.php/11290/IITmean_b0_256.nii.gz",
     "https://github.com/",

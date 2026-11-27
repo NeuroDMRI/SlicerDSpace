@@ -582,6 +582,34 @@ def result_candidates(manifest, *, allow_bundle_directory_scan=True, include_pre
     skipped."""
     from shared.surface_morphometry_display import morphometry_row, row_order
 
+    if manifest.get("kind") == "slicerdspace_roi_tracking":
+        candidates, skipped = [], []
+        if manifest.get("status") != "completed":
+            return candidates, skipped
+        outputs = manifest.get("outputs") or {}
+        alg = str(manifest.get("algorithm") or "roi")
+        slug = str(manifest.get("region_slug") or "region")
+        for key in ("tractogram_vtk", "tractogram_trk"):
+            raw = outputs.get(key)
+            if not isinstance(raw, str) or not raw:
+                continue
+            path = Path(raw).expanduser()
+            if not path.is_absolute():
+                skipped.append({"path": raw, "reason": "Relative output path needs an explicit source root"})
+                continue
+            if not path.is_file():
+                skipped.append({"path": raw, "reason": "ROI tractography output is missing"})
+                continue
+            candidates.append({
+                "path": str(path.resolve()),
+                "label": f"roi_{alg}_{slug}",
+                "key": key,
+                "product": "tractography.roi_tracking",
+                "priority": 2,
+            })
+            break
+        return candidates, skipped
+
     candidates, skipped, seen = [], [], set()
     for task in manifest.get("tasks", []) or []:
         if not isinstance(task, dict):
@@ -835,6 +863,7 @@ def freesurfer_color_node(slicer):
 
 _MASK_KEYS = {"mask", "brain_mask", "brainmask", "final_mask", "brain_mask_final"}
 SEGMENTATION_FILL_OPACITY = 0.35
+BRAIN_MASK_LABEL_OPACITY = 0.22
 
 
 def categorical_role(candidate):
@@ -926,6 +955,23 @@ def parcellation_color_node(slicer, candidate):
     return freesurfer_color_node(slicer)
 
 
+def brain_mask_color_node(slicer):
+    """Soft cyan translucent overlay colour for binary brain masks (never obscures underlying anatomy)."""
+    identity, stamp = "mask:brain_mask", "0:Background:0,0,0,0;1:BrainMask:0.20,0.78,0.90,1.0"
+    color = _reused_color_node(slicer, identity, stamp)
+    if color is not None:
+        return color
+    color = slicer.mrmlScene.AddNewNodeByClass("vtkMRMLColorTableNode", "SlicerDSpace brain mask color")
+    color.SetTypeToUser()
+    color.SetNumberOfColors(2)
+    color.GetLookupTable().SetTableRange(0, 1)
+    color.SetColor(0, "Background", 0.0, 0.0, 0.0, 0.0)
+    color.SetColor(1, "Brain mask", 0.20, 0.78, 0.90, 1.0)
+    color.SetAttribute(PREFIX + "LUTSourcePath", identity)
+    color.SetAttribute(PREFIX + "LUTSourceStamp", stamp)
+    return color
+
+
 def apply_categorical_colors(slicer, node, candidate):
     """The one colour source of a categorical label volume, for automatic and manual loads alike."""
     display = node.GetDisplayNode() if hasattr(node, "GetDisplayNode") else None
@@ -935,6 +981,8 @@ def apply_categorical_colors(slicer, node, candidate):
     product = str(candidate.get("product") or "")
     if role == "categorical:region_selection":
         color, fallbacks = regional_color_node(slicer, candidate), ()
+    elif role == "categorical:mask":
+        color, fallbacks = brain_mask_color_node(slicer), ("vtkMRMLColorTableNodeLabels",)
     elif product.startswith("parcellation."):
         color, fallbacks = parcellation_color_node(slicer, candidate), ("vtkMRMLColorTableNodeLabels",)
     elif role == "categorical:node_parcellation":
@@ -1236,7 +1284,8 @@ def show_automatic_results(slicer, entries, *, newly_loaded=None):
                 node.SetDisplayVisibility(False)
     new_volumes = any(entry.get("display_role", "").startswith(("scalar:", "categorical")) for entry in new)
     if new_volumes and view and hasattr(slicer.util, "setSliceViewerLayers"):
-        slicer.util.setSliceViewerLayers(**view, **({"labelOpacity": 0.35} if labels else {}))
+        label_opacity = BRAIN_MASK_LABEL_OPACITY if (labels and sorted(labels)[0][0] == 2) else SEGMENTATION_FILL_OPACITY
+        slicer.util.setSliceViewerLayers(**view, **({"labelOpacity": label_opacity} if labels else {}))
         if hasattr(slicer.util, "resetSliceViews"):
             slicer.util.resetSliceViews()
         center_node = slicer.mrmlScene.GetNodeByID(view.get("background") or view.get("label"))

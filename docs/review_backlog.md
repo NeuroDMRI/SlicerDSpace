@@ -384,3 +384,11 @@ Scope: branch `fix/installer-reinstall-messages` (a8c260c8), rows Opus r2 P2-a, 
 | Opus (reinstall fix) P2-2 | P2 | If pass 2 (or a fresh install) installs the archive and then 3D Slicer exits non-zero, the installer reports "rejected archive" with no suffix and skips the remap. The code before the change behaved the same. | Trust the receipt (`installed: true`) over the exit code, and warn about the exit code as pass 1 now does. |
 | Codex (reinstall fix) P1, reclassified | P2 | If pass 2 writes a truncated receipt, `_launch` raises `JSONDecodeError`, which the pass-2 wrapper does not catch (it catches only `RuntimeError`), so the error has no "may have removed" note. Same in `installer-customizer.js`. | Catch receipt read and decode errors in the pass-2 wrapper too, and add the "may have removed" note. |
 | Codex (reinstall fix) P1, reclassified | P2 | If the post-install `isExtensionInstalled` call raises in the helper's normal receipt, the outer handler reports `installed: false` and exits with code 1 after a successful install. Same in `installer-customizer.js`. | Guard the probe separately, write `extension_installed: null`, and keep `ok`. |
+
+## 27 November 2026: compat-matrix tests that fail in different jobs (file-clock granularity) (Opus + Codex)
+
+Scope: branch `fix/flaky-mtime-tests` (`Testing/Python/test_b2_fix_round.py`, `Testing/Python/test_preproc_fsl_gate.py`, `Testing/Python/test_b4_fix_gui_cli.py`; tests only). Round 1: Opus 0 blocking, 1 P2; Codex 0 blocking, 1 P2 (the same item). Decide by 11 December 2026.
+
+| Source | Label | Item | Proposed fix |
+|---|---|---|---|
+| Opus P2, Codex P2 | Open | `test_flaky_p_a_file_clock_behind_the_wall_clock` puts the stage-start clock only 50 ms ahead of the file clock. It catches a removed fix only when the ticks run within 50 ms of the stage start; on a slow or busy runner it could pass without the fix. A false failure with the fix in place is not possible. | Use an offset well below the 5 s stamp of the fix (for example 1 s), or control the write timestamps in the reproduction. |

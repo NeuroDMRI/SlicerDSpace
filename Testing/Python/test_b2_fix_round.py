@@ -168,8 +168,27 @@ class DetachedNrrdTest(unittest.TestCase):
         self.assertNotEqual(preview_cache_path(with_raw, self.cache),
                             preview_cache_path(PreviewSource("nrrd", nhdr, None, None, "s"), self.cache))
         before = preview_cache_path(with_raw, self.cache)
+        stamp = override.stat().st_mtime_ns + 7_000_000_000
         override.write_bytes(override.read_bytes()[:-2] + b"\x01\x00")
+        # FLAKY-C2: a same-size rewrite in one file-clock tick keeps the mtime; give the edit a later mtime, as a
+        # real edit has.
+        os.utime(override, ns=(stamp, stamp))
         self.assertNotEqual(preview_cache_path(with_raw, self.cache), before)
+
+    def test_flaky_c2_override_rewritten_in_the_same_clock_tick(self):
+        """FLAKY-C2: the cache key reads size and mtime. On Windows and Linux the file clock is coarse (ms ticks), so a
+        same-size rewrite in the same tick keeps the mtime and the key; this runs the C2 test with that tick forced."""
+        real_write_bytes = Path.write_bytes
+
+        def write_in_the_same_tick(path, data):
+            before = path.stat() if path.exists() else None
+            written = real_write_bytes(path, data)
+            if before is not None:
+                os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            return written
+
+        with mock.patch.object(Path, "write_bytes", write_in_the_same_tick):
+            self.test_c2_cache_key_follows_the_override_file_not_the_headers_own_data()
 
     def test_r3_1_a_nrrd_header_with_detached_data_puts_the_payload_in_the_cache_key(self):
         from shared.input_preview import nrrd_payload_files

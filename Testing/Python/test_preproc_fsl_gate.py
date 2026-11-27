@@ -166,7 +166,14 @@ class G1MachoReaderTest(unittest.TestCase):
 
 def make_native_bundle(root, name, minos, *, commands=()):
     bundle = Path(root) / name
-    write(bundle / "bin" / "tool", thin_macho([_build_version(pack_version(*minos))]) if minos else b"dummy")
+    tool = bundle / "bin" / "tool"
+    old_mtime_ns = tool.stat().st_mtime_ns if tool.exists() else None
+    write(tool, thin_macho([_build_version(pack_version(*minos))]) if minos else b"dummy")
+    if old_mtime_ns is not None:
+        # FLAKY-G2: a same-size rewrite in one file-clock tick keeps the mtime, and the min-OS cache (path, size,
+        # mtime) then returns the old minimum; give the rewrite a later mtime, as a real reinstall has.
+        stamp = old_mtime_ns + 1_000_000_000
+        os.utime(tool, ns=(stamp, stamp))
     (bundle / "native-runtime.json").write_text('{"commands": %s}' % list(commands).__repr__().replace("'", '"'))
     return bundle
 
@@ -256,6 +263,21 @@ class G2FslGateTest(BundleEnv, unittest.TestCase):
         plain = fsl_unavailable_text("Linux", "aarch64")
         self.assertIn("Eddy and Topup need FSL", plain)
         self.assertNotIn("macOS", plain)
+
+    def test_flaky_g2_bundle_rewritten_in_the_same_clock_tick(self):
+        """FLAKY-G2: macho_min_os caches a binary's minimum by path, size and mtime. On a coarse file clock (Windows) a
+        same-size rewrite in the same tick keeps the mtime, so the old minimum comes back; this forces that tick."""
+        real_write_bytes = Path.write_bytes
+
+        def write_in_the_same_tick(path, data):
+            before = path.stat() if path.exists() else None
+            written = real_write_bytes(path, data)
+            if before is not None:
+                os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            return written
+
+        with mock.patch.object(Path, "write_bytes", write_in_the_same_tick):
+            self.test_g2_unavailable_text_names_the_versions_on_a_mac()
 
     def test_g2_setup_plan_note_uses_the_new_text_for_the_managed_install_path(self):
         from shared.selected_setup import PREPROCESSING_UNSUPPORTED_TEXT, build_setup_plan

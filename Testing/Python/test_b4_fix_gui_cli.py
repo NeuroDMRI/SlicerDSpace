@@ -17,6 +17,7 @@ import sys
 import tempfile
 import textwrap
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -227,11 +228,25 @@ class PaHeartbeatOwnLogTests(unittest.TestCase):
                     stream.write(line + "\n")
                 with tool.open("a", encoding="utf-8") as stream:
                     stream.write("y")
+                # FLAKY-P-A: the ticks run in a few ms, and Linux stamps the append with a coarse clock that can be
+                # behind the stage start (time.time()); stamp it clearly after the start, as a real tool's later
+                # write is.
+                stamp = time.time() + 5.0
+                os.utime(tool, (stamp, stamp))
 
             with patch.dict(os.environ, {hb.EXCLUDE_ENV: str(own)}), patch.object(sys, "stdout", io.StringIO()):
                 lines = self._run_ticks(Path(tmp), write_own_line)
             self.assertFalse([line for line in lines if line.startswith("[Stall warning]")], lines[-3:])
             self.assertTrue(any("log_bytes=" in line for line in lines))
+
+    def test_flaky_p_a_file_clock_behind_the_wall_clock(self) -> None:
+        """FLAKY-P-A: Linux stamps a write with a coarse clock that can be a few ms behind time.time(). The ticks run
+        in a few ms, so each append to the tool log gets an mtime before the stage start and is not progress. This
+        runs the P-a test with the stage-start clock 50 ms ahead of the file clock."""
+        real_time = time.time
+        ahead = SimpleNamespace(time=lambda: real_time() + 0.05, monotonic=time.monotonic)
+        with patch.object(hb, "time", ahead):
+            self.test_p_a_another_stage_log_still_counts_as_progress()
 
     def test_p_a_the_batch_script_names_the_subject_stdout_log_to_the_child(self) -> None:
         batch_cli = _load_batch_cli()

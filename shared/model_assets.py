@@ -148,10 +148,16 @@ def bundled_model_asset_roots(repo_root: Path | str | None = None) -> tuple[Path
         candidates.append(resolved / "bundled-model-assets")
     valid: list[Path] = []
     for cand in candidates:
-        if cand.is_dir():
+        try:
+            if not cand.is_dir():
+                continue
             real = cand.resolve()
-            if real not in valid:
-                valid.append(real)
+        except OSError:
+            # Python 3.12 is_dir() raises PermissionError on a folder it cannot traverse; skip it, as the installer's
+            # _pnl_template_roots does (finding PLUGIN-ROOTS-PERM).
+            continue
+        if real not in valid:
+            valid.append(real)
     return tuple(valid)
 
 

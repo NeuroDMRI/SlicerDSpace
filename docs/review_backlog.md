@@ -417,3 +417,11 @@ Scope: branch `fix/installer-reinstall-p2` (2fddd3bd), the 4 rows of the section
 |---|---|---|---|
 | Opus (reinstall P2 fix) P2-1 | P2 | No test checks that `downloads_ready` sets `_SESSION_INSTALLED`: the row-A test sets the flag by hand, and the source-order test `test_opus_r2_p2_c_on_start_uses_the_note_and_downloads_ready_records_the_install` checks only `state["installed_here"]`. Deleting the flag write keeps every test green. | Add an assert for `_SESSION_INSTALLED[0] = True` next to `installed_here` in that source-order test, or a behavioural `_poll` test. |
 | Opus (reinstall P2 fix) P2-2 | P2 | No test models reopening Setup after `all_done` in the same session: `all_done` scheduled SlicerDSpaceSetup for removal, the session flag skips the Setup-schedule check, and `_remove_installed_copy` calls `uninstallScheduledExtensions()` with both extensions scheduled. Correct today (Slicer v5.10.0 and v5.12.4 continue the loop after the refused Setup removal), but no test fixes that fact. | Give `TwoExtensionSlicer` an `uninstallScheduledExtensions` that refuses loaded extensions and continues, and test the reopen path. |
+
+## 27 November 2026: two compat-matrix tests that fail only on repo-only macOS 5.12.4 (fail-fast order, sampler window) (Opus + Codex)
+
+Scope: branch `fix/flaky-macos-timing` (`Testing/Python/test_run_batch_pipeline.py`, `Testing/Python/test_benchmark_cohort_harness_t3.py`; tests only). Round 1: Opus 0 blocking, 2 P2; Codex 2 P1 (the same two places; blocking under the brief, fixed in the fix round). Re-review: Opus 0 blocking, 1 P2; Codex 0 blocking. Decide by 11 December 2026.
+
+| Source | Label | Item | Proposed fix |
+|---|---|---|---|
+| Opus re-review P2 | P2 | `test_flaky_sampler_timer_fires_late` patches the test module's `time` with `patch.dict(globals(), ...)`. On exit, `patch.dict` clears the whole module dict and then restores it, so for a moment every test-module global (also `__builtins__`) is missing. Safe today (the sampler thread looks up no test-module global); a later background thread that does could get a `NameError`. | Use `patch.object(sys.modules[__name__], 'time', clock)`, which replaces only the one name. |

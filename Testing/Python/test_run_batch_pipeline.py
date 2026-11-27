@@ -9,6 +9,8 @@ import io
 import json
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -40,6 +42,7 @@ p.add_argument("--subject-id")
 p.add_argument("--output-root")
 p.add_argument("--event-dir", type=Path)
 p.add_argument("--fail-first", action="store_true")
+p.add_argument("--sub-02-waits-for-recorded-sub-01", action="store_true")
 a, extra = p.parse_known_args()
 started = time.time()
 a.event_dir.mkdir(exist_ok=True)
@@ -47,6 +50,13 @@ a.event_dir.mkdir(exist_ok=True)
 if a.subject_id in ("sub-01", "sub-02"):
     deadline = time.monotonic() + 5
     while len(list(a.event_dir.glob("*.started"))) < 2:
+        if time.monotonic() > deadline:
+            sys.exit(9)
+        time.sleep(.01)
+if a.sub_02_waits_for_recorded_sub_01 and a.subject_id == "sub-02":
+    (a.event_dir / "sub-02.waiting").write_text("")
+    deadline = time.monotonic() + 30
+    while not (a.event_dir / "sub-01.recorded").exists():
         if time.monotonic() > deadline:
             sys.exit(9)
         time.sleep(.01)
@@ -94,13 +104,51 @@ sys.exit(3 if failed else 0)
             self.assertTrue(all(path.read_text().strip() in ("sub-01", "sub-02", "sub-03") for path in logs))
 
     def test_fail_fast_still_records_every_already_started_process(self):
+        # sub-02 finishes only after the driver has recorded sub-01's failure (its "[Batch] done sub-01" line). Before,
+        # the order came from the fake's sleeps (0.02 s vs 0.2 s); on a slow runner the driver could see sub-02 finish
+        # first and correctly start sub-03 in the free slot.
+        real_emit = batch_cli._emit
         with tempfile.TemporaryDirectory() as tmp:
-            status, manifest = self.run_fake_batch(Path(tmp), "--fail-first")
+            events = Path(tmp) / "events"
+
+            def emit(line):
+                real_emit(line)
+                if line.startswith("[Batch] done sub-01 "):
+                    (events / "sub-01.recorded").write_text("", encoding="utf-8")
+
+            with patch.object(batch_cli, "_emit", emit):
+                status, manifest = self.run_fake_batch(Path(tmp), "--fail-first", "--sub-02-waits-for-recorded-sub-01")
             self.assertEqual(status, 2)
             self.assertEqual(manifest["status"], "failed")
             self.assertEqual({r["subject_id"]: r["returncode"] for r in manifest["results"]},
                              {"sub-01": 3, "sub-02": 0})
             self.assertEqual(manifest["not_launched"], ["sub-03"])
+
+    def test_flaky_fail_fast_the_driver_sees_sub_02_finish_first(self):
+        """FLAKY (repo-only macOS 5.12.4, run 46001506952): {'sub-01': 3, 'sub-02': 0, 'sub-03': 0}. Fail-fast stops new
+        launches only after the driver sees a failure; when it sees sub-02 finish first, the free slot starts sub-03.
+        Here sub-01's result is held back, as on a slow runner, until the driver reports sub-02 done, or until sub-02
+        waits for the driver to record sub-01 (the fixed test's order). No timing margin decides the outcome."""
+        real_run_subject, real_emit = batch_cli._run_subject, batch_cli._emit
+        sub_02_done = threading.Event()
+
+        def emit(line):
+            if line.startswith("[Batch] done sub-02 "):
+                sub_02_done.set()
+            real_emit(line)
+
+        def run_subject(command, subject, log_dir, **kwargs):
+            result = real_run_subject(command, subject, log_dir, **kwargs)
+            if subject.subject_id == "sub-01":
+                waiting = Path(batch_cli._command_option(command, "--event-dir", "")) / "sub-02.waiting"
+                deadline = time.monotonic() + 30
+                while not (sub_02_done.wait(0.01) or waiting.exists()):
+                    if time.monotonic() > deadline:
+                        raise AssertionError("sub-02 neither finished nor waited for sub-01 within 30 s")
+            return result
+
+        with patch.object(batch_cli, "_run_subject", run_subject), patch.object(batch_cli, "_emit", emit):
+            self.test_fail_fast_still_records_every_already_started_process()
 
     def test_continue_on_error_keeps_remaining_subjects(self):
         with tempfile.TemporaryDirectory() as tmp:

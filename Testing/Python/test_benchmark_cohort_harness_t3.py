@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import types
 import unittest
@@ -1056,12 +1057,46 @@ class MetricTests(unittest.TestCase):
             path = Path(directory) / 's.jsonl'
             counter = iter(range(1000))
             sampler = harness.Sampler(path, 0.01, lambda: dict(n=next(counter), bad=float('nan'))).start()
-            time.sleep(0.1)
+            # Wait for 3 samples, not a fixed 0.1 s: on a busy runner a 10 ms wait can take 50 ms or more.
+            deadline = time.monotonic() + 10
+            while sampler.samples < 3 and time.monotonic() < deadline:
+                time.sleep(0.01)
             summary = sampler.finish()
             self.assertGreater(summary['samples'], 2)
             lines = path.read_text().splitlines()
             self.assertEqual(json.loads(lines[0])['bad'], None)
             self.assertFalse(sampler.thread.is_alive())
+
+    def test_flaky_sampler_timer_fires_late(self):
+        """FLAKY (repo-only macOS 5.12.4, run 46001506952): '2 not greater than 2'. On a busy runner the sampler's 10 ms
+        timer can fire after the test's fixed 0.1 s window. Here the sampler's second wait ends only when finish()
+        stops it, or after the test thread has returned from two more sleeps; a fixed window (one sleep) then always
+        sees 2 samples. No timing margin decides the outcome."""
+        real_sleep, slept = time.sleep, threading.Semaphore(0)
+
+        def counting_sleep(seconds):
+            real_sleep(seconds)
+            slept.release()
+
+        class LateEvent(threading.Event):
+            waits = 0
+
+            def wait(self, timeout=None):
+                self.waits += 1
+                if timeout is None or self.waits == 1:
+                    return super().wait(timeout)
+                needed = 2
+                while needed:
+                    if super().wait(0.005):
+                        return True
+                    if slept.acquire(blocking=False):
+                        needed -= 1
+                return self.is_set()
+
+        clock = types.SimpleNamespace(sleep=counting_sleep, monotonic=time.monotonic)
+        with patch.object(harness, 'threading', types.SimpleNamespace(Thread=threading.Thread, Event=LateEvent)), \
+                patch.dict(globals(), {'time': clock}):
+            self.test_sampler_stops_in_finally_and_writes_lines()
 
 
 if __name__ == '__main__':

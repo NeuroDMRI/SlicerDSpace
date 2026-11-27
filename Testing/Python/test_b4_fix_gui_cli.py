@@ -242,9 +242,10 @@ class PaHeartbeatOwnLogTests(unittest.TestCase):
     def test_flaky_p_a_file_clock_behind_the_wall_clock(self) -> None:
         """FLAKY-P-A: Linux stamps a write with a coarse clock that can be a few ms behind time.time(). The ticks run
         in a few ms, so each append to the tool log gets an mtime before the stage start and is not progress. This
-        runs the P-a test with the stage-start clock 50 ms ahead of the file clock."""
+        runs the P-a test with the stage-start clock 1 s ahead of the file clock (larger than any run time of the
+        ticks, so a slow runner cannot hide a removed fix; backlog P2, 27 November 2026)."""
         real_time = time.time
-        ahead = SimpleNamespace(time=lambda: real_time() + 0.05, monotonic=time.monotonic)
+        ahead = SimpleNamespace(time=lambda: real_time() + 1.0, monotonic=time.monotonic)
         with patch.object(hb, "time", ahead):
             self.test_p_a_another_stage_log_still_counts_as_progress()
 

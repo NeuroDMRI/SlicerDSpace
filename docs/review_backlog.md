@@ -391,7 +391,7 @@ Scope: branch `fix/flaky-mtime-tests` (`Testing/Python/test_b2_fix_round.py`, `T
 
 | Source | Label | Item | Proposed fix |
 |---|---|---|---|
-| Opus P2, Codex P2 | Open | `test_flaky_p_a_file_clock_behind_the_wall_clock` puts the stage-start clock only 50 ms ahead of the file clock. It catches a removed fix only when the ticks run within 50 ms of the stage start; on a slow or busy runner it could pass without the fix. A false failure with the fix in place is not possible. | Use an offset well below the 5 s stamp of the fix (for example 1 s), or control the write timestamps in the reproduction. |
+| Opus P2, Codex P2 | Fixed | **Fixed** (27 November 2026, branch `fix/flaky-guard-p2`): the offset is now 1 s. With the fix removed and a 100 ms pause after the stage start, the 50 ms guard passed in 3 of 3 runs; the 1 s guard fails in 3 of 3. Was: `test_flaky_p_a_file_clock_behind_the_wall_clock` puts the stage-start clock only 50 ms ahead of the file clock. It catches a removed fix only when the ticks run within 50 ms of the stage start; on a slow or busy runner it could pass without the fix. A false failure with the fix in place is not possible. | Use an offset well below the 5 s stamp of the fix (for example 1 s), or control the write timestamps in the reproduction. |
 
 ## 27 November 2026: two more compat-matrix tests that fail in different jobs (h1 preview prune, h2 heartbeat) (Opus + Codex)
 
@@ -399,4 +399,4 @@ Scope: branch `fix/flaky-h1-h2` (`shared/input_preview.py::_prune_cache`, `Testi
 
 | Source | Label | Item | Proposed fix |
 |---|---|---|---|
-| Opus P2 | Open | `test_flaky_h1_previews_written_in_the_same_clock_tick` and `test_h1_cache_keeps_only_the_newest_previews` check only the file count. With tied mtimes, a wrong prune that drops the `keep` guard (for example, slicing `entries[6:]` from all entries) also leaves 6 files and passes, although it deletes the preview just written. | In the reproduction, also assert that the path returned by the last `mean_b0_image` call still exists. |
+| Opus P2 | Fixed | **Fixed** (27 November 2026, branch `fix/flaky-guard-p2`): `test_h1_cache_keeps_only_the_newest_previews` (and so the reproduction, which runs it) now also asserts that the path the last `mean_b0_image` call returned still exists. Against a prune without the `keep` guard, the old check passed in 3 of 3 runs; the new check fails in 3 of 3. Was: `test_flaky_h1_previews_written_in_the_same_clock_tick` and `test_h1_cache_keeps_only_the_newest_previews` check only the file count. With tied mtimes, a wrong prune that drops the `keep` guard (for example, slicing `entries[6:]` from all entries) also leaves 6 files and passes, although it deletes the preview just written. | In the reproduction, also assert that the path returned by the last `mean_b0_image` call still exists. |

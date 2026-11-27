@@ -126,8 +126,11 @@ class MeanB0Test(unittest.TestCase):
         for index in range(8):
             source = self.nifti_source() if index == 0 else source
             source = PreviewSource(source.kind, source.dwi, source.bval, None, f"sub-{index}")
-            mean_b0_image(source, self.cache)
+            newest = mean_b0_image(source, self.cache)
         self.assertEqual(len(list(self.cache.glob("preview_*_meanb0.nii.gz"))), 6)
+        # The prune keeps the preview just written; a prune that drops it also leaves 6 files (backlog P2, 27 November
+        # 2026).
+        self.assertTrue(newest.is_file(), newest)
 
     def test_flaky_h1_previews_written_in_the_same_clock_tick(self):
         """FLAKY-H1: the prune sorts the previews by mtime. On a coarse file clock (Windows, ~16 ms) the 8 small

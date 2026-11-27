@@ -1305,13 +1305,27 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             return "PNL CNN \u8111\u63a9\u819c\u6a21\u677f\uff08IITmean_b0_256.nii.gz\uff09\u672a\u80fd\u5b89\u88c5\uff1a\u4ece nitrc.org \u4e0b\u8f7d\u5931\u8d25\u3002\u751f\u6210\u8111\u63a9\u819c\u4e4b\u524d\uff0c\u8bf7\u5728 SlicerDSpace \u7684\u201c\u73af\u5883\u4e0e\u5b89\u88c5\u201d\u4e2d\u4e0b\u8f7d\u5b83\uff0c\u6216\u63d0\u4f9b\u81ea\u5df1\u7684\u63a9\u819c\u3002"
         return "The PNL CNN brain-mask template (IITmean_b0_256.nii.gz) was not installed: the download from nitrc.org failed. Before you generate a brain mask, open Environment and installation in SlicerDSpace to download it, or provide your own mask."
 
-    def _pnl_template_roots(bundled_assets, asset_root):
-        # The folders where the plugin looks for the template: the model assets folder, and the bundled folder. As in
-        # shared.model_assets.bundled_model_asset_roots (not imported), a set SLICERDSPACE_BUNDLED_MODEL_ASSETS_ROOT
-        # replaces the in-extension bundled folder.
+    def _pnl_template_roots(mod_root, asset_root):
+        # The folders where the plugin looks for the template: the model assets folder and the bundled folders that
+        # shared.model_assets.bundled_model_asset_roots (not imported) gives for this module folder. A set
+        # SLICERDSPACE_BUNDLED_MODEL_ASSETS_ROOT replaces the in-extension folders. Else, in an installed extension
+        # (module folder qt-scripted-modules), both <ext>/bundled-model-assets and <module folder>/bundled-model-assets.
         env_root = os.environ.get("SLICERDSPACE_BUNDLED_MODEL_ASSETS_ROOT") or ""
-        bundled = Path(env_root).expanduser() if env_root else Path(bundled_assets)
-        roots = [bundled] if bundled.is_dir() else []
+        if env_root:
+            candidates = [Path(env_root).expanduser()]
+        else:
+            resolved = Path(mod_root).expanduser().resolve()
+            candidates = []
+            if resolved.name == "qt-scripted-modules" and len(resolved.parents) >= 3:
+                candidates.append(resolved.parents[2] / "bundled-model-assets")
+            candidates.append(resolved / "bundled-model-assets")
+        roots = []
+        for cand in candidates:
+            try:
+                if cand.is_dir():
+                    roots.append(cand)
+            except OSError:
+                continue  # Python 3.12 is_dir() raises on a folder it cannot traverse; skip it.
         roots.append(asset_root)
         return roots
 
@@ -1556,7 +1570,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         pnl_warn = _pnl_template_warning(
             wanted_models is None or "pnl_cnn" in set(wanted_models),
             artifacts.get("iit_template") or {},
-            _pnl_template_roots(bundled_assets, asset_root),
+            _pnl_template_roots(module_root, asset_root),
             CONFIG.get("language", "en"),
         )
         if pnl_warn:

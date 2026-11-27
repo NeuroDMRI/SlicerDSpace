@@ -168,7 +168,7 @@ class HelperTests(unittest.TestCase):
                     plugin.add(asset_root.resolve())
                     for _label, fn in self._roots_each():
                         with self.subTest(env=case):
-                            got = {Path(p).resolve() for p in fn(bundled, asset_root)}
+                            got = {Path(p).resolve() for p in fn(ext, asset_root)}
                             self.assertEqual(got, plugin)
 
     def test_iit_warn_opus_p2_template_only_in_the_bundled_folder_warns_when_the_env_root_is_set(self) -> None:
@@ -185,14 +185,90 @@ class HelperTests(unittest.TestCase):
                 os.environ[BUNDLED_ENV] = str(env_dir)
                 for label, ns in self.copies.items():
                     with self.subTest(copy=label):
-                        roots = ns["_pnl_template_roots"](bundled, asset_root)
+                        roots = ns["_pnl_template_roots"](bundled.parent, asset_root)
                         self.assertEqual(ns["_pnl_template_warning"](True, SPEC, roots), WARN_EN)
             with patch.dict(os.environ):
                 os.environ.pop(BUNDLED_ENV, None)
                 for label, ns in self.copies.items():
                     with self.subTest(copy=label, env="unset"):
-                        roots = ns["_pnl_template_roots"](bundled, asset_root)
+                        roots = ns["_pnl_template_roots"](bundled.parent, asset_root)
                         self.assertEqual(ns["_pnl_template_warning"](True, SPEC, roots), "")
+
+    def test_iit_warn_opus_qt_roots_match_the_plugin_for_the_installed_layout(self) -> None:
+        # Opus P2 of the roots fix (backlog, 27 November 2026): in an installed extension the module folder is
+        # .../lib/Slicer-5.10/qt-scripted-modules, and bundled_model_asset_roots checks <ext>/bundled-model-assets AND
+        # <qt-scripted-modules>/bundled-model-assets. The installer must check the same folders.
+        from shared.model_assets import bundled_model_asset_roots
+
+        with tempfile.TemporaryDirectory() as td:
+            ext = Path(td) / "ext"
+            mod_root = ext / "lib" / "Slicer-5.10" / "qt-scripted-modules"
+            (ext / "bundled-model-assets").mkdir(parents=True)
+            (mod_root / "bundled-model-assets").mkdir(parents=True)
+            asset_root = Path(td) / "assets"
+            asset_root.mkdir()
+            env_dir = Path(td) / "env-bundled-assets"
+            env_dir.mkdir()
+            cases = {"unset": None, "env dir": str(env_dir), "env missing": str(Path(td) / "no-such-dir"), "empty": ""}
+            for case, value in cases.items():
+                with patch.dict(os.environ):
+                    os.environ.pop(BUNDLED_ENV, None)
+                    if value is not None:
+                        os.environ[BUNDLED_ENV] = value
+                    plugin = {Path(p).resolve() for p in bundled_model_asset_roots(mod_root)}
+                    plugin.add(asset_root.resolve())
+                    if case == "unset":
+                        self.assertEqual(len(plugin), 3, "the plugin should see both in-extension folders")
+                    for _label, fn in self._roots_each():
+                        with self.subTest(env=case):
+                            got = {Path(p).resolve() for p in fn(mod_root, asset_root)}
+                            self.assertEqual(got, plugin)
+
+    def test_iit_warn_opus_qt_template_only_in_the_qt_scripted_modules_folder_gives_no_warning(self) -> None:
+        # The failing input of the backlog row: the template is only in <qt-scripted-modules>/bundled-model-assets. The
+        # plugin finds it there, so the installer must not warn.
+        with tempfile.TemporaryDirectory() as td:
+            mod_root = Path(td) / "ext" / "lib" / "Slicer-5.10" / "qt-scripted-modules"
+            _put_template(mod_root / "bundled-model-assets")
+            asset_root = Path(td) / "assets"
+            asset_root.mkdir()
+            with patch.dict(os.environ):
+                os.environ.pop(BUNDLED_ENV, None)
+                for label, ns in self.copies.items():
+                    with self.subTest(copy=label):
+                        roots = ns["_pnl_template_roots"](mod_root, asset_root)
+                        self.assertEqual(ns["_pnl_template_warning"](True, SPEC, roots), "")
+
+    def test_iit_warn_codex_qt_p1_unreadable_bundled_candidate_does_not_break_the_install(self) -> None:
+        # Codex P1 of the qt-scripted-modules fix: on Python 3.12, Path.is_dir() raises PermissionError when it cannot
+        # traverse a folder. A bundled candidate that points into such a folder must be skipped, not abort the install.
+        if os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0):
+            self.skipTest("needs POSIX permissions and a non-root user")
+        with tempfile.TemporaryDirectory() as td:
+            mod_root = Path(td) / "ext" / "lib" / "Slicer-5.10" / "qt-scripted-modules"
+            mod_root.mkdir(parents=True)
+            locked = Path(td) / "locked"
+            (locked / "inner").mkdir(parents=True)
+            (mod_root / "bundled-model-assets").symlink_to(locked / "inner", target_is_directory=True)
+            asset_root = Path(td) / "assets"
+            _put_template(asset_root)
+            locked.chmod(0)
+            try:
+                try:
+                    (mod_root / "bundled-model-assets").is_dir()
+                except PermissionError:
+                    pass
+                else:
+                    self.skipTest("this Python does not raise on an untraversable folder")
+                with patch.dict(os.environ):
+                    os.environ.pop(BUNDLED_ENV, None)
+                    for label, ns in self.copies.items():
+                        with self.subTest(copy=label):
+                            roots = ns["_pnl_template_roots"](mod_root, asset_root)
+                            self.assertIn(asset_root, [Path(r) for r in roots])
+                            self.assertEqual(ns["_pnl_template_warning"](True, SPEC, roots), "")
+            finally:
+                locked.chmod(0o755)
 
     def test_iit_warn_pnl_not_selected_or_no_spec_gives_no_warning(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -310,12 +386,14 @@ class PhaseCTests(unittest.TestCase):
         _need_node()
 
     def _run(self, *, sel_model_packs, on_disk: bool = False, downloaded: bool = False, language: str = "en",
-             env_mode=None):
+             env_mode=None, qt_bundled: bool = False):
         ns = load_setup_module()
         with tempfile.TemporaryDirectory() as td, _bundled_env(td, env_mode):
             project = _Project(Path(td), release_package=True)
             if on_disk:
                 _put_template(project.assets)
+            if qt_bundled:
+                _put_template(project.module_root / "bundled-model-assets")
             iit_file = None
             if downloaded:
                 iit_file = Path(td) / "downloaded" / "IITmean_b0_256.nii.gz"
@@ -360,12 +438,17 @@ class PhaseCTests(unittest.TestCase):
                 payload, _path = self._run(sel_model_packs=["pnl_cnn"], env_mode=mode)
                 self.assertEqual(payload.get("warnings"), [WARN_EN], payload)
 
+    def test_iit_warn_opus_qt_phase_c_template_in_the_qt_scripted_modules_folder_has_no_warning(self) -> None:
+        payload, _path = self._run(sel_model_packs=["pnl_cnn"], qt_bundled=True)
+        self.assertEqual(payload.get("warnings"), [], payload)
+
     def test_iit_warn_phase_c_pnl_cnn_not_selected_has_no_warning(self) -> None:
         payload, _path = self._run(sel_model_packs=["ddseg"])
         self.assertEqual(payload.get("warnings"), [], payload)
 
 
-def _run_main(ns: dict, project: _Project, *, selected_model_packs, on_disk: bool, language: str = "en"):
+def _run_main(ns: dict, project: _Project, *, selected_model_packs, on_disk: bool, language: str = "en",
+              qt_bundled: bool = False):
     """Run main() of a generated script: the download fails, the real _sync_iit_template runs. Return (rc, logs)."""
     logs: list = []
     slicer_exe = project.root / "Slicer"
@@ -374,6 +457,8 @@ def _run_main(ns: dict, project: _Project, *, selected_model_packs, on_disk: boo
     archive.write_bytes(b"PK")
     if on_disk:
         _put_template(project.assets)
+    if qt_bundled:
+        _put_template(project.module_root / "bundled-model-assets")
     config = dict(ns["CONFIG"])
     config.update(model_assets_dir=str(project.assets), selected_packs=[], selected_model_packs=selected_model_packs,
                   mirror_prefix="", proxy_url="", offline_dir="", check_script_dir=False, language=language,
@@ -406,7 +491,8 @@ class HeadlessMainTests(unittest.TestCase):
         _need_node()
         cls.payloads = {"python_builder": _python_payload("linux"), "js_script": _js_payload("linux")}
 
-    def _run(self, *, selected_model_packs, on_disk: bool, language: str = "en", env_mode=None):
+    def _run(self, *, selected_model_packs, on_disk: bool, language: str = "en", env_mode=None,
+             qt_bundled: bool = False):
         for label, payload in self.payloads.items():
             ns = _load(payload)
             with self.subTest(copy=label), tempfile.TemporaryDirectory() as td:
@@ -414,7 +500,7 @@ class HeadlessMainTests(unittest.TestCase):
                 project.config_path.write_text('{"external_dependencies": {}}', encoding="utf-8")
                 with _bundled_env(td, env_mode), _Isolated(project, release_package=True):
                     rc, logs = _run_main(ns, project, selected_model_packs=selected_model_packs, on_disk=on_disk,
-                                         language=language)
+                                         language=language, qt_bundled=qt_bundled)
                 yield label, rc, logs
 
     def test_iit_warn_headless_missing_template_returns_the_warning_exit_code(self) -> None:
@@ -459,6 +545,12 @@ class HeadlessMainTests(unittest.TestCase):
                 with self.subTest(copy=label, env=mode):
                     self.assertEqual(rc, EXIT_WARN, logs[-4:])
                     self.assertEqual(logs[-1], "Installation completed with warnings.")
+
+    def test_iit_warn_opus_qt_headless_template_in_the_qt_scripted_modules_folder_returns_zero(self) -> None:
+        for label, rc, logs in self._run(selected_model_packs=["pnl_cnn"], on_disk=False, qt_bundled=True):
+            with self.subTest(copy=label):
+                self.assertEqual(rc, 0, logs[-4:])
+                self.assertEqual(logs[-1], "Installation completed successfully.")
 
     def test_iit_warn_headless_pnl_cnn_not_selected_returns_zero(self) -> None:
         for label, rc, logs in self._run(selected_model_packs=["ddseg"], on_disk=False):

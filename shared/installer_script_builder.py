@@ -1306,13 +1306,13 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         return "The PNL CNN brain-mask template (IITmean_b0_256.nii.gz) was not installed: the download from nitrc.org failed. Before you generate a brain mask, open Environment and installation in SlicerDSpace to download it, or provide your own mask."
 
     def _pnl_template_roots(bundled_assets, asset_root):
-        # The folders where the plugin looks for the template: the bundled folder, the model assets folder, and the folder in
-        # SLICERDSPACE_BUNDLED_MODEL_ASSETS_ROOT (as shared.model_assets.bundled_model_asset_roots reads it; not imported).
-        roots = [bundled_assets] if Path(bundled_assets).is_dir() else []
+        # The folders where the plugin looks for the template: the model assets folder, and the bundled folder. As in
+        # shared.model_assets.bundled_model_asset_roots (not imported), a set SLICERDSPACE_BUNDLED_MODEL_ASSETS_ROOT
+        # replaces the in-extension bundled folder.
+        env_root = os.environ.get("SLICERDSPACE_BUNDLED_MODEL_ASSETS_ROOT") or ""
+        bundled = Path(env_root).expanduser() if env_root else Path(bundled_assets)
+        roots = [bundled] if bundled.is_dir() else []
         roots.append(asset_root)
-        env_root = str(os.environ.get("SLICERDSPACE_BUNDLED_MODEL_ASSETS_ROOT") or "").strip()
-        if env_root and Path(env_root).expanduser().is_dir():
-            roots.append(Path(env_root).expanduser())
         return roots
 
     def _apply_code_update(module_root, mirror="", proxy="", offline_dir="", log=print, language="en"):

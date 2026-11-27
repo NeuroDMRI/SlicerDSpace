@@ -133,6 +133,67 @@ class HelperTests(unittest.TestCase):
                 self.assertEqual(fn(True, SPEC, [first, second]), "")
                 self.assertEqual(fn(True, SPEC, [second, first]), "")
 
+    def _roots_each(self):
+        for label, ns in self.copies.items():
+            with self.subTest(copy=label):
+                self.assertIn("_pnl_template_roots", ns, "the helper is missing")
+                yield label, ns["_pnl_template_roots"]
+
+    def test_iit_warn_opus_p2_env_root_replaces_the_bundled_folder_like_the_plugin(self) -> None:
+        # Opus re-review P2 (backlog, 27 November 2026): shared.model_assets.bundled_model_asset_roots uses the folder in
+        # SLICERDSPACE_BUNDLED_MODEL_ASSETS_ROOT INSTEAD of the in-extension bundled-model-assets. The installer must
+        # check the same folders: the env folder (if it is a directory) or else the bundled folder, plus the asset root.
+        from shared.model_assets import bundled_model_asset_roots
+
+        with tempfile.TemporaryDirectory() as td:
+            ext = Path(td) / "ext"
+            bundled = ext / "bundled-model-assets"
+            bundled.mkdir(parents=True)
+            asset_root = Path(td) / "assets"
+            asset_root.mkdir()
+            env_dir = Path(td) / "env-bundled-assets"
+            env_dir.mkdir()
+            cases = {
+                "unset": None,
+                "env dir": str(env_dir),
+                "env missing": str(Path(td) / "no-such-dir"),
+                "empty": "",
+            }
+            for case, value in cases.items():
+                with patch.dict(os.environ):
+                    os.environ.pop(BUNDLED_ENV, None)
+                    if value is not None:
+                        os.environ[BUNDLED_ENV] = value
+                    plugin = {Path(p).resolve() for p in bundled_model_asset_roots(ext)}
+                    plugin.add(asset_root.resolve())
+                    for _label, fn in self._roots_each():
+                        with self.subTest(env=case):
+                            got = {Path(p).resolve() for p in fn(bundled, asset_root)}
+                            self.assertEqual(got, plugin)
+
+    def test_iit_warn_opus_p2_template_only_in_the_bundled_folder_warns_when_the_env_root_is_set(self) -> None:
+        # The failing input of the backlog row: the variable points at a folder without the template and the template is
+        # only in the in-extension folder. The plugin does not find it, so the installer must warn.
+        with tempfile.TemporaryDirectory() as td:
+            bundled = Path(td) / "ext" / "bundled-model-assets"
+            _put_template(bundled)
+            asset_root = Path(td) / "assets"
+            asset_root.mkdir()
+            env_dir = Path(td) / "env-bundled-assets"
+            env_dir.mkdir()
+            with patch.dict(os.environ):
+                os.environ[BUNDLED_ENV] = str(env_dir)
+                for label, ns in self.copies.items():
+                    with self.subTest(copy=label):
+                        roots = ns["_pnl_template_roots"](bundled, asset_root)
+                        self.assertEqual(ns["_pnl_template_warning"](True, SPEC, roots), WARN_EN)
+            with patch.dict(os.environ):
+                os.environ.pop(BUNDLED_ENV, None)
+                for label, ns in self.copies.items():
+                    with self.subTest(copy=label, env="unset"):
+                        roots = ns["_pnl_template_roots"](bundled, asset_root)
+                        self.assertEqual(ns["_pnl_template_warning"](True, SPEC, roots), "")
+
     def test_iit_warn_pnl_not_selected_or_no_spec_gives_no_warning(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             for _label, fn in self._each():

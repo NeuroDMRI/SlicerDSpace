@@ -1095,8 +1095,24 @@ class MetricTests(unittest.TestCase):
 
         clock = types.SimpleNamespace(sleep=counting_sleep, monotonic=time.monotonic)
         with patch.object(harness, 'threading', types.SimpleNamespace(Thread=threading.Thread, Event=LateEvent)), \
-                patch.dict(globals(), {'time': clock}):
+                patch.object(sys.modules[__name__], 'time', clock):
             self.test_sampler_stops_in_finally_and_writes_lines()
+
+    def test_sampler_reproduction_replaces_only_the_time_name(self):
+        """Backlog P2 (27 November 2026, Opus re-review): patch.dict on the module globals clears the whole module dict
+        on exit, so for a moment every test-module global is missing. The reproduction must replace only `time`."""
+        real_patch_dict, whole_module = patch.dict, []
+
+        def recording_patch_dict(in_dict, *args, **kwargs):
+            if in_dict is globals():
+                whole_module.append(in_dict)
+            return real_patch_dict(in_dict, *args, **kwargs)
+
+        real_time = sys.modules['time']
+        with patch.object(patch, 'dict', recording_patch_dict):
+            self.test_flaky_sampler_timer_fires_late()
+        self.assertEqual(len(whole_module), 0, 'patch.dict was called on the whole test-module namespace')
+        self.assertIs(globals()['time'], real_time)
 
 
 if __name__ == '__main__':

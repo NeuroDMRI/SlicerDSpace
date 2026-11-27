@@ -214,6 +214,20 @@ class GapGuiReinstallTests(unittest.TestCase):
         self.assertTrue(note.startswith("Restarting"), note)
         self.assertEqual((asked, restarts, state.scheduled), ([1], [1], True))
 
+    def test_reinstall_fix_p2_a_the_installed_here_flag_lasts_across_setup_dialogs_of_one_session(self) -> None:
+        # Backlog "Opus (reinstall fix) P2-1": the module loads once per 3D Slicer session, the state dict once per dialog.
+        ns = self._ns()
+        asked, restarts = [], []
+        ask = lambda: asked.append(1) or True
+        restart = lambda: restarts.append(1) or True
+        state = FakeSlicerState(installed=True)
+        em = state.start()
+        ns["_SESSION_INSTALLED"][0] = True  # what downloads_ready does in the first dialog, next to state["installed_here"]
+        second_dialog_state = {}
+        note = ns["_installed_copy_note"](second_dialog_state, em, ask, restart, lambda _m: None)
+        self.assertIsNone(note)
+        self.assertEqual((asked, restarts, state.scheduled), ([], [], False))
+
     def test_opus_r2_p2_c_on_start_uses_the_note_and_downloads_ready_records_the_install(self) -> None:
         source = self.source
         start = source.index("    def _on_start():")

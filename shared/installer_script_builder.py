@@ -1063,7 +1063,11 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             "                if (c / 'SlicerDSpace.py').is_file():",
             "                    ext_root = str(c.parents[2].resolve())",
             "                    break",
-            "        receipt.write_text(json.dumps({'installed': ok, 'extension_installed': bool(em.isExtensionInstalled('SlicerDSpace')), 'module_paths': paths, 'ext_root': ext_root, 'needs_remap': needs_remap, 'scheduled_uninstall_cancelled': sched_cancelled, 'scheduled_uninstall_left': sched_left, 'rev': rev, 'target_subdir': tsub, 'slicer_os': sos, 'slicer_arch': sarch, 'slicer_major': maj, 'slicer_minor': minv, 'py_minor': f'{sys.version_info[0]}.{sys.version_info[1]}'}), encoding='utf-8')",
+            "        try:",
+            "            ext_now = bool(em.isExtensionInstalled('SlicerDSpace'))",
+            "        except Exception:",
+            "            ext_now = None",
+            "        receipt.write_text(json.dumps({'installed': ok, 'extension_installed': ext_now, 'module_paths': paths, 'ext_root': ext_root, 'needs_remap': needs_remap, 'scheduled_uninstall_cancelled': sched_cancelled, 'scheduled_uninstall_left': sched_left, 'rev': rev, 'target_subdir': tsub, 'slicer_os': sos, 'slicer_arch': sarch, 'slicer_major': maj, 'slicer_minor': minv, 'py_minor': f'{sys.version_info[0]}.{sys.version_info[1]}'}), encoding='utf-8')",
             "        slicer.app.exit(0 if ok else 1)",
             "    except Exception as exc:",
             "        ext_installed = None",
@@ -1094,14 +1098,22 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             proc = subprocess.run([*prefix, *base_cmd, phase], env=env, cwd=str(receipt.parent))
             if not receipt.is_file():
                 raise RuntimeError(f"Slicer extension installation failed with exit code {proc.returncode}")
-            result = json.loads(receipt.read_text(encoding="utf-8"))
+            try:
+                result = json.loads(receipt.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise RuntimeError(f"Slicer extension installation left an unreadable receipt (exit code {proc.returncode}): {exc}") from exc
+            if not isinstance(result, dict):
+                raise RuntimeError(f"Slicer extension installation left an unreadable receipt (exit code {proc.returncode}): it is not a JSON object")
             if result.get("phase") == "scheduled_uninstall":
                 if proc.returncode != 0:
                     _log(f"[WARN] 3D Slicer exited with code {proc.returncode} after it scheduled the old SlicerDSpace for removal; the installer goes on with the second start.")
                 return result
-            if proc.returncode != 0 or not result.get("installed"):
-                raise RuntimeError(result.get("error") or f"Slicer ExtensionManager rejected archive: {archive_path}")
-            return result
+            if result.get("installed"):
+                # The helper writes this receipt, then exits at once, so a non-zero code after installed: true comes from 3D Slicer's shutdown.
+                if proc.returncode != 0:
+                    _log(f"[WARN] 3D Slicer exited with code {proc.returncode} after it installed SlicerDSpace; the installer goes on.")
+                return result
+            raise RuntimeError(result.get("error") or f"Slicer ExtensionManager rejected archive: {archive_path}")
 
         try:
             data = _launch("1")

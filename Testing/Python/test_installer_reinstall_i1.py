@@ -23,7 +23,9 @@ class FakeSlicerState:
 
     def __init__(self, installed: bool = False, scheduled: bool = False, locked: bool = False,
                  cancel_works: bool = True, schedule_after_install: bool = False,
-                 exit_codes: dict = None, install_raises: bool = False, install_fails: bool = False, skip_helper_starts: tuple = ()) -> None:
+                 exit_codes: dict = None, install_raises: bool = False, install_fails: bool = False, skip_helper_starts: tuple = (),
+                 truncate_receipt_starts: tuple = (), probe_raises_after_install: bool = False,
+                 receipt_override: str = None) -> None:
         self.installed = installed
         self.scheduled = scheduled
         self.locked = locked  # a Windows file lock: the start-up removal cannot delete the files
@@ -33,6 +35,10 @@ class FakeSlicerState:
         self.install_fails = install_fails  # installExtension returns False without raising
         self.install_raises = install_raises  # installExtension raises (a failed pass 2 after the start-up removal)
         self.skip_helper_starts = tuple(skip_helper_starts)  # starts where the helper never runs and writes no receipt
+        self.truncate_receipt_starts = tuple(truncate_receipt_starts)  # starts whose receipt is cut short after the helper wrote it
+        self.probe_raises_after_install = probe_raises_after_install  # isExtensionInstalled raises once installExtension returned True
+        self.receipt_override = receipt_override  # replaces the receipt text after every helper start
+        self.receipts = []  # the receipt text each helper start wrote, as written (the installer deletes the folder later)
         self.starts = 0
         self.cancelled = []
         self.history = []
@@ -54,9 +60,13 @@ class FakeEm:
     def __init__(self, state: FakeSlicerState) -> None:
         self.state = state
         self.loaded = state.installed  # S2: everything installed at start-up is marked loaded
+        self.install_returned_true = False
 
     def setInteractive(self, value): pass
-    def isExtensionInstalled(self, name): return self.state.installed
+    def isExtensionInstalled(self, name):
+        if self.state.probe_raises_after_install and self.install_returned_true:
+            raise RuntimeError("fake isExtensionInstalled failure after the install")
+        return self.state.installed
     def scheduleExtensionForUninstall(self, name): self.state.scheduled = True
     def uninstallScheduledExtensions(self):
         if self.state.scheduled and not self.loaded and not self.state.locked:  # S3
@@ -76,6 +86,7 @@ class FakeEm:
         if self.state.installed:  # S4
             return False
         self.state.installed = True
+        self.install_returned_true = True
         if self.state.schedule_after_install:
             self.state.scheduled = True
         return True
@@ -126,6 +137,13 @@ def _run_installer_function(ns: dict, state: FakeSlicerState, tmp: Path, slicer_
                 exec(compile(Path(helper).read_text(encoding="utf-8"), helper, "exec"), {"__name__": "helper"})
         finally:
             sys.argv = saved_argv
+        receipt_file = Path(script_args[1])
+        if receipt_file.is_file():
+            state.receipts.append(receipt_file.read_text(encoding="utf-8"))
+            if state.starts in state.truncate_receipt_starts:
+                receipt_file.write_text(state.receipts[-1][:12], encoding="utf-8")
+            if state.receipt_override is not None:
+                receipt_file.write_text(state.receipt_override, encoding="utf-8")
         return subprocess.CompletedProcess(orig_cmd, state.exit_codes.get(state.starts, seen.get("code", 1)))
 
     archive = tmp / "ext.zip"
@@ -340,6 +358,74 @@ class I1ReinstallTests(_InstallerCopies, unittest.TestCase):
         for state, (calls, logs, error) in self._each(installed=False, install_raises=True):
             self.assertEqual(error, "fake installExtension failure")
             self.assertEqual(state.starts, 1)
+
+    # Backlog "27 November 2026: installer reinstall message fixes", rows Opus (reinstall fix) P2-2, Codex P1 x2.
+    def test_reinstall_fix_p2_b_pass_two_exit_code_after_a_good_install_does_not_stop_the_installer(self) -> None:
+        for state, (calls, logs, error) in self._each(installed=True, exit_codes={2: 1}, schedule_after_install=True):
+            self.assertIsNone(error)
+            self.assertEqual(state.starts, 2)
+            self.assertTrue(state.installed)
+            self.assertTrue(any(line.startswith("[WARN] 3D Slicer exited with code 1 after it installed SlicerDSpace")
+                                for line in logs), logs)
+            # The code after _launch ran: its schedule-cancel warning is logged.
+            self.assertTrue(any("cancelled that schedule" in line for line in logs), logs)
+
+    def test_reinstall_fix_p2_b_fresh_install_exit_code_after_a_good_install_does_not_stop_the_installer(self) -> None:
+        for state, (calls, logs, error) in self._each(installed=False, exit_codes={1: 1}, schedule_after_install=True):
+            self.assertIsNone(error)
+            self.assertEqual(state.starts, 1)
+            self.assertTrue(state.installed)
+            self.assertTrue(any(line.startswith("[WARN] 3D Slicer exited with code 1 after it installed SlicerDSpace")
+                                for line in logs), logs)
+            self.assertTrue(any("cancelled that schedule" in line for line in logs), logs)
+
+    def test_reinstall_fix_p2_b_no_exit_code_warning_when_the_install_exits_with_zero(self) -> None:
+        for state, (calls, logs, error) in self._each(installed=True):
+            self.assertIsNone(error)
+            self.assertFalse(any("after it installed SlicerDSpace" in line for line in logs), logs)
+
+    def test_reinstall_fix_p2_b_a_rejected_install_with_a_non_zero_exit_still_fails(self) -> None:
+        for state, (calls, logs, error) in self._each(installed=False, install_fails=True):
+            self.assertIn("rejected", error)
+            self.assertFalse(any("after it installed SlicerDSpace" in line for line in logs), logs)
+
+    def test_reinstall_fix_p2_c_truncated_pass_two_receipt_gets_the_may_have_removed_note(self) -> None:
+        for state, (calls, logs, error) in self._each(installed=True, truncate_receipt_starts=(2,)):
+            self.assertIsNotNone(error)
+            self.assertIn("receipt", error)
+            self.assertIn("exit code 0", error)
+            self.assertIn("3D Slicer may have removed the previous SlicerDSpace when it started for the second pass; "
+                          "run the installer again if SlicerDSpace is missing.", error)
+
+    def test_reinstall_fix_p2_c_truncated_pass_one_receipt_is_a_runtime_error_without_a_suffix(self) -> None:
+        for state, (calls, logs, error) in self._each(installed=True, truncate_receipt_starts=(1,)):
+            self.assertIsNotNone(error)
+            self.assertIn("receipt", error)
+            self.assertIn("exit code 0", error)
+            self.assertNotIn("may have removed", error)
+            self.assertNotIn("was removed when 3D Slicer started", error)
+            self.assertEqual(state.starts, 1)
+
+    def test_reinstall_fix_p2_c_truncated_fresh_install_receipt_is_a_runtime_error_without_a_suffix(self) -> None:
+        for state, (calls, logs, error) in self._each(installed=False, truncate_receipt_starts=(1,)):
+            self.assertIsNotNone(error)
+            self.assertIn("receipt", error)
+            self.assertNotIn("may have removed", error)
+            self.assertNotIn("was removed when 3D Slicer started", error)
+
+    def test_reinstall_fix_p2_c_a_receipt_that_is_not_a_json_object_is_a_runtime_error(self) -> None:
+        for state, (calls, logs, error) in self._each(installed=False, receipt_override="[1, 2]"):
+            self.assertIsNotNone(error)
+            self.assertIn("receipt", error)
+            self.assertNotIn("may have removed", error)
+
+    def test_reinstall_fix_p2_d_a_failing_probe_after_a_good_install_keeps_ok_and_writes_null(self) -> None:
+        for installed in (False, True):
+            for state, (calls, logs, error) in self._each(installed=installed, probe_raises_after_install=True):
+                self.assertIsNone(error)
+                self.assertTrue(state.installed)
+                self.assertIn('"installed": true', state.receipts[-1])
+                self.assertIn('"extension_installed": null', state.receipts[-1])
 
 
 if __name__ == "__main__":

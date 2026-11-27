@@ -97,6 +97,42 @@ RETIRED_MODULES = (
 RETIRED_IMPORT_ROOTS = ("surface", "parcellation", "segmentation")
 
 
+def _workflow_trigger_violations(name: str, text: str) -> list[str]:
+    """Return the triggers that break the manual-only rule for one workflow file (empty list: the file obeys it)."""
+    import re
+
+    events = re.search(r"(?ms)^on:\n(.*?)(?=^[^\s#]|\Z)", text)  # a column-0 comment does not end the block
+    if events is None:
+        return ["no 'on:' block"]
+    block = events.group(1)
+    violations = [] if "workflow_dispatch:" in block else ["no workflow_dispatch"]
+    lines = block.splitlines()
+    for index, line in enumerate(lines):
+        event = re.match(r"  (push|pull_request|schedule|workflow_run|release):(.*)$", line)
+        if event is None:
+            continue
+        if event.group(1) == "push" and name == "pages.yml":
+            continue  # Pages deploys on every push to main.
+        if event.group(1) == "push" and name == "repackage-release.yml" and not event.group(2).strip():
+            # The release workflow may run on a pushed tag (5b6cb473), but on no branch or path push.
+            # Every line at indent 3-4 is a direct key of push (quoted or not); comments and blank lines are skipped,
+            # and same-indent "- item" lines are list values. Accept only when the keys are exactly ["tags"].
+            keys = []
+            for sub in lines[index + 1:]:
+                stripped = sub.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                indent = len(sub) - len(sub.lstrip(" "))
+                if indent <= 2:
+                    break
+                if indent <= 4 and not stripped.startswith("-"):
+                    keys.append(stripped.split(":", 1)[0].strip().strip("\"'"))
+            if keys == ["tags"]:
+                continue
+        violations.append(event.group(1) + ":")
+    return violations
+
+
 class RepositoryStructureTest(unittest.TestCase):
     def test_anatomical_sources_share_one_namespace(self) -> None:
         self.assertTrue((REPO_ROOT / "anatomy/__init__.py").is_file())
@@ -192,15 +228,40 @@ class RepositoryStructureTest(unittest.TestCase):
             self.assertIn("-r scripts/dev/requirements-ci.txt", text)
 
     def test_actions_workflows_are_manual_only(self) -> None:
-        import re
         for workflow in (REPO_ROOT / ".github/workflows").glob("*.yml"):
-            text = workflow.read_text(encoding="utf-8")
-            events = re.search(r"(?ms)^on:\n(.*?)(?=^\S|\Z)", text)
-            self.assertIsNotNone(events, workflow.name)
-            self.assertIn("workflow_dispatch:", events.group(1), workflow.name)
-            forbidden = r"(?m)^  (pull_request|schedule|workflow_run|release):" if workflow.name == "pages.yml" else r"(?m)^  (push|pull_request|schedule|workflow_run|release):"
-            block = events.group(1)
-            self.assertNotRegex(block, forbidden)
+            self.assertEqual(_workflow_trigger_violations(workflow.name, workflow.read_text(encoding="utf-8")), [],
+                             workflow.name)
+
+    def test_manual_only_rule_allows_only_a_tag_push_in_the_release_workflow(self) -> None:
+        # Finding WORKFLOW-TAG-PUSH (27 November 2026): 5b6cb473 added a tag push to repackage-release.yml on purpose
+        # (release on a v1.*/v2.*/assets tag); the rule allows that one tag-only push and nothing wider.
+        def on(block: str) -> str:
+            return "name: x\non:\n" + block + "  workflow_dispatch:\n\njobs: {}\n"
+
+        tags = "  push:\n    tags:\n      - \"v1.*\"\n"
+        self.assertEqual(_workflow_trigger_violations("repackage-release.yml", on(tags)), [])
+        self.assertEqual(_workflow_trigger_violations("pages.yml", on("  push:\n    branches: [main]\n")), [])
+        for name, block, expected in (
+            ("other.yml", tags, "push:"),
+            ("repackage-release.yml", "  push:\n    branches: [main]\n", "push:"),
+            ("repackage-release.yml", tags + "    paths:\n      - \"docs/**\"\n", "push:"),
+            ("repackage-release.yml", "  push:\n", "push:"),
+            ("repackage-release.yml", tags + "  schedule:\n    - cron: \"0 0 * * *\"\n", "schedule:"),
+            # Review fix round (Codex P1 x2, Opus P2-1): quoted keys, a space before the colon, and a comment line
+            # inside the push block must not hide a second filter.
+            ("repackage-release.yml", tags + "    \"branches\": [main]\n", "push:"),
+            ("repackage-release.yml", tags + "    'paths': [docs]\n", "push:"),
+            ("repackage-release.yml", tags + "    paths : [docs]\n", "push:"),
+            ("repackage-release.yml", tags + "  # branch filter\n    branches: [main]\n", "push:"),
+            ("repackage-release.yml", tags + "# branch filter\n    branches: [main]\n", "push:"),
+        ):
+            with self.subTest(name=name, block=block):
+                self.assertIn(expected, _workflow_trigger_violations(name, on(block)))
+        # Comments, blank lines and same-indent list items inside the tag push stay allowed.
+        allowed = "  push:\n    # release tags\n    tags:\n    - \"v1.*\"\n\n      - \"assets\"\n"
+        self.assertEqual(_workflow_trigger_violations("repackage-release.yml", on(allowed)), [])
+        # Opus P2-2: this case keeps workflow_dispatch, so only the push can make it fail.
+        self.assertIn("push:", _workflow_trigger_violations("other.yml", on("  push:\n")))
 
     def test_cache_settings_preserve_scientific_evidence(self) -> None:
         project = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")

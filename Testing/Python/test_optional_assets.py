@@ -229,7 +229,10 @@ class OptionalAssetsTests(unittest.TestCase):
         from scripts.download_model_assets import AssetPlan
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / 'assets'
-            with patch.object(setup_optional_assets, 'download_asset_plan') as download, \
+            # The published pnl_cnn pack has no IIT template, so the release-pack step returns False and prepare()
+            # falls back to download_asset_plan, the step this test checks. Patch it: no network (FLAKY-PNL-PLAN).
+            with patch.object(setup_optional_assets, '_try_prepare_from_release_pack', return_value=False), \
+                    patch.object(setup_optional_assets, 'download_asset_plan') as download, \
                     patch.object(setup_optional_assets, 'verified_resource_directory', side_effect=[None, root / 'brain_mask/pnl_cnn_torch']), \
                     patch.object(setup_optional_assets, 'verify_asset_plan', return_value={'ok': True}):
                 result = setup_optional_assets.prepare(['pnl-cnn'], asset_root=root, execute=True, accept_terms=True)
@@ -238,6 +241,23 @@ class OptionalAssetsTests(unittest.TestCase):
             self.assertIsInstance(plan, AssetPlan)
             self.assertFalse(any(p.endswith('.h5') for p in plan.required_paths))
             self.assertEqual(sum(p.endswith('.pt') for p in plan.required_paths), 3)
+
+    # Finding FLAKY-PNL-PLAN (27 November 2026): the test above did not patch the release-pack step, so prepare()
+    # downloaded the published 200 MB pnl_cnn pack from GitHub. When that download worked, the extra
+    # verified_resource_directory calls used up the two-item side_effect list and the test raised StopIteration;
+    # when it failed, the test passed. These two tests fix the download outcome without network access.
+    def _run_pnl_plan_test_with_release_pack_download(self, download_side_effect):
+        with patch.object(setup_optional_assets, 'load_network_settings', return_value={}), \
+                patch.object(setup_optional_assets, 'download_file_verified', side_effect=download_side_effect) as fetch, \
+                patch.object(setup_optional_assets, 'extract_modular_pack'):
+            self.test_pnl_preparation_download_plan_never_requests_legacy_hdf5()
+        fetch.assert_not_called()
+
+    def test_flaky_pnl_plan_passes_when_the_release_pack_download_works(self):
+        self._run_pnl_plan_test_with_release_pack_download(None)
+
+    def test_flaky_pnl_plan_passes_when_the_release_pack_download_fails(self):
+        self._run_pnl_plan_test_with_release_pack_download(OSError('network down'))
 
     def test_pnl_prefix_import_selects_torch_without_reading_legacy_hdf5(self):
         from scripts import import_external_resources as importer

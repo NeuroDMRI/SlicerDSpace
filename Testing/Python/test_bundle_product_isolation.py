@@ -37,6 +37,56 @@ class BundleIsolationTest(unittest.TestCase):
             archive = Path(current['revalidation']['previous_records'])
             self.assertEqual(json.loads((archive / qc.name).read_text())['status'], 'completed')
 
+    def test_update_qc_refuses_running_manifest_opus_p2_wma_audit(self):
+        """Backlog row 'Opus P2 (WMA audit)': --update-qc must not turn a running manifest into completed."""
+        import contextlib
+        import io
+        from scripts.audit_bundle_products import update_qc_records
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / 'wma_org_atlas_manifest.json'
+            qc = root / 'wma_org_atlas_qc.json'
+            report = root / 'audit.json'
+            manifest.write_text(json.dumps({'kind': 'wma_org_atlas', 'executed': True, 'status': 'running'}))
+            qc.write_text(json.dumps({'status': 'running'}))
+            report.write_text('{}')
+            before = (manifest.read_text(), qc.read_text())
+            result = dict(checks={'current_output_contract': True, 'geometry': True},
+                          current_contract_error=None, source_sha256='fixture', output_summary={})
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                returned = update_qc_records(manifest, result, report)
+            self.assertIsNone(returned)
+            self.assertIn('Refused', err.getvalue())
+            self.assertEqual((manifest.read_text(), qc.read_text()), before)
+            self.assertEqual(json.loads(manifest.read_text())['status'], 'running')
+            self.assertEqual(sorted(p.name for p in root.iterdir()), sorted([manifest.name, qc.name, report.name]))
+
+    def test_update_qc_refusal_gives_a_non_zero_exit_opus_p2_wma_audit_exit(self):
+        """Opus P2 (fix round): main() must not exit 0 when --update-qc refused a running manifest."""
+        import contextlib
+        import io
+        import sys
+        from scripts import audit_bundle_products
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = root / 'wma_org_atlas_manifest.json'
+            qc = root / 'wma_org_atlas_qc.json'
+            report = root / 'out' / 'audit.json'
+            manifest.write_text(json.dumps({'kind': 'wma_org_atlas', 'executed': True, 'status': 'running'}))
+            qc.write_text(json.dumps({'status': 'running'}))
+            result = dict(status='ok', input_streamlines=1, current_contract_error=None, audit_seconds=0.,
+                          checks={'current_output_contract': True, 'geometry': True},
+                          source_sha256='fixture', output_summary={})
+            argv = ['audit_bundle_products.py', '--manifest', str(manifest), '--report', str(report)]
+            with mock.patch.object(audit_bundle_products, 'audit', return_value=result), \
+                    contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                with mock.patch.object(sys, 'argv', argv):
+                    self.assertEqual(audit_bundle_products.main(), 0)  # without --update-qc, passing checks exit 0
+                with mock.patch.object(sys, 'argv', argv + ['--update-qc']):
+                    self.assertEqual(audit_bundle_products.main(), 2)
+            self.assertEqual(json.loads(manifest.read_text())['status'], 'running')
+
     def test_legacy_vtk_geometry_not_header(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'bundle.vtk'

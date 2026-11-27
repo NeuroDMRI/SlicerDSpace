@@ -35,7 +35,7 @@ from shared.qc_text_summary import write_qc_text_summaries
 from shared.validation import InputValidationConfig, validate_subject_inputs
 from shared.environment import resolve_auto_torch_device
 from shared.external_process import interpreter_path
-from shared.model_assets import model_asset_path
+from shared.model_assets import ModelAssetIntegrityError, ModelAssetOtherReleaseError, model_asset_path
 from shared.output_contracts import outputs_readable, tractography_readable
 
 
@@ -377,7 +377,13 @@ def explain_stage_error(error: BaseException, output_root: Optional[Path] = None
         return f"Output disk is full: free space on {where} and run again."
     if "out of memory" in lowered and ("cuda" in lowered or "gpu" in lowered or type(error).__name__ == "OutOfMemoryError"):
         return "The GPU ran out of memory. Free GPU memory or set the device to CPU, then run again."
-    if type(error).__name__ in {"ModelAssetIncompleteError", "ModelAssetIntegrityError"}:
+    # Opus P2 (other-release message): a bundled file of another release has its own sentence ("damaged" is wrong
+    # for it); the names stay as a fallback for a harness that reloads ``shared``.
+    if isinstance(error, ModelAssetOtherReleaseError) or type(error).__name__ == "ModelAssetOtherReleaseError":
+        return ("A bundled model file is from another release than this version of SlicerDSpace. "
+                "Use 'Install models' to download the current files, then run again.")
+    if isinstance(error, ModelAssetIntegrityError) or type(error).__name__ in {
+            "ModelAssetIncompleteError", "ModelAssetIntegrityError"}:
         return "A model file is missing or damaged. Use 'Install models' to download it again."
     command = _missing_command_name(error)
     if command:

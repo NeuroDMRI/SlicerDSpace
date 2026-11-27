@@ -96,6 +96,29 @@ class SharedModuleLogicTest(unittest.TestCase):
                 logic.module_dir / 'surface/template/100HCP-population-mean-T2-1mm.nii.gz',
             )
 
+    def test_opus_p2_integrity_error_of_a_surface_resource_does_not_block_logic_initialization(self) -> None:
+        # Opus P2 (bundled fallback, DDSurfer unverified): the surface resolvers now verify a bundled file and can
+        # raise ModelAssetIntegrityError. With required=False (module start) that reads as "not available".
+        from shared.model_asset_integrity import ModelAssetIntegrityError
+
+        class DummyLogic(SharedLogicMixin):
+            pass
+
+        def refuse(*_args, **_kwargs):
+            raise ModelAssetIntegrityError("bundled file does not match its recorded sha256")
+
+        with (
+            patch("anatomy.surface.pipeline._resolve_resource", side_effect=refuse),
+            patch.dict(os.environ, {"DDSURFER_TEMPLATE_DIR": "", "DDSURFER_CHECKPOINT_DIR": "",
+                                    "DDSURFER_REGISTRATION_ATLAS": ""}),
+        ):
+            logic = DummyLogic()
+            logic._initialize_shared_logic_state()
+            self.assertEqual(logic.template_dir, logic.module_dir / 'surface/template')
+            self.assertEqual(logic.checkpoint_root, logic.module_dir / 'surface/weights')
+            with self.assertRaises(ModelAssetIntegrityError):  # a run that needs the file still gets the error
+                logic._resolve_template_dir(required=True)
+
     def test_vtk_tractogram_falls_back_to_model_node_without_slicerdmri(self) -> None:
         class FakeNode:
             def __init__(self) -> None:

@@ -254,6 +254,24 @@ class UIEnvironmentPanelTest(unittest.TestCase):
                 self.assertNotIn("Suggested fix", text)  # b2-os decision 4: no "Suggested fix" equal to the reason
                 self.assertNotIn("建议操作", text)
 
+        # Opus P2 (item text of a path row): the "is incomplete" folder message has the same shape and prints once.
+        from shared.model_assets import incomplete_asset_message
+
+        incomplete = incomplete_asset_message(Path("/assets/segmentation/weights"), ["dti_coronal.pt (missing)"])
+        self.assertIn("is incomplete", incomplete)
+        incomplete_row = DependencyStatus(
+            key="path:ddseg_weights", kind="path", label="DDSeg weights directory", status="missing",
+            required=True, targets=("segmentation",), install_hint=incomplete,
+            details={"path": "/x/placeholder", "path_kind": "nonempty_dir", "notes": incomplete},
+        )
+        for zh in (False, True):
+            with self.subTest("incomplete folder", zh=zh):
+                text = environment_item_text(incomplete_row, zh=zh)
+                self.assertEqual(text.count(incomplete), 1, text)
+                self.assertIn("Install models", text)
+                self.assertNotIn("Suggested fix", text)
+                self.assertNotIn("建议操作", text)
+
         # Unchanged: a hint that differs from the notes is the "Suggested fix"; the notes of a path row stay out.
         other = environment_item_text(row("Choose a model asset root."))
         self.assertIn("Suggested fix: Choose a model asset root.", other)

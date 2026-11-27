@@ -243,6 +243,10 @@ def update_qc_records(manifest_path, result, report_path):
     manifest = json.loads(manifest_path.read_text())
     if manifest.get('kind') != 'wma_org_atlas' or not manifest.get('executed'):
         raise ValueError('QC updates currently support only executed WMA records.')
+    if manifest.get('status') == 'running':
+        # Opus P2 (WMA audit): a second writer of 'completed' on a killed-rerun folder would let _wma_complete accept old products.
+        print(f'Refused --update-qc: {manifest_path} has status "running" (a killed or unfinished run); nothing was written.', file=sys.stderr)
+        return None
     qc_path = manifest_path.with_name('wma_org_atlas_qc.json')
     qc = json.loads(qc_path.read_text())
     passed = all(result['checks'].values())
@@ -304,9 +308,10 @@ def main():
         }
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(result, indent=2) + '\n')
-    if args.update_qc:
-        update_qc_records(args.manifest, result, args.report)
+    refused = args.update_qc and update_qc_records(args.manifest, result, args.report) is None
     print(json.dumps({k: result[k] for k in ('status', 'input_streamlines', 'current_contract_error', 'checks', 'audit_seconds')}, indent=2))
+    if refused:
+        return 2  # Opus P2 (fix round): the refusal is reported on stderr; the exit code must not say success
     return 0 if all(result['checks'].values()) else 1
 
 

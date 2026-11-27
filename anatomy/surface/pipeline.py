@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from shared import find_subject_root, inspect_subject_directory
+from shared import model_assets as _model_assets
 from shared.model_assets import model_asset_candidates
 from .backend_bridge import BACKEND_ROOT, native_products, run_backend, runtime_info, sha256, upstream_record, python_executable
 
@@ -60,11 +61,37 @@ def _resolve_resource(explicit, env_key, relative, required_child=None, model_as
         return Path(explicit).expanduser().resolve()
     if os.environ.get(env_key):
         return Path(os.environ[env_key]).expanduser().resolve()
-    candidates = model_asset_candidates(relative, repo_root=Path(__file__).resolve().parents[2],
-                                        explicit_root=model_assets_dir)
-    for candidate in candidates:
-        if (candidate / required_child if required_child else candidate).exists():
+    # Codex P1 (fix round): walk the same candidates as before (configured root, per-user default root, bundled copy,
+    # checkout) so the environment doctor and the run agree. Opus P2 (bundled fallback): every candidate that is not
+    # the user's own configured root passes the sha256 check of model_asset_path; the first that verifies is used.
+    # A file that fails its sha256 is never used: when no candidate verifies, the first failure is raised.
+    repo_root = Path(__file__).resolve().parents[2]
+    relative_depth = len(Path(relative).parts)
+    configured = bool(model_assets_dir is not None and str(model_assets_dir).strip()) or bool(
+        os.environ.get(_model_assets.MODEL_ASSETS_ENV))
+    manifest_records = _model_assets._load_asset_manifest_records(repo_root)
+    bundled_roots = _model_assets.bundled_model_asset_roots(repo_root)
+    first_error = partial = None
+    for index, candidate in enumerate(model_asset_candidates(relative, repo_root=repo_root, explicit_root=model_assets_dir)):
+        if not (candidate / required_child if required_child else candidate).exists():
+            continue
+        root = candidate.parents[relative_depth - 1]
+        if index == 0 and configured:
+            # The configured root is the user's own choice and is not verified (as in model_asset_path). A folder
+            # left by an interrupted download is skipped when a verified copy exists later in the order.
+            if candidate.is_dir() and _model_assets.incomplete_manifest_files(root, relative, manifest_records):
+                partial = candidate
+                continue
             return candidate.resolve()
+        if _model_assets._has_verified_required_asset(root, (relative,), manifest_records=manifest_records):
+            return candidate.resolve()
+        if first_error is None:
+            first_error = _model_assets._unverified_asset_error(
+                root, relative, candidate, manifest_records, bundled=root in bundled_roots)
+    if partial is not None:
+        return partial.resolve()
+    if first_error is not None:
+        raise first_error
     return None
 
 

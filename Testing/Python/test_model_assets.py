@@ -950,6 +950,94 @@ class ModelAssetRootSecurityTest(unittest.TestCase):
                 configured / "segmentation" / "weights",
             )
 
+    # Opus P2 (bundled fallback), row "partial configured folder": an interrupted download in the configured root
+    # must not hide a complete, verified bundled copy.
+
+    def _partial_configured_layout(self, tmp: str, *, bundled: str = "complete") -> tuple[Path, Path]:
+        """Manifest of two DDSeg weights; the configured root holds one of them; the bundled copy is ``complete``,
+        ``partial`` (one file) or ``tampered`` (both files, one with the wrong content)."""
+        import hashlib
+
+        tmp_path = Path(tmp).resolve()
+        configured = tmp_path / "configured-assets"
+        repo_root = tmp_path / "repo"
+        files = {"dti_axial.pt": b"axial weights", "dti_coronal.pt": b"coronal weights"}
+        self._write_manifest(repo_root, {
+            f"segmentation/weights/{name}": {"sha256": hashlib.sha256(data).hexdigest(), "size_bytes": len(data)}
+            for name, data in files.items()
+        })
+        own = configured / "segmentation" / "weights"
+        own.mkdir(parents=True)
+        (own / "dti_axial.pt").write_bytes(files["dti_axial.pt"])
+        shipped = repo_root / "bundled-model-assets" / "segmentation" / "weights"
+        shipped.mkdir(parents=True)
+        (shipped / "dti_axial.pt").write_bytes(files["dti_axial.pt"])
+        if bundled == "complete":
+            (shipped / "dti_coronal.pt").write_bytes(files["dti_coronal.pt"])
+        elif bundled == "tampered":
+            (shipped / "dti_coronal.pt").write_bytes(b"coronal xeights")  # same size, wrong content
+        return configured, repo_root
+
+    def test_opus_p2_partial_configured_folder_falls_back_to_the_complete_bundled_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, self._without_asset_env():
+            configured, repo_root = self._partial_configured_layout(tmp)
+            expected = repo_root / "bundled-model-assets" / "segmentation" / "weights"
+
+            with self.subTest("run option"):
+                self.assertEqual(
+                    self.model_assets_module.model_asset_path(
+                        "segmentation/weights", repo_root=repo_root, explicit_root=configured),
+                    expected,
+                )
+            with self.subTest("environment variable"):
+                os.environ[self.model_assets_module.MODEL_ASSETS_ENV] = str(configured)
+                self.assertEqual(
+                    self.model_assets_module.model_asset_path("segmentation/weights", repo_root=repo_root),
+                    expected,
+                )
+
+    def test_opus_p2_partial_configured_folder_stays_the_answer_when_no_bundled_copy_is_complete(self) -> None:
+        # Neither copy is complete: model_asset_path returns the configured folder (no bundled error), and the
+        # environment check reports that folder as incomplete, as before.
+        import shutil
+
+        from shared.environment import _model_asset_spec_path
+
+        for label in ("no bundled copy", "partial bundled copy", "tampered bundled copy"):
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp, self._without_asset_env():
+                configured, repo_root = self._partial_configured_layout(
+                    tmp, bundled="tampered" if label == "tampered bundled copy" else "partial")
+                if label == "no bundled copy":
+                    shutil.rmtree(repo_root / "bundled-model-assets")
+                own = configured / "segmentation" / "weights"
+                self.assertEqual(
+                    self.model_assets_module.model_asset_path(
+                        "segmentation/weights", repo_root=repo_root, explicit_root=configured),
+                    own,
+                )
+                config = mock.Mock(repo_root=repo_root, model_assets_dir=configured)
+                _path, _common, notes = _model_asset_spec_path(config, "segmentation/weights")
+                self.assertIn("is incomplete", notes)
+                self.assertIn(str(own), notes)
+                self.assertIn("dti_coronal.pt (missing)", notes)
+
+    def test_opus_p2_user_root_file_that_agrees_with_its_own_checksum_list_keeps_the_sha256_mismatch_text(self) -> None:
+        # Guard (other-release message, settled decision): "is from another release" is for the extension's own
+        # bundled-model-assets only. The same layout in the per-user root keeps the mismatch wording (bundled=False).
+        import shutil
+
+        module = self.model_assets_module
+        for relative in ("surface/weights/ddsurfer_lh_wm.pt", "surface/weights/SHA256SUMS"):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as tmp, self._without_asset_env():
+                user_root, repo_root = self._other_release_layout(tmp)
+                shutil.move(str(repo_root / "bundled-model-assets" / "surface"), str(user_root / "surface"))
+                with mock.patch.object(module, "default_user_model_assets_root", return_value=user_root), \
+                        self.assertRaises(module.ModelAssetIntegrityError) as raised:
+                    module.model_asset_path(relative, repo_root=repo_root)
+                self.assertNotIsInstance(raised.exception, module.ModelAssetOtherReleaseError)
+                self.assertIn("does not match its recorded sha256", str(raised.exception))
+                self.assertNotIn("is from another release", str(raised.exception))
+
     def test_directory_with_no_manifest_coverage_falls_back_to_plain_existence(self) -> None:
         # A required directory the manifest does not track at all (nothing
         # recorded to verify against) keeps the old, best-effort behavior.

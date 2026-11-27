@@ -117,10 +117,11 @@ def model_pack_files(artifacts):
 
 def assets_release_tag():
     """The shared release that holds the model packs. Read from the raw JSON file: load_installer_artifacts() drops this key."""
-    path = REPO_ROOT / "docs" / "website" / "installer_artifacts.json"
-    tag = str(json.loads(path.read_text(encoding="utf-8")).get("assets_release_tag") or "")
+    from shared.installer_script_builder import INSTALLER_ARTIFACTS_JSON  # the file the loader reads; looked up at call time
+
+    tag = str(json.loads(INSTALLER_ARTIFACTS_JSON.read_text(encoding="utf-8")).get("assets_release_tag") or "")
     if not tag:
-        raise SystemExit("docs/website/installer_artifacts.json has no assets_release_tag; cannot find the model packs")
+        raise SystemExit("%s has no assets_release_tag; cannot find the model packs" % INSTALLER_ARTIFACTS_JSON)
     return tag
 
 

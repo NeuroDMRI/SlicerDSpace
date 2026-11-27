@@ -151,7 +151,7 @@ jobs:
           MPLBACKEND=Agg PYTHONPATH="$TEST_SITE" "$PYTHON_SLICER" - <<'PY'
           import importlib, sys
           bad = []
-          for name in ("nibabel", "psutil", "nrrd", "dipy", "dipy.io.streamline", "sklearn", "sklearn.cluster", "trimesh", "threadpoolctl", "trx", "matplotlib", "matplotlib.pyplot"):
+          for name in ("nibabel", "psutil", "nrrd", "dipy", "dipy.io.streamline", "sklearn", "sklearn.cluster", "trimesh", "threadpoolctl", "trx", "matplotlib", "matplotlib.pyplot", "matplotlib.backends.backend_pdf"):
               try:
                   importlib.import_module(name)
                   print("import OK  ", name)

@@ -133,6 +133,8 @@ class WorkflowStaticTests(unittest.TestCase):
         self.assertIn("MPLBACKEND=Agg", install)
         self.assertIn('"matplotlib"', install)
         self.assertIn('"matplotlib.pyplot"', install)
+        # Opus P2 (fontTools import check): PdfPages (scripts/prepare_scientific_review.py) is the only path to fontTools.
+        self.assertIn('"matplotlib.backends.backend_pdf"', install)
 
     def test_only_github_token_is_used(self):
         self.assertNotIn("secrets.", self.text)
@@ -416,14 +418,38 @@ class DspaceInstallTests(unittest.TestCase):
                 self.assertEqual(left, sorted(pack_files) if keep else [])
                 self.assertEqual((offline / base_name).exists(), keep)
 
+    def test_assets_release_tag_reads_the_file_named_by_the_builder_constant(self):
+        # Opus P2 (CI assets re-review, path): one path constant, INSTALLER_ARTIFACTS_JSON in the installer builder.
+        import shared.installer_script_builder as builder
+        with tempfile.TemporaryDirectory() as td:
+            other = Path(td) / "other.json"
+            other.write_text(json.dumps({"assets_release_tag": "tag-from-patched-constant"}), encoding="utf-8")
+            with mock.patch.object(builder, "INSTALLER_ARTIFACTS_JSON", other):
+                self.assertEqual(self.mod.assets_release_tag(), "tag-from-patched-constant")
+            other.write_text("{}", encoding="utf-8")
+            with mock.patch.object(builder, "INSTALLER_ARTIFACTS_JSON", other), self.assertRaises(SystemExit) as ctx:
+                self.mod.assets_release_tag()
+            self.assertIn("other.json", str(ctx.exception))
+        self.assertEqual(self.mod.assets_release_tag(), json.loads(builder.INSTALLER_ARTIFACTS_JSON.read_text(encoding="utf-8"))["assets_release_tag"])
+
     def test_real_artifact_loader_path_requests_packs_from_the_assets_tag(self):
         # Review P0 (CI full-install): the real load_installer_artifacts() drops assets_release_tag, so reading the tag
         # from its dict raised "no assets_release_tag" before any gh call. Here the real loader and the real JSON run.
+        # Opus P2 (CI assets re-review, test filter): the expected packs come from the loader's own rule, not a second
+        # filter. The artifacts file is a temp copy with an extra optional pack that has a url; the loader publishes it.
+        import shared.installer_script_builder as builder
         published = json.loads((REPO / "docs" / "website" / "installer_artifacts.json").read_text(encoding="utf-8"))
-        expected = set()
-        for spec in published["model_packs"].values():
-            if spec.get("tier") == "core" and spec.get("published") and spec.get("filename"):
-                expected.update(str(item["filename"]) for item in (spec.get("parts") or [spec]))
+        published["model_packs"]["fake_optional"] = {
+            "tier": "optional", "published": True, "filename": "Fake-Optional-v1.tar.gz",
+            "url": "https://example.invalid/Fake-Optional-v1.tar.gz", "sha256": "0" * 64, "size_bytes": 5}
+        artifacts_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(artifacts_dir.cleanup)
+        artifacts_json = Path(artifacts_dir.name) / "installer_artifacts.json"
+        artifacts_json.write_text(json.dumps(published), encoding="utf-8")
+        with mock.patch.object(builder, "INSTALLER_ARTIFACTS_JSON", artifacts_json):
+            pack_files = self.mod.model_pack_files(builder.load_installer_artifacts())
+        expected = {item["filename"] for item in pack_files}
+        self.assertIn("Fake-Optional-v1.tar.gz", expected)
         self.assertTrue(expected)
         calls = []
 
@@ -449,10 +475,12 @@ class DspaceInstallTests(unittest.TestCase):
                     mock.patch.object(self.mod, "overlay_checkout", lambda module: 0), \
                     mock.patch.object(self.mod, "cancel_scheduled_uninstall", lambda exe: []), \
                     mock.patch.object(self.mod, "write_outputs", lambda values: None), \
+                    mock.patch.object(builder, "INSTALLER_ARTIFACTS_JSON", artifacts_json), \
                     mock.patch.dict(os.environ, env, clear=True):
                 with self.assertRaises(SystemExit) as ctx:
                     self.mod.main(argv)  # the dummy pack files fail verification, after the gh call
         self.assertIn("mismatch", str(ctx.exception))
+        self.assertIn(pack_files[0]["filename"], str(ctx.exception))  # the first pack file fails; the message names it
         asset_calls = [patterns for tag, patterns in calls if tag == "assets"]
         self.assertEqual(len(asset_calls), 1, calls)
         self.assertEqual(set(asset_calls[0]), expected)

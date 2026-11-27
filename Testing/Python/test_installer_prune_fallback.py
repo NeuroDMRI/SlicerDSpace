@@ -163,6 +163,8 @@ class _Isolated:
             p.start()
             self._stack.append(p)
         self._modules = dict(sys.modules)
+        # Finding Opus P2 (prune harness) B1 attributes: the child names that the repo package holds as attributes now.
+        self._package_attrs = set(vars(self._modules["shared"])) if "shared" in self._modules else set()
         if self.release_package:
             pkg_dir = self.project.module_root / "shared"
             spec = importlib.util.spec_from_file_location(
@@ -192,18 +194,36 @@ class _Isolated:
         for name, module in saved.items():
             if name.startswith("shared.") and sys.modules.get(name) is not module:
                 sys.modules[name] = module
-        for name in [n for n in list(sys.modules) if n.startswith("shared.") and n not in saved]:
+        popped = [n for n in list(sys.modules) if n.startswith("shared.") and n not in saved]
+        for name in popped:
             sys.modules.pop(name, None)
-        self._between_exit_phases()
+        # Finding Opus P2 (prune harness) hook exception: a hook that raises must not skip the restore below (a release-package
+        # stub would stay in sys.modules['shared'] for the later test modules). Keep the exception, restore, re-raise at the end.
+        hook_error = None
+        try:
+            self._between_exit_phases()
+        except BaseException as exc:  # noqa: BLE001  (re-raised below, after the restore)
+            hook_error = exc
         if "shared" in saved:
             sys.modules["shared"] = saved["shared"]
         for name, module in saved.items():
             if sys.modules.get(name) is not module:
                 sys.modules[name] = module
         for name in [n for n in list(sys.modules) if n not in saved]:
+            popped.append(name)
             sys.modules.pop(name, None)
+        # Finding Opus P2 (prune harness) B1 attributes: a child that was first imported inside the window is popped from
+        # sys.modules; the import also set it as an attribute of the repo package. Remove that orphan attribute.
+        package = saved.get("shared")
+        if package is not None:
+            for name in popped:
+                child = name.split(".", 1)[1] if name.startswith("shared.") else ""
+                if name.count(".") == 1 and child not in self._package_attrs and child in vars(package):
+                    delattr(package, child)
         for p in reversed(self._stack):
             p.stop()
+        if hook_error is not None:
+            raise hook_error
         return False
 
 
@@ -627,11 +647,15 @@ def _run_prune_cases_under_ci_conditions(*, leaked_sampler: bool, symlinked_tmp:
         return {"shared": shared, "path": list(sys.path), "environ": dict(os.environ),
                 "tempdir": tempfile.tempdir, "leaked_threads": leaked_threads(), "ids": ids, "attrs": attrs}
 
-    names = [n for n in unittest.defaultTestLoader.getTestCaseNames(PruneFallbackTests)
+    # Finding Opus P2 (prune thread check) -k filter: a fresh loader. ``-k`` sets testNamePatterns on defaultTestLoader.
+    names = [n for n in unittest.TestLoader().getTestCaseNames(PruneFallbackTests)
              if n != "test_prune_stub_matches_the_release_package_shape"]
     tempfile.gettempdir()  # fill the cache first: the first call sets tempfile.tempdir, which is not a leak
     if exit_tick:
         import shared.hardware_adapt  # noqa: F401  (a saved child of the shared package that the sampler imports lazily)
+        # Finding Opus P2 (prune harness) B1 attributes: run the sampler once, so that every child that it imports (on
+        # macOS shared.platform_info, hardware_adapt.py ~1028) is in the first state() and is checked for identity.
+        sampler()
     before = state()
     with tempfile.TemporaryDirectory() as real_root:
         patches = []
@@ -716,6 +740,9 @@ class PruneOrderIndependenceTests(unittest.TestCase):
         self.assertIs(sys.modules["shared.hardware_adapt"], saved_module)
         self.assertIs(getattr(sys.modules["shared"], "hardware_adapt"), sys.modules["shared.hardware_adapt"])
         self.assertTrue(before["attrs"]["shared.hardware_adapt"], "the pre-import must make the child an attribute")
+        if sys.platform == "darwin":  # Opus P2 (prune harness) B1 attributes: the sampler imports platform_info on macOS
+            self.assertIn("shared.platform_info", before["ids"], "the sampler's import must be in the first snapshot")
+            self.assertTrue(before["attrs"]["shared.platform_info"])
         for key, was_attr in before["attrs"].items():
             if was_attr:
                 self.assertTrue(after["attrs"].get(key), f"{key} is not the attribute of the shared package any more")
@@ -814,6 +841,53 @@ class PruneOrderIndependenceTests(unittest.TestCase):
         self.assertEqual(after["leaked_threads"], ["leaked-by-the-run"])
         self.assertNotEqual(before, after)
 
+    def test_opus_p2_prune_thread_check_inside_run_exception_still_restores_shared(self) -> None:
+        # Opus P2 (prune thread check) inside_run exception: the hook raises in every _Isolated.__exit__. The harness must
+        # finish the restore (sys.modules['shared'] is not a release-package stub afterwards) and still raise the error.
+        class HookBoom(RuntimeError):
+            pass
+
+        def boom() -> None:
+            raise HookBoom("inside_run hook failed")
+
+        result, before, after = _run_prune_cases_under_ci_conditions(
+            leaked_sampler=False, symlinked_tmp=False, inside_run=boom)
+        self.assertGreater(result.testsRun, 0)
+        texts = [text for _, text in result.failures + result.errors]
+        self.assertTrue(texts and all("HookBoom" in t for t in texts), "the hook exception must still be raised: " + str(texts)[:500])
+        self.assertIs(before["shared"], after["shared"], "sys.modules['shared'] is not restored")
+        self.assertEqual(before["ids"], after["ids"])
+        self.assertEqual(before, after)
+
+    def test_opus_p2_prune_thread_check_k_filter_does_not_empty_the_inner_suite(self) -> None:
+        # Opus P2 (prune thread check) -k filter: ``-k`` sets testNamePatterns on unittest.defaultTestLoader. The helper
+        # used that loader, got no test names and ran 0 tests (testsRun 0).
+        loader = unittest.defaultTestLoader
+        saved = loader.testNamePatterns
+        self.addCleanup(setattr, loader, "testNamePatterns", saved)
+        loader.testNamePatterns = ["*PruneOrder*"]
+        result, before, after = _run_prune_cases_under_ci_conditions(leaked_sampler=False, symlinked_tmp=False)
+        self._assert_clean(result)  # assertGreater(testsRun, 0)
+        self.assertEqual(before, after)
+
+    def test_opus_p2_prune_harness_b1_attributes_orphan_child_is_removed_from_the_package(self) -> None:
+        # Opus P2 (prune harness) B1 attributes: a shared.* child that is first imported inside the window is popped from
+        # sys.modules; its attribute on the repo package must go too. An attribute that existed at enter stays.
+        import shared
+        import shared.hardware_adapt
+        self.assertNotIn("zz_orphan_child", vars(shared))
+        kept = shared.hardware_adapt
+        with tempfile.TemporaryDirectory() as root:
+            project = _Project(Path(root), release_package=False)
+            with _Isolated(project, release_package=False):
+                orphan = types.ModuleType("shared.zz_orphan_child")  # what ``import shared.zz_orphan_child`` leaves behind
+                sys.modules["shared.zz_orphan_child"] = orphan
+                shared.zz_orphan_child = orphan
+        self.assertNotIn("shared.zz_orphan_child", sys.modules)
+        self.assertNotIn("zz_orphan_child", vars(shared), "the popped child is still an attribute of the repo package")
+        self.assertIs(shared.hardware_adapt, kept)
+        self.assertIs(sys.modules["shared.hardware_adapt"], kept)
+
 
 class PruneSymlinkPrecheckTests(unittest.TestCase):
     """Finding "Opus P2 (prune harness) symlink": the two symlink tests wrapped the whole run in ``except OSError`` and
@@ -827,12 +901,24 @@ class PruneSymlinkPrecheckTests(unittest.TestCase):
 
     @staticmethod
     def _run_inner(name: str, reason, fake_run):
-        module = sys.modules[PruneOrderIndependenceTests.__module__]
+        # Finding Opus P2 (symlink pre-check): patch this file's own globals, not sys.modules[__module__] (the module need
+        # not be registered under its defining name).
         result = unittest.TestResult()
-        with patch.object(module, "_symlink_unsupported_reason", lambda: reason, create=True), \
-                patch.object(module, "_run_prune_cases_under_ci_conditions", fake_run):
+        with patch.dict(globals(), {"_symlink_unsupported_reason": lambda: reason,
+                                    "_run_prune_cases_under_ci_conditions": fake_run}):
             PruneOrderIndependenceTests(name).run(result)
         return result
+
+    def test_opus_p2_symlink_precheck_run_inner_does_not_need_the_module_in_sys_modules(self) -> None:
+        # Opus P2 (symlink pre-check): _run_inner patched sys.modules[__module__]. When that entry is another object, the
+        # patches missed this file's globals and the real run started (or AttributeError).
+        def cleanup_fails(**_kwargs):
+            raise PermissionError(13, "cleanup failed", "x")
+
+        with patch.dict(sys.modules, {PruneOrderIndependenceTests.__module__: types.ModuleType("not_this_file")}):
+            result = self._run_inner(self._SYMLINK_TESTS[0], None, cleanup_fails)
+        self.assertEqual(len(result.errors), 1, f"errors={result.errors} failures={result.failures}")
+        self.assertIn("PermissionError", result.errors[0][1])
 
     def test_opus_p2_prune_harness_symlink_a_run_oserror_is_an_error_not_a_skip(self) -> None:
         def cleanup_fails(**_kwargs):

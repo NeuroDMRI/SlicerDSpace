@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import json
 import os
@@ -162,6 +163,22 @@ class Le2IncompleteWeightsTest(unittest.TestCase):
         self.assertIn("Install models", items["segmentation"].reason)
         self.assertEqual(items["microstructure"].status, "will_run")
 
+    def test_opus_p2_plan_finds_the_bundled_atlas_t2_when_the_configured_root_lacks_it(self):
+        # Opus P2 (bundled fallback), plan-level row: a configured root without the atlas T2 and a bundled copy of it
+        # must not block parcellation with "missing atlas T2". (Does not exercise the partial-folder fix.)
+        from test_product_orchestrator import _write_valid_raw_subject
+
+        subject = self.tmp / "100307"
+        _write_valid_raw_subject(subject)
+        bundled = self.tmp / "bundled"
+        atlas = bundled / "Resources" / "Data" / "100HCP-population-mean-T2.nii.gz"
+        atlas.parent.mkdir(parents=True)
+        atlas.write_bytes(b"atlas")
+        with mock.patch.dict(os.environ, {self.model_assets.BUNDLED_MODEL_ASSETS_ENV: str(bundled)}):
+            item = {i.target: i for i in _plan(subject, targets=("parcellation",), model_assets_dir=self.assets).items}["parcellation"]
+        self.assertNotIn("missing atlas T2", item.reason)
+        self.assertEqual(Path(item.inputs["atlas_t2"]), atlas.resolve())
+
     def test_le2_real_manifest_lists_three_views_for_ddseg_and_ddparcel(self):
         records = self.model_assets._load_asset_manifest_records(REPO_ROOT)
         for prefix in ("segmentation/weights", "parcellation/weights"):
@@ -310,6 +327,134 @@ class Le6StageFailureTest(unittest.TestCase):
         self.assertIn("'tckgen'", explain_stage_error(RuntimeError("MRtrix3 backend is incomplete. Missing command(s): ['tckgen', 'tcksift2']")))
         self.assertIn("'eddy'", explain_stage_error(ValueError("Missing native executable: eddy")))
         self.assertIn("'eddy'", explain_stage_error(FileNotFoundError(2, "No such file or directory", "C:\\fsl\\bin\\eddy.exe")))
+
+    def test_opus_p2_other_release_error_gets_its_own_sentence(self):
+        # Opus P2 (other-release message): explain_stage_error matched class names and returned "" for this error.
+        from shared.model_assets import ModelAssetIncompleteError, ModelAssetIntegrityError, ModelAssetOtherReleaseError
+        from shared.orchestrator import explain_stage_error
+
+        text = explain_stage_error(ModelAssetOtherReleaseError("/ext/bundled-model-assets/surface/weights/x.pt is from another release"))
+        self.assertIn("another release", text)
+        self.assertIn("Install models", text)
+        self.assertNotIn("damaged", text)  # the settled wording for this case avoids "damaged"
+        # unchanged
+        for error in (ModelAssetIncompleteError("x"), ModelAssetIntegrityError("x")):
+            self.assertIn("missing or damaged", explain_stage_error(error))
+
+    def test_opus_p2_ddsurfer_resources_resolved_through_the_verified_resolver(self):
+        # Opus P2 (bundled fallback, DDSurfer unverified) + (other-release message): the DDSurfer run resolves its
+        # resources through the verified resolver (_resolve_resource: configured root, per-user default root, bundled
+        # copy, checkout; every root but the configured one passes the manifest sha256 check). A bundled atlas that
+        # fails the manifest sha256 is no longer used; for a file of another release the stage raises
+        # ModelAssetOtherReleaseError, and the failure text explains it.
+        # Opus P1 + Codex P1 (third round): the per-user default root and the checkout root are patched to temp folders
+        # without surface assets, and the manifest records are the fixture's, so a real install on the machine (or the
+        # CI full-install job) cannot change the result.
+        from anatomy.surface.pipeline import SurfaceConfig, inspect_surface_resources, resolve_surface_registration_atlas
+        from shared.orchestrator import explain_stage_error, stage_failure_text
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp).resolve()
+            model_assets, relative, good, records, env, configured, put = self._surface_atlas_fixture(tmp_path)
+            bundled = tmp_path / "bundled"
+            put(bundled, b"release 1 atlas", sums=True)  # another release than the manifest records
+            # the bundled copy is the only copy the resolver can see besides the empty configured root
+            self._patched_surface_roots(model_assets, tmp_path, records, env, tmp_path / "user-assets", (bundled,))
+            with self.assertRaises(model_assets.ModelAssetOtherReleaseError) as raised:
+                resolve_surface_registration_atlas(model_assets_dir=configured)
+            # The whole inspection resolves the template folder first; its files are not all there, so that error
+            # is the "incomplete" one. The other-release error is reachable for a single file (the atlas).
+            with self.assertRaises(model_assets.ModelAssetIntegrityError):
+                inspect_surface_resources(SurfaceConfig(
+                    subject_id="s", subject_root=tmp_path / "s", output_dir=tmp_path / "out", model_assets_dir=configured))
+            self.assertTrue(explain_stage_error(raised.exception))
+            failure = stage_failure_text("surface", raised.exception)
+            self.assertIn("Install models", failure)
+            self.assertIn("is from another release", failure)  # the original message stays in the text
+
+    def _surface_atlas_fixture(self, tmp_path: Path):
+        """Codex P1 (fix round): a configured root without surface assets; each other candidate root is built by the
+        test. The manifest records the sha256 of the release 2 atlas; ``release 1`` bytes are another release."""
+        import hashlib
+
+        from anatomy.surface.pipeline import ATLAS_NAME
+        from shared import model_assets
+
+        relative = f"surface/template/{ATLAS_NAME}"
+        good = b"release 2 atlas"
+        records = {relative: {"sha256": hashlib.sha256(good).hexdigest(), "size_bytes": len(good)}}
+        env = {key: value for key, value in os.environ.items()
+               if key not in (model_assets.MODEL_ASSETS_ENV, "DDSURFER_TEMPLATE_DIR", "DDSURFER_CHECKPOINT_DIR",
+                              "DDSURFER_REGISTRATION_ATLAS")}
+        env[model_assets.BUNDLED_MODEL_ASSETS_ENV] = str(tmp_path / "bundled")
+        model_assets._SHA256_CACHE = None
+        self.addCleanup(setattr, model_assets, "_SHA256_CACHE", None)
+        configured = tmp_path / "configured-assets"
+        configured.mkdir()
+
+        def put(root: Path, data: bytes, *, sums: bool = False) -> Path:
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            if sums:
+                (target.parent / "SHA256SUMS").write_text(
+                    hashlib.sha256(data).hexdigest() + f"  {ATLAS_NAME}\n", encoding="utf-8")
+            return target
+
+        return model_assets, relative, good, records, env, configured, put
+
+    def _patched_surface_roots(self, model_assets, tmp_path, records, env, user_root, legacy_roots):
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.dict(os.environ, env, clear=True))
+        stack.enter_context(mock.patch.object(model_assets, "_sha256_cache_path", return_value=tmp_path / "sha_cache.json"))
+        stack.enter_context(mock.patch.object(model_assets, "_load_asset_manifest_records", return_value=records))
+        stack.enter_context(mock.patch.object(model_assets, "default_user_model_assets_root", return_value=user_root))
+        stack.enter_context(mock.patch.object(model_assets, "legacy_repo_asset_roots", return_value=tuple(legacy_roots)))
+
+    def test_codex_p1_fix_round_surface_assets_resolve_in_the_default_user_root(self):
+        # Codex P1 (fix round): a configured root without DDSurfer assets must not hide valid assets in the per-user
+        # default root; the environment doctor accepts that location, so the run must too.
+        from anatomy.surface.pipeline import resolve_surface_registration_atlas
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp).resolve()
+            model_assets, relative, good, records, env, configured, put = self._surface_atlas_fixture(tmp_path)
+            user_root = tmp_path / "user-assets"
+            expected = put(user_root, good)
+            self._patched_surface_roots(model_assets, tmp_path, records, env, user_root, ())
+            self.assertEqual(resolve_surface_registration_atlas(model_assets_dir=configured), expected)
+
+    def test_codex_p1_fix_round_surface_assets_resolve_in_the_checkout_root(self):
+        from anatomy.surface.pipeline import resolve_surface_registration_atlas
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp).resolve()
+            model_assets, relative, good, records, env, configured, put = self._surface_atlas_fixture(tmp_path)
+            checkout = tmp_path / "checkout"
+            expected = put(checkout, good)
+            self._patched_surface_roots(model_assets, tmp_path, records, env, tmp_path / "user-assets", (checkout,))
+            self.assertEqual(resolve_surface_registration_atlas(model_assets_dir=configured), expected)
+
+    def test_codex_p1_fix_round_an_unverified_copy_earlier_in_the_order_does_not_hide_a_valid_later_one(self):
+        from anatomy.surface.pipeline import resolve_surface_registration_atlas
+
+        for label in ("other-release bundled copy", "tampered per-user copy"):
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp).resolve()
+                model_assets, relative, good, records, env, configured, put = self._surface_atlas_fixture(tmp_path)
+                checkout = tmp_path / "checkout"
+                expected = put(checkout, good)
+                bundled = tmp_path / "bundled"
+                user_root = tmp_path / "user-assets"
+                if label == "other-release bundled copy":
+                    put(bundled, b"release 1 atlas", sums=True)
+                    legacy = (bundled, checkout)
+                else:
+                    put(user_root, b"tampered atlas!!")
+                    legacy = (checkout,)
+                self._patched_surface_roots(model_assets, tmp_path, records, env, user_root, legacy)
+                self.assertEqual(resolve_surface_registration_atlas(model_assets_dir=configured), expected)
 
     def test_le6_paths_that_merely_contain_a_command_name_do_not_match(self):
         from shared.orchestrator import explain_stage_error

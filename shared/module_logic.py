@@ -1345,9 +1345,25 @@ class SharedLogicMixin:
         return {"loaded": loaded, "reused": reused, "skipped": skipped, "deferred": deferred,
                 "manifest_path": run_id, "view_node_ids": view}
 
+    @staticmethod
+    def _surface_resource_or_none(resolve, *, required: bool = True):
+        """Opus P2 (bundled fallback): the surface resolvers verify the file and raise ModelAssetIntegrityError.
+
+        Without this guard, a bundled model file of another release would stop the module from opening; with
+        ``required=False`` the integrity failure reads as "not available" and the run reports it later.
+        """
+        from shared.model_asset_integrity import ModelAssetIntegrityError
+
+        try:
+            return resolve()
+        except ModelAssetIntegrityError:
+            if required:
+                raise
+            return None
+
     def _resolve_template_dir(self, *, required: bool = True) -> Path:
         from anatomy.surface.pipeline import resolve_surface_template_dir
-        resolved = resolve_surface_template_dir()
+        resolved = self._surface_resource_or_none(resolve_surface_template_dir, required=required)
         if resolved is not None:
             return resolved
         if not required:
@@ -1356,7 +1372,7 @@ class SharedLogicMixin:
 
     def _resolve_checkpoint_root(self, *, required: bool = True) -> Path:
         from anatomy.surface.pipeline import resolve_surface_checkpoint_root
-        resolved = resolve_surface_checkpoint_root()
+        resolved = self._surface_resource_or_none(resolve_surface_checkpoint_root, required=required)
         if resolved is not None:
             return resolved
         if not required:
@@ -1365,7 +1381,7 @@ class SharedLogicMixin:
 
     def _resolve_registration_atlas(self, *, required: bool = True) -> Path:
         from anatomy.surface.pipeline import resolve_surface_registration_atlas
-        resolved = resolve_surface_registration_atlas()
+        resolved = self._surface_resource_or_none(resolve_surface_registration_atlas, required=required)
         if resolved is not None:
             return resolved
         if not required:

@@ -132,6 +132,33 @@ class MeanB0Test(unittest.TestCase):
         # 2026).
         self.assertTrue(newest.is_file(), newest)
 
+    def test_h1_a_failed_delete_is_best_effort_and_the_next_preview_prunes_again(self):
+        """FLAKY-H1, second path: a stale preview that another process holds (PermissionError) cannot be deleted. The
+        prune is best effort: no error, the new preview stays, and 7 files remain until the next new preview prunes
+        back to 6. Only a failed delete in the last prune leaves 7; FileNotFoundError leaves 6."""
+        real_unlink = Path.unlink
+        armed, blocked = [False], []
+
+        def held_by_another_process(path, *args, **kwargs):
+            if armed[0] and not blocked and path.name.startswith("preview_"):
+                blocked.append(path)
+                raise PermissionError(13, "held by another process", str(path))
+            return real_unlink(path, *args, **kwargs)
+
+        count = lambda: len(list(self.cache.glob("preview_*_meanb0.nii.gz")))
+        with mock.patch.object(Path, "unlink", held_by_another_process):
+            source = self.nifti_source()
+            for index in range(8):
+                armed[0] = index == 7  # the delete in the last prune fails
+                source = PreviewSource(source.kind, source.dwi, source.bval, None, f"sub-{index}")
+                newest = mean_b0_image(source, self.cache)
+            self.assertEqual(len(blocked), 1)
+            self.assertTrue(newest.is_file(), newest)
+            self.assertEqual(count(), 7)
+            ninth = mean_b0_image(PreviewSource(source.kind, source.dwi, source.bval, None, "sub-8"), self.cache)
+        self.assertTrue(ninth.is_file(), ninth)
+        self.assertEqual(count(), 6)
+
     def test_flaky_h1_previews_written_in_the_same_clock_tick(self):
         """FLAKY-H1: the prune sorts the previews by mtime. On a coarse file clock (Windows, ~16 ms) the 8 small
         previews can share one mtime; the stable sort then keeps the listing order, NTFS lists by name, and the new

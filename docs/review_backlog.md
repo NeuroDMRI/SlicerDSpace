@@ -400,3 +400,11 @@ Scope: branch `fix/flaky-h1-h2` (`shared/input_preview.py::_prune_cache`, `Testi
 | Source | Label | Item | Proposed fix |
 |---|---|---|---|
 | Opus P2 | Fixed | **Fixed** (27 November 2026, branch `fix/flaky-guard-p2`): `test_h1_cache_keeps_only_the_newest_previews` (and so the reproduction, which runs it) now also asserts that the path the last `mean_b0_image` call returned still exists. Against a prune without the `keep` guard, the old check passed in 3 of 3 runs; the new check fails in 3 of 3. Was: `test_flaky_h1_previews_written_in_the_same_clock_tick` and `test_h1_cache_keeps_only_the_newest_previews` check only the file count. With tied mtimes, a wrong prune that drops the `keep` guard (for example, slicing `entries[6:]` from all entries) also leaves 6 files and passes, although it deletes the preview just written. | In the reproduction, also assert that the path returned by the last `mean_b0_image` call still exists. |
+
+## 27 November 2026: h1 second path (a failed delete in the preview prune) pinned by a test (Opus)
+
+Scope: branch `fix/h1-unlink-best-effort` (`Testing/Python/test_input_preview.py`; tests only). Round 1: Opus 0 blocking, 1 P2. Decide by 11 December 2026.
+
+| Source | Label | Item | Proposed fix |
+|---|---|---|---|
+| Opus P2 | P2 | `test_h1_a_failed_delete_is_best_effort_and_the_next_preview_prunes_again`: the last docstring sentence ("Only a failed delete in the last prune leaves 7; FileNotFoundError leaves 6.") is a measured fact that the test does not assert, so a reader can take it as pinned. | Mark it as a measured note ("measured 27 November 2026, not asserted here"), or drop it. |

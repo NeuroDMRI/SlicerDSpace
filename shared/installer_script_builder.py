@@ -1182,7 +1182,7 @@ _BOOTSTRAP_BODY = textwrap.dedent(
                     allow_mirror=False,
                 )
             except Exception as exc:
-                _log(f"[WARN] Could not fetch optional NITRC IIT template ({exc}); PNL mask will fetch or prompt on first run.")
+                _log(f"[WARN] Optional NITRC IIT template download skipped ({exc})")
                 return
         try:
             for dst in targets:
@@ -1287,6 +1287,34 @@ _BOOTSTRAP_BODY = textwrap.dedent(
         parts = [p.strip() for p in text.split(",") if p.strip()]
         return "wma" in parts or "all" in parts
 
+    def _pnl_template_warning(pnl_selected, iit_spec, roots, language="en"):
+        # Returns "" or the warning text. "Present" is decided from disk, not from the download result: on a reinstall
+        # the file can be there while the download fails. Not imported from shared.*: the installed package can be older.
+        if not pnl_selected or not iit_spec:
+            return ""
+        relpath = str(iit_spec.get("relpath") or "brain_mask/pnl_cnn_torch/IITmean_b0_256.nii.gz")
+        sha = str(iit_spec.get("sha256") or "")
+        for root in roots:
+            try:
+                cand = Path(root) / relpath
+                if cand.is_file() and (not sha or _sha256(cand) == sha):
+                    return ""
+            except OSError:
+                continue
+        if str(language or "").lower().startswith("zh"):
+            return "PNL CNN \u8111\u63a9\u819c\u6a21\u677f\uff08IITmean_b0_256.nii.gz\uff09\u672a\u80fd\u5b89\u88c5\uff1a\u4ece nitrc.org \u4e0b\u8f7d\u5931\u8d25\u3002\u751f\u6210\u8111\u63a9\u819c\u4e4b\u524d\uff0c\u8bf7\u5728 SlicerDSpace \u7684\u201c\u73af\u5883\u4e0e\u5b89\u88c5\u201d\u4e2d\u4e0b\u8f7d\u5b83\uff0c\u6216\u63d0\u4f9b\u81ea\u5df1\u7684\u63a9\u819c\u3002"
+        return "The PNL CNN brain-mask template (IITmean_b0_256.nii.gz) was not installed: the download from nitrc.org failed. Before you generate a brain mask, open Environment and installation in SlicerDSpace to download it, or provide your own mask."
+
+    def _pnl_template_roots(bundled_assets, asset_root):
+        # The folders where the plugin looks for the template: the bundled folder, the model assets folder, and the folder in
+        # SLICERDSPACE_BUNDLED_MODEL_ASSETS_ROOT (as shared.model_assets.bundled_model_asset_roots reads it; not imported).
+        roots = [bundled_assets] if Path(bundled_assets).is_dir() else []
+        roots.append(asset_root)
+        env_root = str(os.environ.get("SLICERDSPACE_BUNDLED_MODEL_ASSETS_ROOT") or "").strip()
+        if env_root and Path(env_root).expanduser().is_dir():
+            roots.append(Path(env_root).expanduser())
+        return roots
+
     def _apply_code_update(module_root, mirror="", proxy="", offline_dir="", log=print, language="en"):
         # Last install step, best effort (b2-setup W4): apply the published code update with the INSTALLED package's own
         # shared.code_updater (published names and keywords only). Nothing here fails the install or changes its result.
@@ -1345,6 +1373,8 @@ _BOOTSTRAP_BODY = textwrap.dedent(
             if isinstance(sp, dict) and sp.get("filename") and (sp.get("url") or sp.get("parts")):
                 out.append(sp)
         return out
+
+    _EXIT_TEMPLATE_WARNING = 10  # the install finished, but the PNL CNN template is missing (the .sh/.bat wrappers print a [WARN] and exit 0)
 
     def main() -> int:
         slicer_exe = str(os.environ.get("SLICERDSPACE_RESOLVED_SLICER") or CONFIG.get("slicer_path") or "").strip()
@@ -1522,6 +1552,17 @@ _BOOTSTRAP_BODY = textwrap.dedent(
 
         _apply_code_update(module_root, CONFIG.get("mirror_prefix", ""), CONFIG.get("proxy_url", ""),
                            CONFIG.get("offline_dir", ""), _log, CONFIG.get("language", "en"))
+        wanted_models = CONFIG.get("selected_model_packs")
+        pnl_warn = _pnl_template_warning(
+            wanted_models is None or "pnl_cnn" in set(wanted_models),
+            artifacts.get("iit_template") or {},
+            _pnl_template_roots(bundled_assets, asset_root),
+            CONFIG.get("language", "en"),
+        )
+        if pnl_warn:
+            _log("[WARN] " + pnl_warn)
+            _log("Installation completed with warnings.")
+            return _EXIT_TEMPLATE_WARNING
         _log("Installation completed successfully.")
         return 0
 
@@ -1770,6 +1811,9 @@ def generate_installer_script(
             echo.
             if %SD_RC%==0 (
               echo [OK] Setup complete. Open 3D Slicer and select Modules - Diffusion - SlicerDSpace.
+            ) else if %SD_RC%==10 (
+              echo [WARN] Setup finished with warnings. Read the [WARN] lines above. Open 3D Slicer and select Modules - Diffusion - SlicerDSpace.
+              set "SD_RC=0"
             ) else (
               echo [ERROR] Installer exited with code %SD_RC%.
             )
@@ -1886,6 +1930,10 @@ def generate_installer_script(
         if [ "$SD_RC" -eq 0 ]; then
           echo ""
           echo "[OK] Setup complete! Open 3D Slicer -> Modules -> Diffusion -> SlicerDSpace."
+        elif [ "$SD_RC" -eq 10 ]; then
+          echo ""
+          echo "[WARN] Setup finished with warnings. Read the [WARN] lines above. Open 3D Slicer -> Modules -> Diffusion -> SlicerDSpace."
+          SD_RC=0
         else
           echo ""
           echo "[ERROR] Installer exited with code $SD_RC."

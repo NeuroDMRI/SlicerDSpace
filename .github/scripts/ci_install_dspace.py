@@ -49,6 +49,9 @@ EXEC_SNIPPET = (
     "t=open(sys.argv[1], encoding='utf-8').read(); b=t.split(bmk,1)[1].split(emk,1)[0]; "
     "exec(compile(b, sys.argv[1], 'exec'), {'__name__': '__main__', '__file__': sys.argv[1]})"
 )
+# Exit code of the generated installer script when it finished but the PNL CNN template is missing (the .sh/.bat
+# wrappers turn it into a [WARN] and exit 0). Must equal _EXIT_TEMPLATE_WARNING in shared/installer_script_builder.py.
+INSTALLER_WARNING_EXIT_CODE = 10
 # The website installer logs this line when it found an older SlicerDSpace and started Slicer a second time (finding B1).
 REINSTALL_MARKER = "An older SlicerDSpace is installed."
 INSTALLED_AT = re.compile(r"SlicerDSpace extension installed at: (.+)$", re.MULTILINE)
@@ -179,7 +182,9 @@ def run_website_installer(python_slicer, slicer_exe, target_os, offline_dir, bun
         lines.append(line)
         print(line, end="", flush=True)
     code = process.wait()
-    if code != 0:
+    if code == INSTALLER_WARNING_EXIT_CODE:
+        log("The website installer finished with a warning (exit code %d); read its [WARN] lines above." % code)
+    elif code != 0:
         raise SystemExit("The website installer exited with code %d (see its output above)" % code)
     return "".join(lines)
 

@@ -8,6 +8,8 @@ name: Slicer compatibility matrix (real stock Slicer)
 #                the documented manifest (exit 0, task blocked for missing packages that the versions
 #                check proves absent); any other outcome fails (see judge_blocked_task in
 #                Testing/Python/slicer_ci_compat_smoke.py).
+#                A step also runs Testing/Python/slicer_close_guard_smoke.py with a visible main window
+#                (xvfb on Linux): required on macOS and Linux, report only on Windows (no OpenGL 3.2).
 #   full-install stock Slicer + the released v1.0.0 base asset installed by the website installer, then
 #                this checkout overlaid on the installed layout (heavy, about 1.5 GB download).
 #                The DTI worker run is required to pass. Linux also scans ELF files for GLIBC (X8);
@@ -128,6 +130,20 @@ jobs:
         run: |
           python .github/scripts/ci_run_slicer_smoke.py --slicer-exe "$SLICER_EXE" --module-dir "$MODULE_DIR" \
             --mode repo-only --pipeline optional
+
+      # The close guard smoke needs a visible main window (xvfb on Linux). Its JSON `passed` field
+      # decides. Required on macOS and Linux (PASS on all 4, run 46121498394). Report only on Windows:
+      # the runner has no OpenGL 3.2, so Slicer crashes before the smoke runs (osmesa.dll not found).
+      - name: Run the close guard smoke through real Slicer
+        if: ${{ !cancelled() }}
+        continue-on-error: ${{ runner.os == 'Windows' }}
+        timeout-minutes: 10
+        shell: bash
+        env:
+          SLICER_EXE: ${{ steps.slicer.outputs.slicer_exe }}
+        run: |
+          python .github/scripts/ci_run_close_guard_smoke.py --slicer-exe "$SLICER_EXE" \
+            --artifacts-dir "$RUNNER_TEMP/ci-artifacts"
 
       # Stock Slicer has no nibabel, psutil, nrrd, dipy, scikit-learn or trimesh,
       # so without this step about 300 tests ended as import errors (run

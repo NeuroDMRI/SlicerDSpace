@@ -74,6 +74,16 @@ class RunningJobsTest(unittest.TestCase):
         self.assertEqual(running_jobs(_owner(_codeUpdateJob={"completed": True})), [])
         self.assertEqual(running_jobs(_owner(_codeUpdateJob=None)), [])
 
+    def test_update_check_is_not_a_running_job_author_row(self):
+        """Backlog "close guard / Author" row A: a check (no download, no write) must not ask the close question."""
+        self.assertEqual(running_jobs(_owner(_codeUpdateJob={"kind": "check", "completed": False})), [])
+        self.assertEqual(running_jobs(_owner(_codeUpdateJob={"kind": "check_local", "completed": False})), [])
+
+    def test_update_apply_is_a_running_job_author_row(self):
+        """Backlog "close guard / Author" row A: an apply (download and write) still counts."""
+        self.assertEqual(_kinds(running_jobs(_owner(_codeUpdateJob={"kind": "apply", "completed": False}))), ["update"])
+        self.assertEqual(running_jobs(_owner(_codeUpdateJob={"kind": "apply", "completed": True})), [])
+
 
 class CloseGuardEnabledTest(unittest.TestCase):
     def test_env_off_values(self):
@@ -113,6 +123,13 @@ class MayCloseTest(unittest.TestCase):
     def test_no_job_allows_without_asking(self):
         ask = mock.Mock()
         self.assertTrue(may_close(_owner(), ask=ask))
+        ask.assert_not_called()
+
+    def test_running_update_check_does_not_ask_author_row(self):
+        """Backlog "close guard / Author" row A: a close during an update check proceeds without a question."""
+        ask = mock.Mock(return_value=True)
+        self.assertTrue(may_close(_owner(_codeUpdateJob={"kind": "check", "completed": False}), ask=ask))
+        self.assertTrue(may_close(_owner(_codeUpdateJob={"kind": "check_local", "completed": False}), ask=ask))
         ask.assert_not_called()
 
     def test_disabled_guard_allows_without_asking(self):

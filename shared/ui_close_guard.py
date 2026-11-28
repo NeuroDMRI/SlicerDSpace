@@ -14,6 +14,7 @@ from shared.ui_background_process import qprocess_is_running
 ENV_VAR = "SLICERDSPACE_CLOSE_GUARD"
 _OFF_VALUES = {"0", "false", "off", "no"}
 _ON_VALUES = {"1", "true", "on", "yes"}
+_READ_ONLY_UPDATE_KINDS = frozenset({"check", "check_local"})
 
 
 def running_jobs(owner: Any) -> list[dict[str, Any]]:
@@ -33,7 +34,13 @@ def running_jobs(owner: Any) -> list[dict[str, Any]]:
     if getattr(owner, "_inputImportPending", False) or getattr(owner, "_importProcess", None) is not None:
         jobs.append({"kind": "import"})
     update_job = getattr(owner, "_codeUpdateJob", None)
-    if isinstance(update_job, dict) and not update_job.get("completed"):
+    # A "check" or "check_local" worker only reads and writes nothing to the install, so a close need not ask.
+    # "apply" downloads and writes; a missing or unknown kind keeps counting (safe default).
+    if (
+        isinstance(update_job, dict)
+        and not update_job.get("completed")
+        and update_job.get("kind") not in _READ_ONLY_UPDATE_KINDS
+    ):
         jobs.append({"kind": "update"})
     return jobs
 

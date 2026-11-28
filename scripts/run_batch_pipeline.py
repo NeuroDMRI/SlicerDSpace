@@ -110,29 +110,51 @@ def _parse_subject_list(path: Path, batch_root: Path) -> list[Path]:
 
 
 BATCH_FOLDER_REASON = "no input in this subfolder; the input found is the Batch Folder itself"
+BATCH_FOLDER_SELF_REASON = "this subfolder is the Batch Folder itself"
 BATCH_FOLDER_ANCESTOR_REASON = "this subfolder points to a folder that contains the Batch Folder"
 
 
+def _file_is_input(candidate: Path, first_inspected: dict) -> bool:
+    """True when a file entry is input itself: a file whose first inspection (of the file, not a fallback) succeeded
+    and that ``find_convertible_input`` or the DICOM check of ``inspect_subject_directory``'s file branch accepts.
+
+    The file branch also returns the canonical root for any file in a canonical ``input/`` folder; such a file (for
+    example ``input/notes.txt``) is read through its folder, so it is not input itself.
+    """
+    if not candidate.is_file() or first_inspected["mode"] == "missing":
+        return False
+    from shared.convertible_input import find_convertible_input
+    from shared.dicom_input import _dicom_file
+
+    resolved = candidate.resolve()
+    return find_convertible_input(resolved) is not None or _dicom_file(resolved)
+
+
 def _batch_folder_reason(
-    inspected: dict, candidate: Path, root: Path, *, from_subject_list: bool, via_root_fallback: bool = False
+    inspected: dict, candidate: Path, root: Path, *, from_subject_list: bool, file_is_input: bool = False
 ) -> str | None:
     """Batch scan: a subject never resolves to the Batch Folder (or a folder above it); return the skip reason.
 
-    Exempt: ``legacy_registered``; a file entry of ``--subject-list`` that was read as input itself (not one that
-    only resolved through the ``<Batch Folder>/<subject ID>`` fallback); a subject-list entry that is the Batch
-    Folder itself. In scan (glob) mode a candidate that is the Batch Folder itself (a symlink back to it, a
-    recursive glob) gets no such exemption, and an inspected root above the Batch Folder is rejected.
+    In scan (glob) mode an inspected root above the Batch Folder is rejected first, also for
+    ``legacy_registered``. Exempt from the Batch Folder check: ``legacy_registered`` (legacy inputs stored in the
+    Batch Folder itself); a file entry of ``--subject-list`` that is input itself (``file_is_input``); a
+    subject-list entry that is the Batch Folder itself. In scan mode a candidate that is the Batch Folder itself (a
+    symlink back to it, a recursive glob) gets no such exemption.
     """
-    if inspected["mode"] == "legacy_registered" or (candidate.is_file() and not via_root_fallback):
+    inspected_root = Path(inspected["subject_root"] or inspected["subject_dir"]).expanduser().resolve()
+    if not from_subject_list and inspected_root in root.parents:
+        return BATCH_FOLDER_ANCESTOR_REASON
+    if inspected["mode"] == "legacy_registered" or file_is_input:
         return None
     if from_subject_list and candidate.resolve() == root:
         return None
-    inspected_root = Path(inspected["subject_root"] or inspected["subject_dir"]).expanduser().resolve()
     if inspected_root == root:
         return BATCH_FOLDER_REASON
-    if not from_subject_list and inspected_root in root.parents:
-        return BATCH_FOLDER_ANCESTOR_REASON
     return None
+
+
+def _same_input_reason(subject: BatchSubject) -> str:
+    return f"same input as subject {subject.subject_id}: {subject.subject_root}"
 
 
 def discover_subjects(
@@ -159,18 +181,24 @@ def discover_subjects(
     subjects: list[BatchSubject] = []
     skipped: list[dict[str, str]] = []
     accepted: list[tuple[int, Path, object]] = []  # (index in subjects, candidate, duplicate key)
+    nested_roots: list[BatchSubject] = []  # scan mode: accepted subjects that are not legacy_registered
     for candidate in candidates:
         subject_id = candidate.name
         reason = "missing required input/data.nii.gz, bvals, or bvecs"
         arranged = False
         inspected: dict = {"mode": "missing"}
-        via_root_fallback = False
+        file_is_input = False
         pre_reason = None
         if not subject_list:  # scan mode: reject before the arrange step writes anything
             if candidate == root:
-                pre_reason = BATCH_FOLDER_REASON
+                pre_reason = BATCH_FOLDER_SELF_REASON
             elif candidate in root.parents:
                 pre_reason = BATCH_FOLDER_ANCESTOR_REASON
+            else:
+                # A candidate inside the root of an accepted subject is part of that subject's input.
+                outers = [other for other in nested_roots if other.subject_root in candidate.parents]
+                if outers:
+                    pre_reason = _same_input_reason(min(outers, key=lambda other: len(other.subject_root.parts)))
         if pre_reason is not None:
             reason = pre_reason
         else:
@@ -178,14 +206,14 @@ def discover_subjects(
             arranged = _arrange_subject_input(candidate, arrange_inputs, target_subject_root=target_subject_root)
             inspect_dir = target_subject_root if (arranged and resolved_output_root is not None) else candidate
             inspected = inspect_subject_directory(inspect_dir, subject_id)
+            file_is_input = _file_is_input(candidate, inspected)
             if inspected["mode"] == "missing" and resolved_output_root is not None:
                 inspected = inspect_subject_directory(target_subject_root, subject_id)
             if inspected["mode"] == "missing":
                 inspected = inspect_subject_directory(root, subject_id)
-                via_root_fallback = True
             if inspected["mode"] != "missing":
                 guard_reason = _batch_folder_reason(
-                    inspected, candidate, root, from_subject_list=bool(subject_list), via_root_fallback=via_root_fallback
+                    inspected, candidate, root, from_subject_list=bool(subject_list), file_is_input=file_is_input
                 )
                 if guard_reason is not None:
                     inspected = {"mode": "missing"}
@@ -200,20 +228,37 @@ def discover_subjects(
         if arranged:
             mode = f"{mode}+arranged"
         # Duplicate key: the resolved root. Several legacy subjects share one folder (key adds the ID); a file
-        # that was read as input is its own key because two files in one folder both report the folder as root.
+        # that is input itself is its own key because two such files in one folder both report the folder as root.
         if inspected["mode"] == "legacy_registered":
             key: object = ("legacy", subject_root, subject_id)
-        elif candidate.is_file() and not via_root_fallback:
+        elif file_is_input:
             key = ("file", candidate)
         else:
             key = ("root", subject_root)
         accepted.append((len(subjects), candidate, key))
         subjects.append(BatchSubject(subject_id, subject_root, source, mode))
+        if not subject_list and inspected["mode"] != "legacy_registered":
+            nested_roots.append(subjects[-1])
+
+    removed: set[int] = set()  # positions in ``accepted``
+    dropped: set[int] = set()  # indexes in ``subjects``
+
+    def skip(position: int, kept_subject: BatchSubject) -> None:
+        index, candidate, _ = accepted[position]
+        removed.add(position)
+        skipped.append({
+            "path": candidate.as_posix(),
+            "subject_id": subjects[index].subject_id,
+            "reason": _same_input_reason(kept_subject),
+        })
+        if include_missing:
+            subjects[index] = BatchSubject(subjects[index].subject_id, candidate, source, "missing")
+        else:
+            dropped.add(index)
 
     by_key: dict[object, list[int]] = {}
     for position, (_, _, key) in enumerate(accepted):
         by_key.setdefault(key, []).append(position)
-    dropped: set[int] = set()
     for positions in by_key.values():
         if len(positions) < 2:
             continue
@@ -223,18 +268,20 @@ def discover_subjects(
         )
         kept_subject = subjects[accepted[kept][0]]
         for pos in positions:
-            if pos == kept:
-                continue
-            index, candidate, _ = accepted[pos]
-            skipped.append({
-                "path": candidate.as_posix(),
-                "subject_id": subjects[index].subject_id,
-                "reason": f"same input as subject {kept_subject.subject_id}: {kept_subject.subject_root}",
-            })
-            if include_missing:
-                subjects[index] = BatchSubject(subjects[index].subject_id, candidate, source, "missing")
-            else:
-                dropped.add(index)
+            if pos != kept:
+                skip(pos, kept_subject)
+
+    if not subject_list:
+        # Scan mode: glob order puts parent paths first, not parent roots. A subject whose root lies inside the
+        # root of another subject (both not legacy_registered) is part of that input; the outermost root wins.
+        survivors = [
+            (pos, subjects[index]) for pos, (index, _, key) in enumerate(accepted)
+            if pos not in removed and key[0] != "legacy"
+        ]
+        for pos, subject in survivors:
+            outers = [other for _, other in survivors if other.subject_root in subject.subject_root.parents]
+            if outers:
+                skip(pos, min(outers, key=lambda other: len(other.subject_root.parts)))
     return [subject for index, subject in enumerate(subjects) if index not in dropped], skipped
 
 

@@ -4,12 +4,18 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+CONFIGURE_TIMEOUT = 120  # seconds for the extension's configure step, after the compiler warm-up
+WARM_UP_TIMEOUT = 600  # seconds for the first compiler start (97.5 s measured on a repo-only macOS runner)
+DRAIN_TIMEOUT = 30  # seconds to read the remaining output after the kill
 
 
 def _cmake_executable() -> str | None:
@@ -39,8 +45,11 @@ def _system_state() -> str:
     if os.name == "nt":
         command = ["tasklist", "/v"]
     try:
-        listed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=30)
-        rows = listed.stdout.splitlines()
+        # Bytes, then a lenient decode: tasklist prints window titles in the OEM code page, and ps may print any byte.
+        listed = subprocess.run(command, check=False, capture_output=True, timeout=30)
+        codec = "oem" if os.name == "nt" else "utf-8"
+        rows = listed.stdout.decode(codec, errors="replace").splitlines()
+        listed_stderr = listed.stderr.decode(codec, errors="replace")
         if os.name != "nt" and len(rows) > 1:
             def cpu(row: str) -> float:
                 try:
@@ -51,8 +60,8 @@ def _system_state() -> str:
             rows = rows[:1] + sorted(rows[1:], key=cpu, reverse=True)
         lines.append(f"$ {' '.join(command)} (sorted by %CPU)")
         lines.extend(row[:300] for row in rows)
-        if listed.stderr:
-            lines.append(listed.stderr[-2000:])
+        if listed_stderr:
+            lines.append(listed_stderr[-2000:])
     except (OSError, subprocess.SubprocessError) as exc:
         lines.append(f"process list: unavailable ({exc})")
     return "\n".join(lines)
@@ -107,13 +116,22 @@ def _profile_report(path: Path, limit: int = 15) -> str:
 def _run_configure(command: list, timeout: float, profile: Path):
     """Run the configure step. Returns (CompletedProcess, None), or (None, diagnostic text) on a timeout. The process
     list is taken before the kill, so it shows what cmake and its children were doing at that moment."""
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace")
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        state = _system_state()
-        process.kill()
-        stdout, stderr = process.communicate()
+        try:
+            state = _system_state()
+        except Exception as exc:  # the kill below must run whatever the diagnostic does
+            state = f"system state: unavailable ({exc!r})"
+        finally:
+            process.kill()
+        try:
+            stdout, stderr = process.communicate(timeout=DRAIN_TIMEOUT)
+        except subprocess.TimeoutExpired as drained:
+            # A grandchild that inherited the pipes keeps them open; report what was read so far.
+            stdout, stderr = drained.stdout, drained.stderr
+            process.wait()
         return None, (f"cmake configure timed out after {timeout} s\n--- stdout so far ---\n{_captured_text(stdout)}\n"
                       f"--- stderr so far ---\n{_captured_text(stderr)}\n--- system state before the kill ---\n"
                       f"{state}\n--- cmake profile ---\n{_profile_report(profile)}")
@@ -125,6 +143,84 @@ class CMakeExtensionConfigTest(unittest.TestCase):
         content = (REPO_ROOT / 'CMakeLists.txt').read_text(encoding='utf-8')
         self.assertLess(content.index('find_package(Slicer COMPONENTS ConfigurePrerequisites REQUIRED)'),
                         content.index('project(SlicerDSpace)'))
+
+    def test_timeout_report_still_kills_cmake_when_the_system_state_raises(self) -> None:
+        """Codex P1 (review 28 November 2026): the system state is taken before the kill; an error there must not skip
+        the kill or lose the report."""
+        with tempfile.TemporaryDirectory() as temporary:
+            pid_file = Path(temporary) / "child.pid"
+            command = [sys.executable, "-c",
+                       f"import os, time; open({str(pid_file)!r}, 'w').write(str(os.getpid())); time.sleep(20)"]
+            started = time.monotonic()
+            with patch(f"{__name__}._system_state", side_effect=UnicodeDecodeError("utf-8", b"\x81", 0, 1, "test")):
+                completed, report = _run_configure(command, 1.0, Path(temporary) / "no-profile.json")
+            self.assertLess(time.monotonic() - started, 15)
+            self.assertIsNone(completed)
+            self.assertIn("system state: unavailable", report)
+            if os.name != "nt" and pid_file.exists():
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(int(pid_file.read_text(encoding="utf-8")), 0)
+
+    def test_system_state_survives_an_undecodable_process_list(self) -> None:
+        """Codex P1 (review 28 November 2026): ps or tasklist can print bytes that the default codec cannot decode."""
+        if os.name == "nt":
+            self.skipTest("the fake ps is a POSIX shell script")
+        with tempfile.TemporaryDirectory() as temporary:
+            fake = Path(temporary) / "ps"
+            fake.write_bytes(b"#!/bin/sh\nprintf '  PID  PPID  %%CPU COMMAND\\n    1     0   0.0 caf\\201 \\377\\n'\n")
+            fake.chmod(0o755)
+            with patch.dict(os.environ, {"PATH": temporary + os.pathsep + os.environ.get("PATH", "")}):
+                state = _system_state()
+        self.assertIn("caf�", state)
+
+    def test_timeout_report_does_not_wait_for_a_grandchild_that_holds_the_pipes(self) -> None:
+        """Opus P2 (review 28 November 2026): after the kill, a grandchild that inherited cmake's stdout keeps the pipe
+        open; reading the output must stop after DRAIN_TIMEOUT instead of waiting for the grandchild."""
+        grandchild = "import time; time.sleep(8)"
+        command = [sys.executable, "-c",
+                   f"import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', {grandchild!r}]); "
+                   "print('started', flush=True); time.sleep(20)"]
+        with tempfile.TemporaryDirectory() as temporary, patch(f"{__name__}.DRAIN_TIMEOUT", 1.0, create=True):
+            started = time.monotonic()
+            completed, report = _run_configure(command, 1.0, Path(temporary) / "no-profile.json")
+            elapsed = time.monotonic() - started
+        self.assertIsNone(completed)
+        self.assertLess(elapsed, 6)
+
+    def test_flaky_first_compiler_start_is_outside_the_configure_budget(self) -> None:
+        """CI-only timeout (compat run 46088523583, repo-only macOS 5.10.0): the first start of /usr/bin/cc on the runner
+        took 97.5 s (cmake profile: CMakeDetermineCompilerId execute_process); the C++ start after it took 2.8 s. That
+        first start fell inside the 120 s configure budget. Here wrapper compilers wait 2 s on the first start of either
+        compiler and record where it ran: it must run in the compiler warm-up, not in the configure step."""
+        if os.name == "nt":
+            self.skipTest("the compiler wrappers are POSIX shell scripts")
+        if not _cmake_executable():
+            self.skipTest("CMake is unavailable")
+        compilers = {"CC": shutil.which("cc"), "CXX": shutil.which("c++")}
+        if not all(compilers.values()):
+            self.skipTest("cc or c++ is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            marks = Path(temporary) / "marks"
+            marks.mkdir()
+            wrappers = {}
+            for variable, real in compilers.items():
+                wrapper = Path(temporary) / f"slow-first-{variable.lower()}"
+                wrapper.write_text(
+                    "#!/bin/sh\n"
+                    f'if mkdir "{marks}/first-start" 2>/dev/null; then\n'
+                    f'  pwd > "{marks}/first-start/cwd"\n'
+                    "  sleep 2\n"
+                    "fi\n"
+                    f'exec "{real}" "$@"\n',
+                    encoding="utf-8",
+                )
+                wrapper.chmod(0o755)
+                wrappers[variable] = str(wrapper)
+            with patch.dict(os.environ, wrappers):
+                self.test_extension_configures_with_slicer_cmake_contract()
+            first_start = (marks / "first-start" / "cwd").read_text(encoding="utf-8").strip()
+        self.assertIn("/compiler-warm-up/", first_start + "/",
+                      f"the first compiler start ran inside the configure step: {first_start}")
 
     def test_extension_configures_with_slicer_cmake_contract(self) -> None:
         cmake = _cmake_executable()
@@ -174,7 +270,27 @@ class CMakeExtensionConfigTest(unittest.TestCase):
                 encoding="utf-8",
             )
             build = root / "build"
+            # The first compiler start on a fresh macOS runner took 97.5 s (run 46088523583); later starts take seconds.
+            # A small C/C++ project pays that start under its own budget, so the configure budget covers only the
+            # extension's own configure step.
+            warm_up = root / "compiler-warm-up"
+            warm_up.mkdir()
+            (warm_up / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 3.20.6...3.22.6)\nproject(CompilerWarmUp C CXX)\n", encoding="utf-8")
+            warm_up_profile = root / "compiler-warm-up-profile.json"
+            warm_up_started = time.monotonic()
+            warmed, timed_out = _run_configure(
+                [cmake, "-S", warm_up.as_posix(), "-B", (warm_up / "build").as_posix(),
+                 f"--profiling-output={warm_up_profile.as_posix()}", "--profiling-format=google-trace"],
+                WARM_UP_TIMEOUT,
+                warm_up_profile,
+            )
+            if timed_out:
+                self.fail("compiler warm-up: " + timed_out)
+            self.assertEqual(warmed.returncode, 0, "compiler warm-up failed\n" + warmed.stdout + warmed.stderr)
+            warm_up_seconds = time.monotonic() - warm_up_started
             profile = root / "cmake-profile.json"
+            configure_started = time.monotonic()
             completed, timed_out = _run_configure(
                 [
                     cmake,
@@ -187,12 +303,15 @@ class CMakeExtensionConfigTest(unittest.TestCase):
                     f"--profiling-output={profile.as_posix()}",
                     "--profiling-format=google-trace",
                 ],
-                120,
+                CONFIGURE_TIMEOUT,
                 profile,
             )
             if timed_out:
                 # The last "-- " line, the open profile steps and the process list name what did not finish.
                 self.fail(timed_out)
+            print(f"\n[cmake-config] compiler warm-up {warm_up_seconds:.1f} s (budget {WARM_UP_TIMEOUT} s), "
+                  f"configure {time.monotonic() - configure_started:.1f} s (budget {CONFIGURE_TIMEOUT} s)",
+                  file=sys.stderr, flush=True)
 
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             module_contract = (build / "scripted-module.txt").read_text(encoding="utf-8")

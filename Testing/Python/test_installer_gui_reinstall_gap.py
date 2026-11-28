@@ -134,7 +134,11 @@ def run_poll_handler(ns: dict, em, kind: str, payload: dict, state: dict = None,
     namespace. `_SESSION_INSTALLED` stays the module's own list (the copy is shallow). Returns the stubs for asserts.
     """
     tree = ast.parse(ns["__setup_source__"])
-    poll_def = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_poll")
+    poll_defs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_poll"]
+    if len(poll_defs) != 1:
+        raise AssertionError(f"expected exactly one `_poll` def in the Setup module source, found {len(poll_defs)}; "
+                             "run_poll_handler must not pick one of several silently")
+    poll_def = poll_defs[0]
     state = state if state is not None else {"running": True, "done": False}
     state["queue"] = queue.Queue()
     state["queue"].put((kind, payload))
@@ -335,6 +339,10 @@ class GapGuiReinstallTests(unittest.TestCase):
         self.assertTrue(state.installed, "the real _install_extension_gui ran against the fake")
         self.assertTrue(stubs["state"].get("installed_here"))
         self.assertTrue(ns["_SESSION_INSTALLED"][0])
+        # The rest of the branch ran: phase C started once and no failure status was set (the branch's `except` would hide a raise).
+        stubs["_start_phase_c_worker"].assert_called_once()
+        self.assertFalse([c for c in stubs["status_lbl"].setText.call_args_list if "Install failed" in c[0][0]],
+                         stubs["status_lbl"].setText.call_args_list)
         # A new dialog of the same session (a fresh state dict) gets no restart prompt.
         asked, restarts = [], []
         note = ns["_installed_copy_note"]({}, state.start(), lambda: asked.append(1) or True, lambda: restarts.append(1) or True, lambda _m: None)
@@ -349,33 +357,70 @@ class GapGuiReinstallTests(unittest.TestCase):
         self.assertFalse(stubs["state"].get("installed_here"))
         self.assertIn("Install failed", stubs["status_lbl"].setText.call_args[0][0])
         self.assertFalse(failing.scheduled)
+        stubs["_start_phase_c_worker"].assert_not_called()
+
+    def _setup_after_all_done(self, tmp: str, **slicer_kwargs):
+        """Slicer started with Setup loaded and SlicerDSpace not installed; the first dialog installs SlicerDSpace and
+        finishes (all_done schedules Setup for removal). Returns the module namespace and the fake Slicer."""
+        ns = self._ns()
+        slicer = TwoExtensionSlicer(scheduled=(), installed=("SlicerDSpaceSetup",), **slicer_kwargs).start()
+        self.assertEqual(slicer.loaded, {"SlicerDSpaceSetup"})
+        payload = {"work_dir": tmp, "ext_archive": str(Path(tmp) / "ext.zip")}
+        run_poll_handler(ns, slicer, "downloads_ready", dict(payload))  # first dialog: the real guarded install
+        self.assertEqual(slicer.installed, {"SlicerDSpace", "SlicerDSpaceSetup"})
+        self.assertTrue(ns["_SESSION_INSTALLED"][0])
+        run_poll_handler(ns, slicer, "all_done", {"mod_root": "/fake", "warnings": []})
+        self.assertEqual(slicer.scheduled, {"SlicerDSpaceSetup"})  # Setup removes itself at the next start
+        return ns, slicer, payload
 
     def test_reinstall_p2_second_round_p2_2_reopening_setup_after_all_done_replaces_the_unloaded_copy(self) -> None:
         # Backlog "Opus (reinstall P2 fix) P2-2": Slicer started with Setup loaded and SlicerDSpace not installed. This
         # session installs SlicerDSpace; all_done schedules Setup for removal; the user opens Setup again and starts again.
+        # Backlog "Opus (Setup flag tests) P2-4": the second install runs through the real downloads_ready branch.
         with tempfile.TemporaryDirectory() as tmp:
-            ns = self._ns()
-            slicer = TwoExtensionSlicer(scheduled=(), installed=("SlicerDSpaceSetup",)).start()
-            self.assertEqual(slicer.loaded, {"SlicerDSpaceSetup"})
-            payload = {"work_dir": tmp, "ext_archive": str(Path(tmp) / "ext.zip")}
-            run_poll_handler(ns, slicer, "downloads_ready", dict(payload))  # first dialog: the real guarded install
-            self.assertEqual(slicer.installed, {"SlicerDSpace", "SlicerDSpaceSetup"})
-            self.assertTrue(ns["_SESSION_INSTALLED"][0])
-            run_poll_handler(ns, slicer, "all_done", {"mod_root": "/fake", "warnings": []})
-            self.assertEqual(slicer.scheduled, {"SlicerDSpaceSetup"})  # Setup removes itself at the next start
+            ns, slicer, payload = self._setup_after_all_done(tmp, stop_at_first_refusal=False)
             # The second dialog of the same session: a fresh state dict, a Setup that is scheduled for removal.
             asked, restarts, logs = [], [], []
             note = ns["_installed_copy_note"]({}, slicer, lambda: asked.append(1) or True, lambda: restarts.append(1) or True, logs.append)
             self.assertIsNone(note)
             self.assertEqual((asked, restarts, slicer.cancel_calls), ([], [], []))
-            ns["_install_extension_gui"](slicer, Path(tmp) / "ext.zip", tmp, logs.append)  # no RuntimeError
+            second_state = {"running": True, "done": False}  # a new dialog: no "installed_here"
+            stubs = run_poll_handler(ns, slicer, "downloads_ready", dict(payload), state=second_state)
             self.assertEqual(slicer.uninstall_runs[-1], (["SlicerDSpace"], ["SlicerDSpaceSetup"]))
             self.assertEqual(slicer.installed, {"SlicerDSpace", "SlicerDSpaceSetup"})
             self.assertNotIn("SlicerDSpace", slicer.scheduled)
             self.assertEqual(slicer.scheduled, {"SlicerDSpaceSetup"})
-            self.assertFalse([line for line in logs if "[WARN]" in line], logs)
+            self.assertTrue(second_state.get("installed_here"))
+            self.assertFalse([c for c in stubs["status_lbl"].setText.call_args_list if "Install failed" in c[0][0]],
+                             stubs["status_lbl"].setText.call_args_list)
+            stubs["_start_phase_c_worker"].assert_called_once()
+            self.assertFalse([c for c in stubs["_append_log"].call_args_list if "[WARN]" in str(c)], stubs["_append_log"].call_args_list)
             after_restart = slicer.start()  # Setup removes itself at the next start; SlicerDSpace stays
             self.assertEqual(after_restart.installed, {"SlicerDSpace"})
+
+    def test_opus_setup_flag_tests_p2_1_a_slicer_that_stops_the_loop_at_the_first_refusal_blocks_the_second_install(self) -> None:
+        # Backlog "Opus (Setup flag tests) P2-1": the same scenario, with a Slicer that stops uninstallScheduledExtensions at
+        # the first refused extension (Setup, scheduled first). SlicerDSpace stays installed and the install says so. This keeps
+        # the loop in the fake live: the continue-after-refusal behaviour of the P2-2 test is what lets the second install work.
+        with tempfile.TemporaryDirectory() as tmp:
+            ns, slicer, payload = self._setup_after_all_done(tmp, stop_at_first_refusal=True)
+            with self.assertRaises(RuntimeError) as caught:
+                ns["_install_extension_gui"](slicer, Path(tmp) / "ext.zip", tmp, lambda _m: None)
+            self.assertIn("cannot be replaced while 3D Slicer has it open", str(caught.exception))
+            self.assertEqual(slicer.uninstall_runs[-1], ([], ["SlicerDSpaceSetup"]))
+            self.assertNotIn("SlicerDSpace", slicer.scheduled)
+            # Through the real downloads_ready branch the same failure shows as the status text and phase C does not start.
+            stubs = run_poll_handler(ns, slicer, "downloads_ready", dict(payload), state={"running": True, "done": False})
+            self.assertIn("cannot be replaced while 3D Slicer has it open", stubs["status_lbl"].setText.call_args[0][0])
+            stubs["_start_phase_c_worker"].assert_not_called()
+
+    def test_opus_setup_flag_tests_p2_2_run_poll_handler_refuses_a_source_with_two_poll_defs(self) -> None:
+        # Backlog "Opus (Setup flag tests) P2-2": a second `_poll` must not be picked or skipped silently.
+        ns = self._ns()
+        ns["__setup_source__"] += "\ndef _poll():\n    pass\n"
+        with self.assertRaises(AssertionError) as caught:
+            run_poll_handler(ns, FakeSlicerState(installed=False).start(), "log", "x")
+        self.assertIn("found 2", str(caught.exception))
 
     def test_opus_r3_p2_setup_that_cannot_cancel_its_own_removal_says_to_restart_and_install_setup_again(self) -> None:
         ns = self._ns()

@@ -517,5 +517,116 @@ class BatchScanGuardFixRowsTest(unittest.TestCase):
                          [("sub-l", self.batch, "legacy_registered")])
         self.assertEqual(skipped, [])
 
+
+class BatchScanGuardFixRowsRound2Test(unittest.TestCase):
+    """Backlog rows "28 November 2026: batch scan guard P2 fixes": Codex (scan P2 fix) P2, implementer note P2."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name).resolve()
+        self.batch = self.root / "batch"
+        self.batch.mkdir()
+
+    def reasons_by_path(self, skipped):
+        return {item["path"]: item["reason"] for item in skipped}
+
+    def same_input(self, subject_id, subject_root):
+        return f"same input as subject {subject_id}: {subject_root}"
+
+    def nested_legacy_layout(self):
+        sub1 = self.batch / "sub-1"
+        write_canonical(sub1)
+        (sub1 / "sub-l").mkdir()
+        write_registered(sub1 / "sub-l", "sub-l")
+        return sub1, sub1 / "sub-l"
+
+    def test_codex_scan_p2_fix_nested_legacy_candidate_is_kept_under_recursive_glob(self):
+        sub1, subl = self.nested_legacy_layout()
+        subjects, skipped = batch_cli.discover_subjects(self.batch, subject_glob="**")
+        self.assertEqual([(s.subject_id, s.subject_root, s.mode) for s in subjects],
+                         [("sub-1", sub1, "subject_root"), ("sub-l", subl, "legacy_registered")])
+        self.assertNotIn(subl.as_posix(), self.reasons_by_path(skipped))
+        self.assertEqual(self.reasons_by_path(skipped)[(sub1 / "input").as_posix()], self.same_input("sub-1", sub1))
+
+    def test_codex_scan_p2_fix_nested_legacy_candidate_is_not_missing_with_include_missing(self):
+        sub1, subl = self.nested_legacy_layout()
+        subjects, _ = batch_cli.discover_subjects(self.batch, subject_glob="**", include_missing=True)
+        by_id = {s.subject_id: s for s in subjects}
+        self.assertEqual((by_id["sub-l"].subject_root, by_id["sub-l"].mode), (subl, "legacy_registered"))
+        self.assertEqual(by_id["sub-1"].mode, "subject_root")
+        self.assertEqual(by_id["input"].mode, "missing")
+
+    def test_codex_scan_p2_fix_guard_non_legacy_nested_input_is_still_skipped_before_arrange(self):
+        sub1, subl = self.nested_legacy_layout()
+        write_raw_files_directly(sub1 / "input")
+        subjects, skipped = batch_cli.discover_subjects(self.batch, subject_glob="**", arrange_inputs="copy")
+        self.assertFalse((sub1 / "input" / "input").exists())
+        self.assertFalse((subl / "input").exists())
+        self.assertEqual([(s.subject_id, s.subject_root) for s in subjects], [("sub-1", sub1), ("sub-l", subl)])
+        self.assertEqual(self.reasons_by_path(skipped)[(sub1 / "input").as_posix()], self.same_input("sub-1", sub1))
+
+    def test_codex_scan_p2_fix_guard_legacy_candidate_that_arrange_would_write_for_is_skipped_first(self):
+        """The exemption needs a candidate that the arrange step cannot write for: with raw files directly in it,
+        arrange would create ``input/`` inside ``sub-1``, so the nesting skip happens first."""
+        sub1, subl = self.nested_legacy_layout()
+        write_raw_files_directly(subl)
+        subjects, skipped = batch_cli.discover_subjects(self.batch, subject_glob="**", arrange_inputs="copy")
+        self.assertFalse((subl / "input").exists())
+        self.assertEqual([(s.subject_id, s.subject_root) for s in subjects], [("sub-1", sub1)])
+        self.assertEqual(self.reasons_by_path(skipped)[subl.as_posix()], self.same_input("sub-1", sub1))
+        subjects, _ = batch_cli.discover_subjects(self.batch, subject_glob="**")
+        self.assertEqual([(s.subject_id, s.mode) for s in subjects], [("sub-1", "subject_root"), ("sub-l", "legacy_registered")])
+
+    def test_codex_scan_p2_fix_nested_candidate_legacy_through_the_batch_folder_fallback_is_kept(self):
+        """Same row, fallback case: an empty nested ``sub-1/sub-l`` is legacy through ``<Batch Folder>/<id>``."""
+        sub1 = self.batch / "sub-1"
+        write_canonical(sub1)
+        (sub1 / "sub-l").mkdir()
+        write_registered(self.batch, "sub-l")
+        subjects, skipped = batch_cli.discover_subjects(self.batch, subject_glob="**")
+        self.assertEqual([(s.subject_id, s.subject_root, s.mode) for s in subjects],
+                         [("sub-1", sub1, "subject_root"), ("sub-l", self.batch, "legacy_registered")])
+        self.assertNotIn((sub1 / "sub-l").as_posix(), self.reasons_by_path(skipped))
+
+    def test_codex_scan_p2_fix_guard_two_candidates_legacy_through_the_batch_folder_give_one_subject(self):
+        sub1 = self.batch / "sub-1"
+        write_canonical(sub1)
+        (sub1 / "sub-l").mkdir()
+        (self.batch / "sub-l").mkdir()
+        write_registered(self.batch, "sub-l")
+        subjects, _ = batch_cli.discover_subjects(self.batch, subject_glob="**")
+        self.assertEqual([(s.subject_id, s.subject_root, s.mode) for s in subjects],
+                         [("sub-1", sub1, "subject_root"), ("sub-l", self.batch, "legacy_registered")])
+
+    def test_implementer_note_p2_nrrd_file_in_the_canonical_input_of_the_batch_folder_is_rejected(self):
+        write_canonical(self.batch)
+        (self.batch / "input" / "extra.nrrd").write_bytes(b"x")
+        listing = self.root / "list.txt"
+        listing.write_text("input/extra.nrrd\n", encoding="utf-8")
+        subjects, skipped = batch_cli.discover_subjects(self.batch, subject_list=listing)
+        self.assertEqual(subjects, [])
+        self.assertEqual(self.reasons_by_path(skipped), {(self.batch / "input" / "extra.nrrd").as_posix(): NEW_REASON})
+
+    def test_implementer_note_p2_guard_nrrd_file_directly_in_the_batch_folder_stays_a_subject(self):
+        write_canonical(self.batch)
+        (self.batch / "extra.nrrd").write_bytes(b"x")
+        listing = self.root / "list.txt"
+        listing.write_text("extra.nrrd\n", encoding="utf-8")
+        subjects, skipped = batch_cli.discover_subjects(self.batch, subject_list=listing)
+        self.assertEqual([(s.subject_id, s.subject_root, s.mode) for s in subjects], [("extra.nrrd", self.batch, "nrrd")])
+        self.assertEqual(skipped, [])
+
+    def test_implementer_note_p2_nrrd_file_in_the_canonical_input_of_a_subject_merges_with_it(self):
+        sub1 = self.batch / "sub-1"
+        write_canonical(sub1)
+        (sub1 / "input" / "extra.nrrd").write_bytes(b"x")
+        listing = self.root / "list.txt"
+        listing.write_text("sub-1\nsub-1/input/extra.nrrd\n", encoding="utf-8")
+        subjects, skipped = batch_cli.discover_subjects(self.batch, subject_list=listing)
+        self.assertEqual([(s.subject_id, s.subject_root, s.mode) for s in subjects], [("sub-1", sub1, "subject_root")])
+        self.assertEqual([(item["subject_id"], item["reason"]) for item in skipped],
+                         [("extra.nrrd", self.same_input("sub-1", sub1))])
+
 if __name__ == "__main__":
     unittest.main()

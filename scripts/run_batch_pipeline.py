@@ -119,7 +119,8 @@ def _file_is_input(candidate: Path, first_inspected: dict) -> bool:
     and that ``find_convertible_input`` or the DICOM check of ``inspect_subject_directory``'s file branch accepts.
 
     The file branch also returns the canonical root for any file in a canonical ``input/`` folder; such a file (for
-    example ``input/notes.txt``) is read through its folder, so it is not input itself.
+    example ``input/notes.txt`` or ``input/extra.nrrd``) is read through its folder, so it is not input itself: a
+    file whose parent folder is the ``input/`` folder of the root that inspection resolved for it is never input.
     """
     if not candidate.is_file() or first_inspected["mode"] == "missing":
         return False
@@ -127,6 +128,9 @@ def _file_is_input(candidate: Path, first_inspected: dict) -> bool:
     from shared.dicom_input import _dicom_file
 
     resolved = candidate.resolve()
+    inspected_root = first_inspected.get("subject_root") or first_inspected.get("subject_dir")
+    if inspected_root is not None and resolved.parent == Path(inspected_root).expanduser().resolve() / "input":
+        return False
     return find_convertible_input(resolved) is not None or _dicom_file(resolved)
 
 
@@ -151,6 +155,32 @@ def _batch_folder_reason(
     if inspected_root == root:
         return BATCH_FOLDER_REASON
     return None
+
+
+def _inspect_with_fallbacks(
+    inspect_dir: Path, subject_id: str, *, root: Path, target_subject_root: Path | None
+) -> tuple[dict, dict]:
+    """Read-only inspection in ``discover_subjects`` order: ``inspect_dir`` (``inspect_subject_directory`` also tries
+    ``<inspect_dir>/<subject ID>``), then ``<output root>/<subject ID>`` (``target_subject_root``, only with an output
+    root), then ``<Batch Folder>/<subject ID>``. Return (first inspection, final inspection)."""
+    first = inspect_subject_directory(inspect_dir, subject_id)
+    inspected = first
+    if inspected["mode"] == "missing" and target_subject_root is not None:
+        inspected = inspect_subject_directory(target_subject_root, subject_id)
+    if inspected["mode"] == "missing":
+        inspected = inspect_subject_directory(root, subject_id)
+    return first, inspected
+
+
+def _is_legacy_candidate(
+    candidate: Path, subject_id: str, arrange_inputs: str, *, root: Path, target_subject_root: Path | None
+) -> bool:
+    """Read-only: True when the arrange step cannot write for the candidate (no arrange mode, or no raw files directly
+    in it) and the inspection that follows, with its fallbacks, would give ``legacy_registered``."""
+    if arrange_inputs != "none" and _direct_raw_files(candidate):
+        return False
+    _, inspected = _inspect_with_fallbacks(candidate, subject_id, root=root, target_subject_root=target_subject_root)
+    return inspected["mode"] == "legacy_registered"
 
 
 def _same_input_reason(subject: BatchSubject) -> str:
@@ -195,9 +225,14 @@ def discover_subjects(
             elif candidate in root.parents:
                 pre_reason = BATCH_FOLDER_ANCESTOR_REASON
             else:
-                # A candidate inside the root of an accepted subject is part of that subject's input.
+                # A candidate inside the root of an accepted subject is part of that subject's input. A legacy
+                # candidate is exempt (as in the post-pass) when the arrange step cannot write for it; the check is
+                # read-only and uses the same classification as the inspection below.
                 outers = [other for other in nested_roots if other.subject_root in candidate.parents]
-                if outers:
+                if outers and not _is_legacy_candidate(
+                    candidate, subject_id, arrange_inputs, root=root,
+                    target_subject_root=(resolved_output_root / subject_id) if resolved_output_root is not None else None,
+                ):
                     pre_reason = _same_input_reason(min(outers, key=lambda other: len(other.subject_root.parts)))
         if pre_reason is not None:
             reason = pre_reason
@@ -205,12 +240,11 @@ def discover_subjects(
             target_subject_root = (resolved_output_root / subject_id) if resolved_output_root is not None else candidate
             arranged = _arrange_subject_input(candidate, arrange_inputs, target_subject_root=target_subject_root)
             inspect_dir = target_subject_root if (arranged and resolved_output_root is not None) else candidate
-            inspected = inspect_subject_directory(inspect_dir, subject_id)
-            file_is_input = _file_is_input(candidate, inspected)
-            if inspected["mode"] == "missing" and resolved_output_root is not None:
-                inspected = inspect_subject_directory(target_subject_root, subject_id)
-            if inspected["mode"] == "missing":
-                inspected = inspect_subject_directory(root, subject_id)
+            first_inspected, inspected = _inspect_with_fallbacks(
+                inspect_dir, subject_id, root=root,
+                target_subject_root=target_subject_root if resolved_output_root is not None else None,
+            )
+            file_is_input = _file_is_input(candidate, first_inspected)
             if inspected["mode"] != "missing":
                 guard_reason = _batch_folder_reason(
                     inspected, candidate, root, from_subject_list=bool(subject_list), file_is_input=file_is_input

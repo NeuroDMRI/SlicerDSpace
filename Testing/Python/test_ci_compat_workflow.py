@@ -71,10 +71,17 @@ class WorkflowStaticTests(unittest.TestCase):
         self.assertEqual(self.text.count("fail-fast: false"), 2)
         self.assertEqual(self.text.count("timeout-minutes: 90"), 2)
 
-    def test_unit_suite_is_report_only_with_40_minute_limit(self):
+    def test_unit_suite_is_report_only_with_60_minute_limit(self):
+        # Run 46098276374, repo-only macOS 5.10.0: the suite hit the old 40-minute step limit on a slow runner with
+        # about 3 minutes of tests left; the 52 other macOS repo-only suites since 26 November took 26-39 minutes.
         self.assertEqual(self.text.count("continue-on-error: true"), 2)
-        self.assertEqual(self.text.count("timeout-minutes: 40"), 2)
         self.assertEqual(self.text.count("-m unittest discover -s Testing/Python -p 'test_*.py'"), 2)
+        step = "      - name: Unit test suite under the real PythonSlicer (report only)\n"
+        for job, body in zip(("repo-only", "full-install"), self.text.split("\n  full-install:\n", 1)):
+            unit = body[body.index(step):]
+            unit = unit[:unit.find("\n      - name:", len(step))]
+            self.assertEqual(re.findall(r"\n        timeout-minutes: (\d+)\n", unit), ["60"], job)
+            self.assertRegex(body, r"(?m)^    timeout-minutes: 90$", job)  # the job limit still covers setup + 60 min
 
     def test_full_install_unit_suite_is_skipped_on_macos_after_runner_loss(self):
         # Run 44825474979: both macOS full-install jobs lost the runner in this step.

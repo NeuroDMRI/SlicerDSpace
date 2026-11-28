@@ -164,7 +164,8 @@ jobs:
       - name: Unit test suite under the real PythonSlicer (report only)
         if: ${{ !cancelled() }}
         continue-on-error: true
-        timeout-minutes: 40
+        # 60, not 40: macOS suites take 26-39 min, and a slow runner passed 40 (run 46098276374).
+        timeout-minutes: 60
         shell: bash
         env:
           PYTHON_SLICER: ${{ steps.slicer.outputs.python_slicer }}
@@ -344,7 +345,7 @@ jobs:
       - name: Unit test suite under the real PythonSlicer (report only)
         if: ${{ runner.os != 'macOS' && !cancelled() }}
         continue-on-error: true
-        timeout-minutes: 40
+        timeout-minutes: 60
         shell: bash
         env:
           PYTHON_SLICER: ${{ steps.slicer.outputs.python_slicer }}

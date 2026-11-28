@@ -86,36 +86,77 @@ def resolve_owner_ddparcel(owner: Any) -> Optional[dict[str, Any]]:
     return None
 
 
-def _eyedropper_svg(color: str) -> str:
+def _eyedropper_svg(stroke: str, bulb_fill: str, tip_fill: str) -> str:
+    """Clean, high-recognition classic pipette / eyedropper toolbar icon (bulb + collar + tapered nib)."""
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24">'
-        f'<path fill="none" stroke="{color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" '
-        f'd="M2 22l1-1h3l9-9M13 7l4 4M15.5 4.5l4 4a2.12 2.12 0 0 1 0 3l-1.5 1.5-7-7 1.5-1.5a2.12 2.12 0 0 1 3 0z"/>'
-        f"</svg>"
+        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24">'
+        # Rubber squeeze bulb (top-right)
+        f'<path fill="{bulb_fill}" stroke="{stroke}" stroke-width="1.6" stroke-linejoin="round" '
+        'd="M19.8 4.2a2.6 2.6 0 0 0-3.7 0l-2.3 2.3 3.7 3.7 2.3-2.3a2.6 2.6 0 0 0 0-3.7z"/>'
+        # Wide perpendicular flange collar (the unmistakable eyedropper cue)
+        f'<line x1="11.8" y1="5.6" x2="18.4" y2="12.2" stroke="{stroke}" stroke-width="2.2" stroke-linecap="round"/>'
+        # Tapered glass barrel
+        f'<path fill="none" stroke="{stroke}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" '
+        'd="M13.2 8.2l-7.1 7.1a1.6 1.6 0 0 0-.45.9L5.2 19l2.8-.45a1.6 1.6 0 0 0 .9-.45l7.1-7.1"/>'
+        # Sample ink tip near nib
+        f'<path fill="{tip_fill}" d="M6.4 16.0l1.6 1.6-2.4.5.8-2.1z"/>'
+        # Sharp precision tip touchpoint
+        f'<line x1="5.2" y1="18.8" x2="3.2" y2="20.8" stroke="{stroke}" stroke-width="1.7" stroke-linecap="round"/>'
+        '</svg>'
     )
 
 
 def _eyedropper_icon(qt: Any, *, dark: bool = False, active: bool = False) -> Any:
-    color = ("#7CC4EA" if dark else "#1B5E8A") if active else ("#D2DEE8" if dark else "#334155")
+    if active:
+        stroke = "#F1F5F9" if dark else "#1E293B"
+        bulb_fill = "#64748B" if dark else "#334155"
+        tip_fill = "#94A3B8" if dark else "#335B70"
+    else:
+        stroke = "#C9D1D9" if dark else "#475569"
+        bulb_fill = "#4B5563" if dark else "#64748B"
+        tip_fill = "#6B7280" if dark else "#94A3B8"
     pix = qt.QPixmap()
-    pix.loadFromData(qt.QByteArray(_eyedropper_svg(color).encode("utf-8")))
+    pix.loadFromData(qt.QByteArray(_eyedropper_svg(stroke, bulb_fill, tip_fill).encode("utf-8")), "SVG")
     return qt.QIcon(pix)
 
 
-def _eyedropper_cursor(qt: Any) -> Any:
-    svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">'
-        '<path fill="#FFFFFF" stroke="#0F172A" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" '
-        'd="M2 22l1.5-1.5h3l9-9-3-3-9 9v3L2 22z"/>'
-        '<path fill="#38BDF8" stroke="#0F172A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" '
-        'd="M12.5 8.5l3 3 5-5a2.12 2.12 0 0 0-3-3l-5 5z"/>'
-        '<circle cx="2" cy="22" r="1.4" fill="#EF4444"/>'
-        "</svg>"
+def _eyedropper_cursor_svg() -> str:
+    """32x32 high-contrast classic pipette/eyedropper cursor readable on both dark MRI and colored labelmaps.
+
+    Hotspot is at (2, 29) — the exact precision needle tip pointing bottom-left.
+    """
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">'
+        # Outer white halo so the silhouette stays razor-sharp against black MRI background
+        '<g fill="none" stroke="#FFFFFF" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M27.2 4.8a3.4 3.4 0 0 0-4.8 0l-3.1 3.1 4.8 4.8 3.1-3.1a3.4 3.4 0 0 0 0-4.8z"/>'
+        '<line x1="16.4" y1="6.4" x2="25.6" y2="15.6"/>'
+        '<path d="M18.4 10.0L8.2 20.2l-1.5 4.8-4.2 4.2 4.2-4.2 4.8-1.5 10.2-10.2"/>'
+        '</g>'
+        # Glass barrel (pure white fill + bold charcoal outline)
+        '<path fill="#FFFFFF" stroke="#111827" stroke-width="1.8" stroke-linejoin="round" '
+        'd="M18.4 10.0L8.2 20.2l-1.5 5.1 5.1-1.5 10.2-10.2z"/>'
+        # Subtle liquid fill inside lower barrel tip
+        '<path fill="#CBD5E1" d="M10.4 19.6l2.0 2.0-4.4 1.3 1.1-4.4z"/>'
+        # Precision needle nib down to exact hotspot (2, 29)
+        '<path fill="none" stroke="#111827" stroke-width="2.0" stroke-linecap="round" d="M6.8 25.2L2.6 29.4"/>'
+        '<circle cx="2.5" cy="29.5" r="1.4" fill="#FFFFFF" stroke="#111827" stroke-width="1.0"/>'
+        # Wide perpendicular collar flange
+        '<line x1="16.4" y1="6.4" x2="25.6" y2="15.6" stroke="#111827" stroke-width="3.2" stroke-linecap="round"/>'
+        '<line x1="17.1" y1="7.1" x2="24.9" y2="14.9" stroke="#475569" stroke-width="1.2" stroke-linecap="round"/>'
+        # Dark rubber squeeze bulb (top-right) with subtle highlight
+        '<path fill="#1E293B" stroke="#111827" stroke-width="1.6" stroke-linejoin="round" '
+        'd="M27.2 4.8a3.4 3.4 0 0 0-4.8 0l-3.1 3.1 4.8 4.8 3.1-3.1a3.4 3.4 0 0 0 0-4.8z"/>'
+        '<line x1="22.8" y1="6.6" x2="25.4" y2="4.0" stroke="#94A3B8" stroke-width="1.1" stroke-linecap="round"/>'
+        '</svg>'
     )
+
+
+def _eyedropper_cursor(qt: Any) -> Any:
     pix = qt.QPixmap()
-    pix.loadFromData(qt.QByteArray(svg.encode("utf-8")))
+    pix.loadFromData(qt.QByteArray(_eyedropper_cursor_svg().encode("utf-8")), "SVG")
     if hasattr(qt, "QCursor"):
-        return qt.QCursor(pix, 2, 22)
+        return qt.QCursor(pix, 2, 29)
     return None
 
 
@@ -266,27 +307,57 @@ def refresh_roi_tracking_styles(owner: Any, *, dark: Optional[bool] = None) -> N
         return
     use_dark = is_dark_mode(getattr(owner, "_uiWidget", None)) if dark is None else bool(dark)
     state = getattr(owner, "_roiTrackingState", None) or {}
-    bg = "#16222E" if use_dark else "#F0F7FB"
-    border = "#2B5673" if use_dark else "#B6D4E4"
-    badge_bg = "#1D4E70" if use_dark else "#1B5E8A"
-    ink = "#E6EDF3" if use_dark else "#0F2744"
-    muted = "#9FB2C3" if use_dark else "#4A6073"
-    edit_bg = "#0D1620" if use_dark else "#FFFFFF"
-    edit_border = "#355068" if use_dark else "#C5D8E4"
-    btn_bg = "#2A7298" if use_dark else "#1B5E8A"
-    btn_hover = "#3386B2" if use_dark else "#144A6E"
-    btn_disabled_bg = "#2A3642" if use_dark else "#CBD5E1"
-    btn_disabled_fg = "#7E8E9E" if use_dark else "#64748B"
+    # Native neutral gray palette matching 3D Slicer Light / Dark surfaces (no heavy blue tint).
+    if use_dark:
+        bg = "#26292E"
+        border = "#40454E"
+        badge_bg = "#353941"
+        badge_border = "#484E58"
+        badge_fg = "#E2E8F0"
+        ink = "#EAECEF"
+        muted = "#9BA3AE"
+        edit_bg = "#1D2024"
+        edit_border = "#3C414A"
+        tool_hover = "#343942"
+        tool_checked_bg = "#3A404A"
+        tool_checked_border = "#6B7280"
+        btn_bg = "#3B6278"
+        btn_hover = "#46738D"
+        btn_disabled_bg = "#2E323A"
+        btn_disabled_fg = "#6E7681"
+    else:
+        bg = "#F4F5F7"
+        border = "#D5DAE0"
+        badge_bg = "#E6E9EE"
+        badge_border = "#CFD5DD"
+        badge_fg = "#27313D"
+        ink = "#1E293B"
+        muted = "#5B6572"
+        edit_bg = "#FFFFFF"
+        edit_border = "#CBD2DA"
+        tool_hover = "#E7EAEE"
+        tool_checked_bg = "#DFE4EA"
+        tool_checked_border = "#94A3B8"
+        btn_bg = "#335B70"
+        btn_hover = "#294A5C"
+        btn_disabled_bg = "#E2E6EC"
+        btn_disabled_fg = "#94A3B8"
 
     widgets["bar"].setStyleSheet(
-        f"QFrame#dspaceRoiTrackingBar {{ background: {bg}; border: 1px solid {border}; border-radius: 7px; }}"
-        f"QLabel#dspaceRoiTrackingBadge {{ background: {badge_bg}; color: #FFFFFF; border-radius: 4px; "
-        f"padding: 1px 7px; font-size: 11px; font-weight: 600; }}"
+        f"QFrame#dspaceRoiTrackingBar {{ background: {bg}; border: 1px solid {border}; border-radius: 6px; }}"
+        f"QLabel#dspaceRoiTrackingBadge {{ background: {badge_bg}; color: {badge_fg}; "
+        f"border: 1px solid {badge_border}; border-radius: 4px; padding: 1px 7px; font-size: 11px; font-weight: 600; }}"
         f"QLineEdit#dspaceRoiRegionEdit {{ background: {edit_bg}; color: {ink}; border: 1px solid {edit_border}; "
-        f"border-radius: 4px; padding: 3px 6px; font-size: 11px; }}"
+        f"border-radius: 4px; padding: 3px 7px; font-size: 11px; }}"
+        f"QToolButton#dspaceRoiEyedropperButton, QToolButton#dspaceRoiCloseButton, QToolButton#dspaceRoiClearButton {{ "
+        f"background: transparent; color: {muted}; border: 1px solid transparent; border-radius: 4px; }}"
+        f"QToolButton#dspaceRoiEyedropperButton:hover, QToolButton#dspaceRoiCloseButton:hover, QToolButton#dspaceRoiClearButton:hover {{ "
+        f"background: {tool_hover}; color: {ink}; }}"
+        f"QToolButton#dspaceRoiEyedropperButton:checked {{ "
+        f"background: {tool_checked_bg}; border: 1px solid {tool_checked_border}; }}"
         f"QLabel#dspaceRoiHintLabel {{ color: {muted}; font-size: 11px; }}"
         f"QPushButton#dspaceRoiLaunchButton {{ background: {btn_bg}; color: #FFFFFF; border: 0; border-radius: 4px; "
-        f"padding: 4px 10px; font-size: 11px; font-weight: 600; }}"
+        f"padding: 4px 11px; font-size: 11px; font-weight: 600; }}"
         f"QPushButton#dspaceRoiLaunchButton:hover {{ background: {btn_hover}; }}"
         f"QPushButton#dspaceRoiLaunchButton:disabled {{ background: {btn_disabled_bg}; color: {btn_disabled_fg}; }}"
     )

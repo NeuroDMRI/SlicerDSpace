@@ -527,11 +527,11 @@ def _roi_tracking_button(qt, owner, algorithm, *, roi_spec, disabled, zh, dark=N
     if hasattr(btn, "setAccessibleName"):
         btn.setAccessibleName(tip)
     if use_dark:
-        bg, hover, border, fg = "#1D3C53", "#265270", "#2F668A", "#C7E6FA"
-        dis_bg, dis_border, dis_fg = "#21262D", "#30363D", "#6E7681"
+        bg, hover, border, fg = "#2D3239", "#373D47", "#484F5A", "#DCE3EB"
+        dis_bg, dis_border, dis_fg = "#22252A", "#32373E", "#656D76"
     else:
-        bg, hover, border, fg = "#E7F3FA", "#D3EAF7", "#9AC5DE", "#154E73"
-        dis_bg, dis_border, dis_fg = "#EEF2F6", "#D6DEE6", "#9AA5B1"
+        bg, hover, border, fg = "#F3F5F7", "#E6EAEF", "#C9D1D9", "#24292F"
+        dis_bg, dis_border, dis_fg = "#F6F8FA", "#E1E5EA", "#9CA3AF"
     btn.setStyleSheet(
         f"QToolButton#{name} {{ background: {bg}; color: {fg}; border: 1px solid {border}; "
         f"border-radius: 4px; font-size: 11px; font-weight: 600; padding: 0px 4px; }}"

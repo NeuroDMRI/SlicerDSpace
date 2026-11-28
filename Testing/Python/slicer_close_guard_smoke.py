@@ -10,10 +10,14 @@ A real QProcess ("sleep 60") stands in for a running DSpace job. The default ask
 recording function that answers "keep running", so no modal dialog opens. The result is written as
 JSON to $SLICERDSPACE_SMOKE_RESULT (default: <tempdir>/slicer_close_guard_smoke.json).
 Exit code: 0 all required checks passed, 2 a check failed or could not run, 3 watchdog timeout.
+The JSON `passed` field is the result of record: the process exit code can be changed by a posted Quit.
 
-Safety order: a real close is attempted only after (a) the helper job is running, (b) the guard
-module comes from this repository, and (c) a synthetic Close event sent straight to the installed
-filter was consumed. If one of these fails the script stops with code 2 before any real close.
+Safety order: a real close is attempted only after (a) the helper job is running
+(`helper_running_at_start`), (b) the guard module comes from this repository
+(`guard_module_from_repo`), (c) the close guard is installed on the owner (`guard_installed`),
+(d) the main window is visible (`window_visible_before_close`), and (e) a synthetic Close event sent
+straight to the installed filter was consumed (`synthetic_close_consumed`). If one of these fails the
+script stops with code 2 before any real close.
 """
 
 from __future__ import annotations
@@ -169,8 +173,11 @@ def _run_checks(owner, process, result: dict) -> None:
         before = len(ask_calls)
         # PythonQt exposes closeAllWindows() as a slot of the application instance; it returns nothing.
         slicer.app.closeAllWindows()
-        checks["close_all_windows_refused"] = bool(window.isVisible()) and len(ask_calls) - before >= 1
+        checks["close_all_windows_refused"] = bool(window.isVisible()) and len(ask_calls) - before == 1
         checks["helper_running_after_close_all_windows"] = _running(process)
+        if checks["close_all_windows_refused"] is False or not checks["helper_running_after_close_all_windows"]:
+            _finish(owner, process, result)
+            return
 
         # (4) After the job ended the guard lets the event through and does not ask.
         process.kill()
